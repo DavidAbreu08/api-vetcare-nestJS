@@ -2,6 +2,8 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { FindOptionsWhere, Repository } from "typeorm";
 import { UsersEntity } from "./users.entity";
 import { InjectRepository } from '@nestjs/typeorm';
+import { UpdateUserDto } from "./dto/update-user.dto";
+import { CreateUserDto } from "./dto/create-user.dto";
 
 @Injectable()
 export class UsersService {
@@ -18,12 +20,27 @@ export class UsersService {
   async findOneOrFail(
     where: FindOptionsWhere<UsersEntity> | FindOptionsWhere<UsersEntity>[],
   ) {
-    try {
-      return await this.usersRepository.findOne({ where });
-    } catch (error) {
-      throw new NotFoundException(error);
+    const user = await this.usersRepository.findOne({ where });
+    if (!user) {
+      throw new NotFoundException('Usuário não encontrado');
     }
+    return user;
   }
-  async update(id: string, user) {}
-  async destroy(id: string) {}
+  
+
+  async store(data: CreateUserDto) {
+    const user = this.usersRepository.create(data);
+    return await this.usersRepository.save(user);
+  }
+
+  async update(id: string, data: UpdateUserDto) {
+    const user = await this.findOneOrFail({ id });
+    this.usersRepository.merge(user, data);
+    return await this.usersRepository.save(user);
+  }
+  async destroy(id: string) {
+    await this.findOneOrFail({ id });
+    // Se softDelete não estiver a funcionar, certificar se a entidade UsersEntity tem a coluna @DeleteDateColumn(). Caso contrário, usar remove em vez de softDelete.
+    this.usersRepository.softDelete({ id });
+  }
 }

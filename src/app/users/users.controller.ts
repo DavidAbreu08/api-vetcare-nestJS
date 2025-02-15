@@ -1,31 +1,39 @@
-import { Controller, Delete, Get, Post, Put } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Put, UseGuards } from "@nestjs/common";
 import { UsersService } from "./users.service";
+import { CreateUserDto } from "./dto/create-user.dto";
+import { UpdateUserDto } from "./dto/update-user.dto";
+import { AuthGuard } from "@nestjs/passport";
 
-@Controller("api/v1/users")
+@Controller("api/users")
+@UseGuards(AuthGuard('jwt'))
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
   @Get()
-  index() {
-    return null;
+  async index() {
+    return await this.usersService.findAll();
   }
 
   @Post()
-  store() {
-    return null;
+  async store(@Body() body: CreateUserDto) {
+    return await this.usersService.store(body);
   }
 
-  @Get(":id")
-  show() {
-    return null;
+  @Get(':id')
+  async show(@Param('id', new ParseUUIDPipe()) id: string) {
+    return await this.usersService.findOneOrFail({ id });
   }
 
-  @Put(":id")
-  update() {
-    return null;
+  @Put(':id')
+  async update(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body: UpdateUserDto,
+  ) {
+    return await this.usersService.update(id, body);
   }
 
-  @Delete(":id")
-  destroy() {
-    return null;
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async destroy(@Param('id', new ParseUUIDPipe()) id: string) {
+    await this.usersService.destroy(id);
   }
 }
