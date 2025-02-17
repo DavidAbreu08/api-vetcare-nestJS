@@ -1,8 +1,9 @@
-import { Module } from "@nestjs/common";
+import { MiddlewareConsumer, Module, NestModule } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule, TypeOrmModuleOptions } from "@nestjs/typeorm";
 import { UsersModule } from "./app/users/users.module";
 import { AuthModule } from './auth/auth.module';
+import * as cors from 'cors';
 
 @Module({
   imports: [
@@ -23,4 +24,14 @@ import { AuthModule } from './auth/auth.module';
   controllers: [],
   providers: [],
 })
-export class AppModule {}
+export class AppModule implements NestModule{
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(
+      cors({
+        origin: 'http://localhost:4200', // Allow Angular
+        methods: ['GET', 'POST', 'PUT', 'DELETE'],
+        allowedHeaders: ['Content-Type', 'Authorization']
+      })
+    ).forRoutes('*'); // Apply to all routes
+  }
+}
