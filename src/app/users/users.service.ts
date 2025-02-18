@@ -15,7 +15,7 @@ export class UsersService {
 
   async findAll() {
     return await this.usersRepository.find({
-      select: ["id", "firstName", "lastName", "email"],
+      select: ["id", "firstName", "lastName", "email", "userRole"],
     });
   }
   async findOneOrFail(
@@ -27,7 +27,6 @@ export class UsersService {
     }
     return user;
   }
-  
 
   async store(data: CreateUserDto) {
     const user = this.usersRepository.create(data);

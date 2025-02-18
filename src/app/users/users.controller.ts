@@ -3,6 +3,7 @@ import { UsersService } from "./users.service";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { AuthGuard } from "@nestjs/passport";
+import { get } from "http";
 
 @Controller("api/users")
 export class UsersController {
@@ -39,4 +40,5 @@ export class UsersController {
   async destroy(@Param('id', new ParseUUIDPipe()) id: string) {
     await this.usersService.destroy(id);
   }
+
 }
