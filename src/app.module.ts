@@ -1,9 +1,11 @@
-import { MiddlewareConsumer, Module, NestModule } from "@nestjs/common";
+import { MiddlewareConsumer, Module, NestModule, RequestMethod } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule, TypeOrmModuleOptions } from "@nestjs/typeorm";
 import { UsersModule } from "./app/users/users.module";
 import { AuthModule } from './auth/auth.module';
 import * as cors from 'cors';
+import { AuthenticateJWT } from "./auth/authenticateJWT.middleware";
+import { get } from "http";
 
 @Module({
   imports: [
@@ -31,7 +33,10 @@ export class AppModule implements NestModule{
         origin: 'http://localhost:4200', // Allow Angular
         methods: ['GET', 'POST', 'PUT', 'DELETE'],
         allowedHeaders: ['Content-Type', 'Authorization']
-      })
+      }),
     ).forRoutes('*'); // Apply to all routes
+    consumer
+      .apply(AuthenticateJWT)
+      .forRoutes('auth', 'api/auth/me')
   }
 }
