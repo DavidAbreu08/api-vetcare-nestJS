@@ -3,7 +3,9 @@ import { UsersService } from "./users.service";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { AuthGuard } from "@nestjs/passport";
-import { get } from "http";
+import { Roles } from "../core/decorators/roles.decorator";
+import { Role } from "../core/enums/role.enum";
+import { RolesGuard } from "../core/guards/roles/roles.guard";
 
 @Controller("api/users")
 export class UsersController {
@@ -34,9 +36,11 @@ export class UsersController {
     return await this.usersService.update(id, body);
   }
 
-  @Delete(':id')
-  @UseGuards(AuthGuard('jwt'))
   @HttpCode(HttpStatus.NO_CONTENT)
+  @Roles(Role.ADMIN, Role.FUNCIONARIO)
+  @UseGuards(RolesGuard)
+  @UseGuards(AuthGuard('jwt'))
+  @Delete(':id')
   async destroy(@Param('id', new ParseUUIDPipe()) id: string) {
     await this.usersService.destroy(id);
   }

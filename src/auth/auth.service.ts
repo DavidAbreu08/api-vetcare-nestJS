@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { UsersEntity } from 'src/app/users/users.entity';
 import { UsersService } from 'src/app/users/users.service';
 import { compareSync } from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
+import { CurrentUser } from './types/current-user';
 
 @Injectable()
 export class AuthService {
@@ -35,7 +36,11 @@ export class AuthService {
         return user;
     }
 
-
-    
+    async validateJwtUser(id: string){
+        const user = await this.userService.findOneOrFail({id});
+        if(!user) throw new UnauthorizedException('User not Found!');
+        const currentUser: CurrentUser = { id: user.id, firstName: user.firstName, lastName: user.lastName, role: user.role };
+        return currentUser;
+    }
 
 }

@@ -8,6 +8,7 @@ import {
   UpdateDateColumn,
 } from "typeorm";
 import { hashSync } from 'bcrypt';
+import { Role } from "../core/enums/role.enum";
 
 @Entity({ name: "users" })
 export class UsersEntity {
@@ -26,8 +27,13 @@ export class UsersEntity {
   @Column()
   password: string;
 
-  @Column({ name: 'user_role' , default: 99 })
-  userRole: string;
+  @Column({ 
+    type: 'enum', 
+    enum: Role,
+    name: 'user_role',
+    default: Role.CLIENTE 
+  })
+  role: Role;
 
 
   @CreateDateColumn({ name: "created_at" })
