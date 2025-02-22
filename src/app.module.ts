@@ -5,7 +5,6 @@ import { UsersModule } from "./app/users/users.module";
 import { AuthModule } from './auth/auth.module';
 import * as cors from 'cors';
 import { AuthenticateJWT } from "./auth/authenticateJWT.middleware";
-import { get } from "http";
 
 @Module({
   imports: [
