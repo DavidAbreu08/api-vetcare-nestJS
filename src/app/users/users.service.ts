@@ -5,6 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { HttpResponse } from "../core/interface/http-response.interface";
+import { Role } from "../core/enums/role.enum";
 
 @Injectable()
 export class UsersService {
@@ -18,6 +19,14 @@ export class UsersService {
       select: ["firstName", "lastName", "email"],
     });
   }
+
+  async findEmployees() {
+    return await this.usersRepository.find({
+      select: ["firstName", "lastName", "email","createdAt", "phone", "function", "isActive", "nif"],
+      where: { role: Role.FUNCIONARIO }, 
+    });
+  }
+
   async findOneOrFail(
     where: FindOptionsWhere<UsersEntity> | FindOptionsWhere<UsersEntity>[],
   ) {

@@ -9,6 +9,7 @@ import {
 } from "typeorm";
 import { hashSync } from 'bcrypt';
 import { Role } from "../core/enums/role.enum";
+import { Function } from "../core/enums/function.enum";
 
 @Entity({ name: "users" })
 export class UsersEntity {
@@ -35,6 +36,21 @@ export class UsersEntity {
   })
   role: Role;
 
+  @Column({ name: "is_active", default: true })
+  isActive: boolean;
+
+  @Column()
+  phone: string;
+
+  @Column({
+    type: 'enum',
+    enum: Function,
+    default: Function.ATENDIMENTO,
+  })
+  function: Function;
+
+  @Column({ name: "NIF", nullable: true })
+  nif: string;
 
   @CreateDateColumn({ name: "created_at" })
   createdAt: string;

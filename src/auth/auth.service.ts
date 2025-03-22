@@ -43,4 +43,8 @@ export class AuthService {
         return currentUser;
     }
 
+    async getEmployees(){
+        return await this.userService.findEmployees();
+    }
+
 }
