@@ -39,7 +39,7 @@ export class UsersEntity {
   @Column({ name: "is_active", default: true })
   isActive: boolean;
 
-  @Column()
+  @Column({nullable:true})
   phone: string;
 
   @Column({

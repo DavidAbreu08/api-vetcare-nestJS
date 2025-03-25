@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Put, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Put, Query, UseGuards } from "@nestjs/common";
 import { UsersService } from "./users.service";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
@@ -14,6 +14,11 @@ export class UsersController {
   @UseGuards(AuthGuard('jwt'))
   async index() {
     return await this.usersService.findAll();
+  }
+
+  @Get('check-email')
+  async checkEmail(@Query('email') email: string): Promise<boolean> {
+    return this.usersService.checkEmailExists(email);
   }
 
   @Post()

@@ -27,6 +27,11 @@ export class UsersService {
     });
   }
 
+  async checkEmailExists(email: string): Promise<boolean> {
+    const user = await this.usersRepository.findOne({ where: { email } });
+    return !!user; // Returns true if user exists, false otherwise
+  }
+
   async findOneOrFail(
     where: FindOptionsWhere<UsersEntity> | FindOptionsWhere<UsersEntity>[],
   ) {
