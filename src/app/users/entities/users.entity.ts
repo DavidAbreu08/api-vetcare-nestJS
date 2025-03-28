@@ -4,12 +4,14 @@ import {
   CreateDateColumn,
   DeleteDateColumn,
   Entity,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from "typeorm";
 import { hashSync } from 'bcrypt';
-import { Role } from "../core/enums/role.enum";
-import { Function } from "../core/enums/function.enum";
+import { Role } from "../../core/enums/role.enum";
+import { Function } from "../../core/enums/function.enum";
+import { ResetTokenEntity } from "../../../auth/entities/reset-token.entity";
 
 @Entity({ name: "users" })
 export class UsersEntity {
@@ -51,6 +53,9 @@ export class UsersEntity {
 
   @Column({ name: "NIF", nullable: true })
   nif: string;
+
+  @OneToMany(() => ResetTokenEntity, token => token.user)
+  resetTokens: ResetTokenEntity[];
 
   @CreateDateColumn({ name: "created_at" })
   createdAt: string;

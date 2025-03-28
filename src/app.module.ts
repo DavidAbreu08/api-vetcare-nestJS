@@ -1,10 +1,11 @@
-import { MiddlewareConsumer, Module, NestModule, RequestMethod } from "@nestjs/common";
+import { MiddlewareConsumer, Module, NestModule } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule, TypeOrmModuleOptions } from "@nestjs/typeorm";
 import { UsersModule } from "./app/users/users.module";
 import { AuthModule } from './auth/auth.module';
 import * as cors from 'cors';
 import { AuthenticateJWT } from "./auth/authenticateJWT.middleware";
+import { EmailModule } from './email/email.module';
 
 @Module({
   imports: [
@@ -17,10 +18,11 @@ import { AuthenticateJWT } from "./auth/authenticateJWT.middleware";
       password: process.env.TYPEORM_PASSWORD,
       database: process.env.TYPEORM_DATABASE,
       entities: [__dirname + "/**/*.entity{.ts,.js}"],
-      synchronize: true, //em dev
+      synchronize: false, //em dev
     } as TypeOrmModuleOptions),
     UsersModule,
     AuthModule,
+    EmailModule,
   ],
   controllers: [],
   providers: [],

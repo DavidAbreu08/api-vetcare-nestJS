@@ -1,6 +1,6 @@
 import { HttpStatus, Injectable, NotFoundException } from "@nestjs/common";
 import { FindOptionsWhere, Repository } from "typeorm";
-import { UsersEntity } from "./users.entity";
+import { UsersEntity } from "./entities/users.entity";
 import { InjectRepository } from '@nestjs/typeorm';
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { CreateUserDto } from "./dto/create-user.dto";
@@ -29,7 +29,7 @@ export class UsersService {
 
   async checkEmailExists(email: string): Promise<boolean> {
     const user = await this.usersRepository.findOne({ where: { email } });
-    return !!user; // Returns true if user exists, false otherwise
+    return !!user;
   }
 
   async findOneOrFail(
@@ -60,5 +60,9 @@ export class UsersService {
     await this.findOneOrFail({ id });
     // Se softDelete não estiver a funcionar, certificar se a entidade UsersEntity tem a coluna @DeleteDateColumn(). Caso contrário, usar remove em vez de softDelete.
     this.usersRepository.softDelete({ id });
+  }
+
+  async save(user: UsersEntity) {
+    return await this.usersRepository.save(user);
   }
 }
