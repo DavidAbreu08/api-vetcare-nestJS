@@ -94,13 +94,10 @@ export class AuthService {
         try {
             const user = await this.userService.findOneOrFail({ email });
 
-            // Optionally delete old tokens for this user first (to prevent multiple resets)
             await this.resetTokenRepo.delete({ user: { id: user.id } });
         
             const token = await this.generateAndSaveResetToken(user);
         
-            
-            // Send the email with the reset link
             await this.emailService.sendResetPasswordEmail(user.email, token);
         
             return { message: 'If this user exists, they will receive an email!' };
@@ -108,15 +105,46 @@ export class AuthService {
         } catch (err) {
             console.error('Error occurred during password reset:', err);
         }
-    
-        // Always return the same response for security
+
         return {
           message: 'If this user exists, they will receive an email!',
         };
     }
 
 
-    async resetPassword(newPassword: string, confirmNewPassword: string){
-        return ""
+    async resetPassword(resetToken: string, newPassword: string, confirmNewPassword: string){
+
+        const resetTokenEntity = await this.resetTokenRepo.findOne({
+            where: { resetToken },
+            relations: ['user'],
+        });
+        if (!resetTokenEntity) {
+            throw new UnauthorizedException('Invalid or expired reset token');
+        }
+
+        if (resetTokenEntity.expiresAt < new Date()) {
+            throw new UnauthorizedException('Reset token has expired');
+        }
+
+        if (newPassword !== confirmNewPassword) {
+            throw new UnauthorizedException('New Password and Confirm New Password must be the same!');
+        }
+        const user = resetTokenEntity.user;
+
+        if (!user) {
+            throw new UnauthorizedException('User not found');
+        }
+        
+        user.password = await hashSync(newPassword, 10);
+
+        await this.userService.save(user);
+
+        await this.resetTokenRepo.delete(resetTokenEntity.resetToken);
+
+        return {
+            statusCode: HttpStatus.ACCEPTED,
+            message: 'Password reset successfully!',
+        };
     }
 }
+

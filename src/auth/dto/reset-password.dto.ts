@@ -4,6 +4,9 @@ import { RegExHelper } from "src/app/helpers/regex.helper";
 
 export class ResetPasswordDto {
     @IsString()
+    resetToken: string;
+
+    @IsString()
     @Matches(RegExHelper.password,{ message: MessagesHelper.PASSWORD_VALID })
     newPassword: string;
 
