@@ -19,7 +19,7 @@ export class EmailService {
 
   // Method to send the reset password email
   async sendResetPasswordEmail(to: string, resetToken: string) {
-    const resetLink = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
+    const resetLink = `${process.env.FRONTEND_URL}/auth/reset-password?token=${resetToken}`;
 
     const mailOptions = {
       from: process.env.EMAIL_USER, // Sender address
