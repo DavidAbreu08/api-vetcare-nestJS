@@ -37,4 +37,24 @@ export class EmailService {
       throw new Error('Email could not be sent');
     }
   }
+
+  async sendEmployeeWelcomeEmail(to: string, resetToken: string) {
+
+    const resetLink = `${process.env.FRONTEND_URL}/auth/reset-password?token=${resetToken}`;
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: to,
+      subject: 'Your Employee Account Has Been Created',
+      text: `Hello,\n\nYour employee account has been created.\n\nEnter in this link to create your password ${resetLink}\n\nBecareful, because this email has an expiry date by 1 Hour.`,
+    };
+
+    try {
+      const info = await this.transporter.sendMail(mailOptions);
+      this.logger.log(`Welcome email sent to ${to}: ${info.response}`);
+    } catch (error) {
+      this.logger.error(`Error sending welcome email to ${to}:`, error.message);
+      throw new Error('Could not send welcome email');
+    }
+  }
 }

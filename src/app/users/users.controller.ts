@@ -6,6 +6,7 @@ import { AuthGuard } from "@nestjs/passport";
 import { Roles } from "../core/decorators/roles.decorator";
 import { Role } from "../core/enums/role.enum";
 import { RolesGuard } from "../core/guards/roles/roles.guard";
+import { CreateEmployeesDto } from "./dto/create-employees.dto";
 
 @Controller("api/users")
 export class UsersController {
@@ -25,6 +26,13 @@ export class UsersController {
   async store(@Body() body: CreateUserDto) {
     return await this.usersService.store(body);
   }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('employees')
+  async storeEmployees(@Body() body: CreateEmployeesDto){
+    return await this.usersService.storeEmployees(body)
+  }
+
 
   @Get(':id')
   @UseGuards(AuthGuard('jwt'))

@@ -4,9 +4,9 @@ import { UsersService } from 'src/app/users/users.service';
 import { compareSync, hashSync } from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 import { CurrentUser } from './types/current-user';
-import * as crypto from 'crypto';
 import { EmailService } from 'src/email/email.service';
 import { ResetTokenEntityRepository } from './repository/reset-token.repository';
+import { generateResetToken } from 'src/app/core/generated/generate-reset-token';
 
 @Injectable()
 export class AuthService {
@@ -44,7 +44,7 @@ export class AuthService {
     async validateJwtUser(id: string){
         const user = await this.userService.findOneOrFail({id});
         if(!user) throw new UnauthorizedException('User not Found!');
-        const currentUser: CurrentUser = { id: user.id, email: user.email , firstName: user.firstName, lastName: user.lastName, role: user.role };
+        const currentUser: CurrentUser = { id: user.id, email: user.email , firstName: user.name, role: user.role };
         return currentUser;
     }
 
@@ -76,38 +76,35 @@ export class AuthService {
         };
     }
 
-    private async generateAndSaveResetToken(user: UsersEntity): Promise<string> {
-        const token = crypto.randomBytes(32).toString('hex');
-        const expiresAt = new Date(Date.now() + 1000 * 60 * 60); // 1 hour
-    
-        const resetToken = this.resetTokenRepo.create({
-          resetToken: token,
-          user: user,
-          expiresAt,
-        });
-    
-        await this.resetTokenRepo.save(resetToken);
-        return token;
-    }
 
     async forgotPassword(email: string) {
         try {
             const user = await this.userService.findOneOrFail({ email });
 
+            // Delete any existing reset tokens for the user
             await this.resetTokenRepo.delete({ user: { id: user.id } });
-        
-            const token = await this.generateAndSaveResetToken(user);
-        
+
+            // Generate the reset token and expiration date
+            const { token, expiresAt } = generateResetToken();
+
+            // Save the token in the database
+            const resetToken = this.resetTokenRepo.create({
+                resetToken: token,
+                user: user,
+                expiresAt,
+            });
+            await this.resetTokenRepo.save(resetToken);
+
+            // Send the email
             await this.emailService.sendResetPasswordEmail(user.email, token);
-        
-            return { message: 'If this user exists, they will receive an email!' };
-    
+
+            return { message: "If this user exists, they will receive an email!" };
         } catch (err) {
-            console.error('Error occurred during password reset:', err);
+            console.error("Error occurred during password reset:", err);
         }
 
         return {
-          message: 'If this user exists, they will receive an email!',
+            message: "If this user exists, they will receive an email!",
         };
     }
 

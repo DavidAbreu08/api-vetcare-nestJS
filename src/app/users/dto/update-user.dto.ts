@@ -2,8 +2,6 @@ import { IsNotEmpty } from 'class-validator';
 
 export class UpdateUserDto {
   @IsNotEmpty()
-  firstName: string;
+  name: string;
 
-  @IsNotEmpty()
-  lastName: string;
 }

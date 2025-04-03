@@ -34,7 +34,7 @@ import { DataSource } from 'typeorm';
     {
       provide: ResetTokenEntityRepository,
       useFactory: (dataSource: DataSource) => new ResetTokenEntityRepository(dataSource),
-      inject: [DataSource], // inject DataSource to create the repository
+      inject: [DataSource],
     },
   ],
   controllers: [AuthController]

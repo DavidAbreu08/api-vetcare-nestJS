@@ -18,11 +18,9 @@ export class UsersEntity {
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
-  @Column({ name: "first_name" })
-  firstName: string;
+  @Column({name: 'nome'})
+  name: string;
 
-  @Column({ name: "last_name" })
-  lastName: string;
 
   @Column()
   email: string;
@@ -52,7 +50,7 @@ export class UsersEntity {
   function: Function;
 
   @Column({ name: "NIF", nullable: true })
-  nif: string;
+  nif: number;
 
   @OneToMany(() => ResetTokenEntity, token => token.user)
   resetTokens: ResetTokenEntity[];
