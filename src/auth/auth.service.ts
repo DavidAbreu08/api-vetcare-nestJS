@@ -19,7 +19,7 @@ export class AuthService {
     ) {}
 
     async login(user){
-        const payload = { sub: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName }
+        const payload = { sub: user.id, email: user.email, name: name }
 
         return {
             token: this.jwtService.sign(payload)
@@ -44,7 +44,7 @@ export class AuthService {
     async validateJwtUser(id: string){
         const user = await this.userService.findOneOrFail({id});
         if(!user) throw new UnauthorizedException('User not Found!');
-        const currentUser: CurrentUser = { id: user.id, email: user.email , firstName: user.name, role: user.role };
+        const currentUser: CurrentUser = { id: user.id, email: user.email , name: user.name, role: user.role };
         return currentUser;
     }
 

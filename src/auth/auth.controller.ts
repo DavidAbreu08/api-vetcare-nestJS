@@ -62,7 +62,5 @@ export class AuthController {
             resetPasswordDto.confirmNewPassword
             
         )
-
     }
-
 }
