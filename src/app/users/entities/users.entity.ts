@@ -36,11 +36,6 @@ export class UsersEntity {
   })
   role: Role;
 
-  @Column({ name: "is_active", default: true })
-  isActive: boolean;
-
-  @Column({nullable:true})
-  phone: string;
 
   @Column({
     type: 'enum',
@@ -48,6 +43,18 @@ export class UsersEntity {
     default: Function.ATENDIMENTO,
   })
   function: Function;
+
+  @Column({ name: "is_active", default: true })
+  isActive: boolean;
+
+  @Column({nullable:true})
+  phone: string;
+
+  @Column({ name: 'workLoad' ,nullable: true })
+  workLoad: string;
+  
+  @Column({ name: 'dateBirth' ,nullable: true })
+  dateBirth: string;
 
   @Column({ name: "NIF", nullable: true })
   nif: number;

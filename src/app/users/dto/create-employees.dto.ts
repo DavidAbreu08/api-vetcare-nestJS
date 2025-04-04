@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
-import { IsNotEmpty, IsEmail, IsString, IsInt, Min, Max, Validate, Matches } from 'class-validator';
+import { IsNotEmpty, IsEmail, IsString, IsInt, Min, Max, Matches } from 'class-validator';
+import { Function } from 'src/app/core/enums/function.enum';
 import { RegExHelper } from 'src/app/helpers/regex.helper';
 
 
@@ -12,6 +13,7 @@ export class CreateEmployeesDto {
   @IsEmail()
   email: string;
 
+
   @IsInt({ message: 'NIF must be an integer' })
   @Type(() => Number)
   @Min(100000000, { message: 'NIF Invalid' })
@@ -21,15 +23,19 @@ export class CreateEmployeesDto {
 
   @IsNotEmpty()
   @IsString()
-  dataBirth: string;
+  dateBirth: string;
 
   @IsNotEmpty()
-  @IsString()  // Phone should be a string
+  @IsString() 
   @Matches(RegExHelper.phoneRegex, { message: 'Phone number must be 9 digits and only contain numbers' })
-  phone: string;  // Treat phone as a string, not a number
+  phone: string;
 
   @IsString()
   @IsNotEmpty()
-  func: string;
+  function: Function;
+
+  @IsString()
+  @IsNotEmpty()
+  workLoad: string;
 
 }
