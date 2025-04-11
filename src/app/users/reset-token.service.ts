@@ -21,6 +21,6 @@ export class ResetTokenService {
       .where("expires_at < :now", { now: new Date() })
       .execute();
 
-    console.log("🧹 Expired reset tokens cleaned up!");
+    console.log("Expired reset tokens cleaned up!");
   }
 }

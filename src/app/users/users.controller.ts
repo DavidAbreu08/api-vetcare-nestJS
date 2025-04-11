@@ -34,14 +34,14 @@ export class UsersController {
   }
 
 
-  @Get(':id')
   @UseGuards(AuthGuard('jwt'))
+  @Get(':id')
   async show(@Param('id', new ParseUUIDPipe()) id: string) {
     return await this.usersService.findOneOrFail({ id });
   }
 
-  @Put(':id')
   @UseGuards(AuthGuard('jwt'))
+  @Put(':id')
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: UpdateUserDto,
@@ -50,9 +50,8 @@ export class UsersController {
   }
 
   @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(Role.ADMIN, Role.FUNCIONARIO)
-  @UseGuards(RolesGuard)
-  @UseGuards(AuthGuard('jwt'))
   @Delete(':id')
   async destroy(@Param('id', new ParseUUIDPipe()) id: string) {
     await this.usersService.destroy(id);

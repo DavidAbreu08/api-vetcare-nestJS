@@ -28,9 +28,8 @@ export class AuthController {
         return await req.user;
     }
 
+    @UseGuards(AuthGuard('jwt'), RolesGuard)
     @Roles(Role.ADMIN)
-    @UseGuards(RolesGuard)
-    @UseGuards(AuthGuard('jwt'))
     @Get('employees')
     async getEmployees(){
         return await this.authService.getEmployees();

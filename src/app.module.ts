@@ -6,6 +6,8 @@ import { AuthModule } from './auth/auth.module';
 import * as cors from 'cors';
 import { AuthenticateJWT } from "./auth/authenticateJWT.middleware";
 import { EmailModule } from './email/email.module';
+import { AnimalModule } from './app/animal/animal.module';
+
 
 @Module({
   imports: [
@@ -23,6 +25,7 @@ import { EmailModule } from './email/email.module';
     UsersModule,
     AuthModule,
     EmailModule,
+    AnimalModule,
   ],
   controllers: [],
   providers: [],

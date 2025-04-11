@@ -6,7 +6,7 @@ import { MessagesHelper } from 'src/app/helpers/messages.helper';
 @Injectable()
 export class RolesGuard implements CanActivate {
 
-  constructor(private reflector: Reflector){}
+  constructor(private readonly reflector: Reflector){}
 
   canActivate(
     context: ExecutionContext,
@@ -17,9 +17,13 @@ export class RolesGuard implements CanActivate {
       context.getClass(),
     ]);
 
-    const user = context.switchToHttp().getRequest().user;
-    //console.log(user)
-    const hasRequiredRole = requiredRoles.some((role) => user.role === role);
-    return hasRequiredRole;
+    if (!requiredRoles) {
+      // If no roles are specified, the route is still public to any authenticated user
+      return true;
+    }
+  
+    const { user } = context.switchToHttp().getRequest();
+  
+    return requiredRoles.includes(user.role);
   }
 }

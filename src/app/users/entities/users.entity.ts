@@ -12,6 +12,7 @@ import { hashSync } from 'bcrypt';
 import { Role } from "../../core/enums/role.enum";
 import { Function } from "../../core/enums/function.enum";
 import { ResetTokenEntity } from "../../../auth/entities/reset-token.entity";
+import { AnimalEntity } from "src/app/animal/entities/animal.entity";
 
 @Entity({ name: "users" })
 export class UsersEntity {
@@ -61,6 +62,10 @@ export class UsersEntity {
 
   @OneToMany(() => ResetTokenEntity, token => token.user)
   resetTokens: ResetTokenEntity[];
+
+  @OneToMany(() => AnimalEntity, (animal) => animal.owner)
+  idAnimal: AnimalEntity[];
+
 
   @CreateDateColumn({ name: "created_at" })
   createdAt: string;
