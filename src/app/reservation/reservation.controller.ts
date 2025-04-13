@@ -7,6 +7,7 @@ import { Role } from '../core/enums/role.enum';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { CurrentUser } from '../core/decorators/current-user.decorator';
 import { UpdateReservationStatusDto } from './dto/update-reservation.dto';
+import { ConfirmRescheduleDto } from './dto/confirm-reschedule.dto';
 
 @Controller('api/reservation')
 @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -42,13 +43,21 @@ export class ReservationController {
     @Get('client')
     @Roles(Role.CLIENTE)
     async getByClient(@CurrentUser() user) {
-        return this.reservationService.findByClient(user.id);
+      return this.reservationService.findByClient(user.id);
     }
   
     @Get('employee')
     @Roles(Role.FUNCIONARIO)
     async getByEmployee(@CurrentUser() user) {
-        return this.reservationService.findByEmployee(user.id);
+      return this.reservationService.findByEmployee(user.id);
+    }
+
+    @Patch(':id/confirm')
+    confirmReschedule(
+      @Param('id') id: string,
+      @Body() dto: ConfirmRescheduleDto,
+    ) {
+      return this.reservationService.confirmRescheduledReservation(id, dto);
     }
 
 }

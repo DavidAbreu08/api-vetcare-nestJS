@@ -5,7 +5,7 @@ export class CreateReservationDto {
   animalId: string;
 
   @IsDateString()
-  date: string;
+  date: Date;
 
   @IsString()
   @IsNotEmpty()

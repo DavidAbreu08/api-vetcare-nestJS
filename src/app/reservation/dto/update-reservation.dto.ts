@@ -13,11 +13,9 @@ export class UpdateReservationStatusDto {
   @IsString()
   rescheduleNote?: string;
 
-  @IsOptional()
   @IsDateString()
-  newDate?: Date;
+  newDate: Date;
 
-  @IsOptional()
   @IsString()
-  newTime?: string;
+  newTime: string;
 }

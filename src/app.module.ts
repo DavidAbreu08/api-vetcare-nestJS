@@ -8,6 +8,7 @@ import { AuthenticateJWT } from "./auth/authenticateJWT.middleware";
 import { EmailModule } from './email/email.module';
 import { AnimalModule } from './app/animal/animal.module';
 import { ReservationModule } from './app/reservation/reservation.module';
+import { BlockedTimeModule } from "./app/reservation/blocked-time.module";
 
 
 @Module({
@@ -28,6 +29,7 @@ import { ReservationModule } from './app/reservation/reservation.module';
     EmailModule,
     AnimalModule,
     ReservationModule,
+    BlockedTimeModule,
   ],
   controllers: [],
   providers: [],
