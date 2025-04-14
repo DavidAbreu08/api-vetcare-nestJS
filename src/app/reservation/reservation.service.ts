@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ReservationEntity } from './entities/reservation.entity';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { UsersEntity } from '../users/entities/users.entity';
 import { AnimalEntity } from '../animal/entities/animal.entity';
 import { CreateReservationDto } from './dto/create-reservation.dto';
@@ -11,6 +11,7 @@ import { UpdateReservationStatusDto } from './dto/update-reservation.dto';
 import * as dayjs from 'dayjs';
 import { ConfirmRescheduleDto } from './dto/confirm-reschedule.dto';
 import { BlockedTimeEntity } from './entities/bloked-times.entity';
+import { ConfirmPendingDto } from './dto/confirm-pending.dto';
 
 @Injectable()
 export class ReservationService {
@@ -34,9 +35,14 @@ export class ReservationService {
   }
 
   private async isTimeBlocked(date: Date, time: string): Promise<boolean> {
+    const normalizedDate = dayjs(date).format('YYYY-MM-DD');
+    const queryDate = dayjs(normalizedDate).startOf('day').toDate();
+    const normalizedTime = time.includes(':') ? time : `${time}:00`;
+    
     const blockedTime = await this.blockedTimeRepository.findOne({
-      where: { date, time },
+      where: { date: queryDate, time: normalizedTime },
     });
+
     return !!blockedTime;
   }
 
@@ -79,6 +85,7 @@ export class ReservationService {
     excludeReservationId?: string,
   ): Promise<boolean> {
     const employeeId = typeof employee === 'string' ? employee : employee.id;
+  
     const targetDate = dayjs(date).format('YYYY-MM-DD');
     const targetTime = dayjs(`${targetDate}T${time}`);
     const slotStart = targetTime.subtract(slotDuration, 'minute');
@@ -86,10 +93,14 @@ export class ReservationService {
   
     const query = this.reservationRepository
       .createQueryBuilder('r')
-      .where('r.date = :date', { date: targetDate })
+      .where('DATE(r.date) = :date', { date: targetDate })
       .andWhere('r.employeeId = :employeeId', { employeeId })
       .andWhere('r.status IN (:...statuses)', {
-        statuses: [ReservationStatus.CONFIRMED, ReservationStatus.PENDING, ReservationStatus.RESCHEDULED],
+        statuses: [
+          ReservationStatus.CONFIRMED,
+          ReservationStatus.PENDING,
+          ReservationStatus.RESCHEDULED
+        ],
       });
   
     if (excludeReservationId) {
@@ -98,13 +109,12 @@ export class ReservationService {
   
     const reservations = await query.getMany();
   
-    return reservations.some(r => {
+    return reservations.some((r) => {
       const existingTime = dayjs(`${dayjs(r.date).format('YYYY-MM-DD')}T${r.time}`);
       return existingTime.isAfter(slotStart) && existingTime.isBefore(slotEnd);
     });
   }
   
-
   async createReservation(dto: CreateReservationDto, userId: string) {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
@@ -163,12 +173,13 @@ export class ReservationService {
 
     if (!reservation) throw new NotFoundException('Reservation not found');
 
-    // Optional update employee
     if (dto.employeeId) {
       const employee = await this.usersRepository.findOne({
-        where: { id: dto.employeeId, role: Role.FUNCIONARIO },
+        where: {
+          id: dto.employeeId,
+          role: In([Role.FUNCIONARIO, Role.ADMIN]),
+        },
       });
-
       if (!employee) throw new BadRequestException('Invalid employee');
       reservation.employee = employee;
     }
@@ -180,7 +191,7 @@ export class ReservationService {
         dto.newDate,
         dto.newTime,
         this.getSlotDuration(),
-        reservation.id // exclude the current one
+        reservation.id
       );
     
       if (isReserved) {
@@ -195,8 +206,8 @@ export class ReservationService {
     reservation.status = dto.status;
     reservation.rescheduleNote = dto.rescheduleNote ?? ' ';
     if (dto.newDate) {
-        reservation.date = new Date(dto.newDate);
-      }
+      reservation.date = new Date(dto.newDate);
+    }
       
     if (dto.newTime) {
       reservation.time = dto.newTime;
@@ -235,6 +246,52 @@ export class ReservationService {
     });
   }
 
+  async confirmPendingReservation(id: string, dto: ConfirmPendingDto) {
+    const reservation = await this.reservationRepository.findOne({
+      where: { id }
+    });
+
+    if (!reservation) throw new NotFoundException('Reservation not found');
+
+    if (reservation.status !== ReservationStatus.PENDING) {
+      throw new BadRequestException('This reservation is not in a pending state.');
+    }
+
+    if (![ReservationStatus.CONFIRMED].includes(dto.status)) {
+      throw new BadRequestException('Invalid status. Must be confirmed.');
+    }
+
+    if (dto.employeeId) {
+      const employee = await this.usersRepository.findOne({
+        where: {
+          id: dto.employeeId,
+          role: In([Role.FUNCIONARIO, Role.ADMIN]),
+        },
+      });
+
+      if (!employee) throw new BadRequestException('Invalid employee ID.');
+
+      const isReserved = await this.isEmployeeReserved(
+        dto.employeeId,
+        reservation.date,
+        reservation.time,
+        this.getSlotDuration(),
+        reservation.id
+      );
+
+      if (isReserved) {
+        throw new BadRequestException('Employee already has a reservation at that time.');
+      }
+      reservation.employee = employee;
+      reservation.status = dto.status;
+      reservation.rescheduleNote = dto.confirmationNote ?? ' ';
+      return this.reservationRepository.save(reservation);
+    }
+
+    throw new BadRequestException('Employee ID is required to confirm a pending reservation.');
+
+  }
+
   async confirmRescheduledReservation(id: string, dto: ConfirmRescheduleDto) {
     const reservation = await this.reservationRepository.findOne({
       where: { id },
@@ -243,7 +300,6 @@ export class ReservationService {
   
     if (!reservation) throw new NotFoundException('Reservation not found');
   
-    // Only allow confirmation of rescheduled reservations
     if (reservation.status !== ReservationStatus.RESCHEDULED) {
       throw new BadRequestException('This reservation is not in a rescheduled state.');
     }

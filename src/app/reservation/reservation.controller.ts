@@ -8,6 +8,7 @@ import { CreateReservationDto } from './dto/create-reservation.dto';
 import { CurrentUser } from '../core/decorators/current-user.decorator';
 import { UpdateReservationStatusDto } from './dto/update-reservation.dto';
 import { ConfirmRescheduleDto } from './dto/confirm-reschedule.dto';
+import { ConfirmPendingDto } from './dto/confirm-pending.dto';
 
 @Controller('api/reservation')
 @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -52,7 +53,17 @@ export class ReservationController {
       return this.reservationService.findByEmployee(user.id);
     }
 
+    @Patch(':id/confirm-pending')
+    @Roles(Role.ADMIN)
+    async confirmPending(
+      @Param('id') id: string,
+      @Body() dto: ConfirmPendingDto,
+    ) {
+      return this.reservationService.confirmPendingReservation(id, dto);
+    }
+
     @Patch(':id/confirm')
+    @Roles(Role.ADMIN)
     confirmReschedule(
       @Param('id') id: string,
       @Body() dto: ConfirmRescheduleDto,

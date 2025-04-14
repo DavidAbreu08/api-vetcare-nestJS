@@ -11,7 +11,8 @@ export class BlockedTimeService {
     @InjectRepository(BlockedTimeEntity)
     private readonly blockedTimeRepository: Repository<BlockedTimeEntity>,
   ) {}
-
+  
+  // TODO: Enhance Time-Blocking Function to Support Blocking a Time Interval
   async createBlockedTime(dto: CreateBlockedTimeDto) {
     const normalizedDate = moment(dto.date).startOf('day').toDate();
     const normalizedTime = moment(dto.time, ['HH:mm', 'HH:mm:ss']).format('HH:mm');
