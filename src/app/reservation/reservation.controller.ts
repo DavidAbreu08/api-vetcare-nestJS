@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { RolesGuard } from '../core/guards/roles/roles.guard';
 import { AuthGuard } from '@nestjs/passport';
 import { ReservationService } from './reservation.service';
@@ -42,7 +42,7 @@ export class ReservationController {
     }
 
     @Get('client')
-    @Roles(Role.CLIENTE)
+    @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
     async getByClient(@CurrentUser() user) {
       return this.reservationService.findByClient(user.id);
     }
@@ -70,5 +70,24 @@ export class ReservationController {
     ) {
       return this.reservationService.confirmRescheduledReservation(id, dto);
     }
+
+
+    
+    @Get(':employeeId/:date')
+    @Roles(Role.ADMIN, Role.FUNCIONARIO)
+    async getReservationsByEmployeeAndDate(
+      @Param('employeeId') id: string,
+      @Param('date') date: string
+    ) {
+      const parsedDate = new Date(date);
+      if (isNaN(parsedDate.getTime())) {
+        throw new BadRequestException('Data inválida. Use o formato YYYY-MM-DD.');
+      }
+      return this.reservationService.findByEmployeeAndDate(id, parsedDate);
+    }
+
+
+
+    
 
 }

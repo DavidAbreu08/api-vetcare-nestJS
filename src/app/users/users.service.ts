@@ -28,11 +28,25 @@ export class UsersService {
     });
   }
 
+  async findAllClients(): Promise<UsersEntity[]> {
+    return this.usersRepository.find({
+      where: { role: Role.CLIENTE },
+      select: ['id', 'name', 'email'],
+    });
+  }
+
   async findEmployees() {
     return await this.usersRepository.find({
       select: ["name" , "email","createdAt", "phone", "function", "isActive", "nif"],
       where: { role: Role.FUNCIONARIO }, 
     });
+  }
+
+  async getAvailableEmployeesByDate(date: Date): Promise<UsersEntity[]> {
+    //TODO: Add logic to check availability by checking reservations or shifts
+    return this.usersRepository.find({
+      where: { role: Role.FUNCIONARIO },
+    }); // For now, return all as available
   }
 
   async checkEmailExists(email: string): Promise<boolean> {

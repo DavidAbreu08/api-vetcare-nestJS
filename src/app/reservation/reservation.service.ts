@@ -333,6 +333,18 @@ export class ReservationService {
   
     return this.reservationRepository.save(reservation);
   }
+
+  async findByEmployeeAndDate(employeeId: string, date: Date): Promise<ReservationEntity[]> {
+    const formattedDate = date.toISOString().split('T')[0]; // 'YYYY-MM-DD'
+
+    return this.reservationRepository
+      .createQueryBuilder('reservation')
+      .where('reservation.employee = :employeeId', { employeeId })
+      .andWhere('DATE(reservation.date) = :date', { date: formattedDate })
+      .orderBy('reservation.time', 'ASC')
+      .select(['reservation.id', 'reservation.time'])
+      .getMany();
+  }
   
 }
 

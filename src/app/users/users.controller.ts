@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Put, Query, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Put, Query, UseGuards } from "@nestjs/common";
 import { UsersService } from "./users.service";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
@@ -15,6 +15,25 @@ export class UsersController {
   @UseGuards(AuthGuard('jwt'))
   async index() {
     return await this.usersService.findAll();
+  }
+
+  @Get('available/:date')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(Role.ADMIN)
+  async getAvailableEmployees(@Param('date') date: Date) {
+
+    const parsedDate = new Date(date);
+    if (isNaN(parsedDate.getTime())) {
+      throw new BadRequestException('Data inválida. Use o formato YYYY-MM-DD.');
+    }
+    return this.usersService.getAvailableEmployeesByDate(parsedDate);
+  }
+
+  @Get('clients')
+  @UseGuards(AuthGuard('jwt'))
+  @Roles(Role.ADMIN, Role.FUNCIONARIO)
+  async getAllClients() {
+    return this.usersService.findAllClients();
   }
 
   @Get('check-email')
