@@ -21,12 +21,7 @@ export class UsersController {
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(Role.ADMIN)
   async getAvailableEmployees(@Param('date') date: Date) {
-
-    const parsedDate = new Date(date);
-    if (isNaN(parsedDate.getTime())) {
-      throw new BadRequestException('Data inválida. Use o formato YYYY-MM-DD.');
-    }
-    return this.usersService.getAvailableEmployeesByDate(parsedDate);
+    return this.usersService.getAvailableEmployeesByDate(date);
   }
 
   @Get('clients')

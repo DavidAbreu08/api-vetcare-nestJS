@@ -77,13 +77,9 @@ export class ReservationController {
     @Roles(Role.ADMIN, Role.FUNCIONARIO)
     async getReservationsByEmployeeAndDate(
       @Param('employeeId') id: string,
-      @Param('date') date: string
+      @Param('date') date: Date
     ) {
-      const parsedDate = new Date(date);
-      if (isNaN(parsedDate.getTime())) {
-        throw new BadRequestException('Data inválida. Use o formato YYYY-MM-DD.');
-      }
-      return this.reservationService.findByEmployeeAndDate(id, parsedDate);
+      return this.reservationService.findByEmployeeAndDate(id, date);
     }
 
 

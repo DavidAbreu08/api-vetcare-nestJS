@@ -334,16 +334,33 @@ export class ReservationService {
     return this.reservationRepository.save(reservation);
   }
 
-  async findByEmployeeAndDate(employeeId: string, date: Date): Promise<ReservationEntity[]> {
-    const formattedDate = date.toISOString().split('T')[0]; // 'YYYY-MM-DD'
+  async findByEmployeeAndDate(employeeId: string, date: Date): Promise<string[]> {
 
-    return this.reservationRepository
-      .createQueryBuilder('reservation')
-      .where('reservation.employee = :employeeId', { employeeId })
-      .andWhere('DATE(reservation.date) = :date', { date: formattedDate })
-      .orderBy('reservation.time', 'ASC')
-      .select(['reservation.id', 'reservation.time'])
+    const isReservedAlready = this.reservationRepository
+      .createQueryBuilder('available')
+      .where('available.employee = :employeeId', {employeeId})
+      .andWhere('available.date = :date', {date})
+      .select(['available.id', 'available.time'])
       .getMany();
+
+    const reservedTimes = (await isReservedAlready).map(available => available.time);
+
+    const availableSlots: string[] = [];
+    const startHour = 9;
+    const endHour = 18;
+  
+    for (let hour = startHour; hour < endHour; hour++) {
+      for (let min of [0, 15, 30, 45]) {
+        const h = hour.toString().padStart(2, '0');
+        const m = min.toString().padStart(2, '0');
+        const timeStr = `${h}:${m}`;
+        if (!reservedTimes.includes(timeStr)) {
+          availableSlots.push(timeStr);
+        }
+      }
+    }
+  
+    return availableSlots;
   }
   
 }
