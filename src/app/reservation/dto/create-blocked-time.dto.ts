@@ -1,14 +1,16 @@
-import { IsDateString, IsOptional, IsString } from 'class-validator';
+import { IsDateString, IsOptional, IsString } from "class-validator";
 
 export class CreateBlockedTimeDto {
   @IsDateString()
   date: Date; // YYYY-MM-DD
 
   @IsString()
-  time: string; // HH:mm
+  timeStart: string; // HH:mm
+
+  @IsString()
+  timeEnd: string; // HH:mm
 
   @IsString()
   @IsOptional()
   reason?: string;
-
 }

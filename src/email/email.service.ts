@@ -1,6 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
-import * as nodemailer from 'nodemailer';
-import * as dotenv from 'dotenv';
+import { Injectable, Logger } from "@nestjs/common";
+import * as nodemailer from "nodemailer";
+import * as dotenv from "dotenv";
 
 dotenv.config();
 
@@ -10,7 +10,7 @@ export class EmailService {
 
   // Create a transporter object using the default SMTP transport
   private readonly transporter = nodemailer.createTransport({
-    service: 'gmail', // For Gmail, you can change this for other services like Outlook, etc.
+    service: "gmail", // For Gmail, you can change this for other services like Outlook, etc.
     auth: {
       user: process.env.EMAIL_USER, // Your email address (e.g., example@gmail.com)
       pass: process.env.EMAIL_PASSWORD, // Your email password or App Password
@@ -24,28 +24,27 @@ export class EmailService {
     const mailOptions = {
       from: process.env.EMAIL_USER, // Sender address
       to: to, // Receiver address
-      subject: 'Password Reset Request',
+      subject: "Password Reset Request",
       text: `You have requested a password reset. Please click the link below to reset your password:\n\n${resetLink}`,
     };
 
     try {
       // Send the email using the transporter
       const info = await this.transporter.sendMail(mailOptions);
-      this.logger.log('Email sent successfully:', info.response);
+      this.logger.log("Email sent successfully:", info.response);
     } catch (error) {
-      this.logger.error('Error sending email:', error.message);
-      throw new Error('Email could not be sent');
+      this.logger.error("Error sending email:", error.message);
+      throw new Error("Email could not be sent");
     }
   }
 
   async sendEmployeeWelcomeEmail(to: string, resetToken: string) {
-
     const resetLink = `${process.env.FRONTEND_URL}/auth/reset-password?token=${resetToken}`;
 
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to: to,
-      subject: 'Your Employee Account Has Been Created',
+      subject: "Your Employee Account Has Been Created",
       text: `Hello,\n\nYour employee account has been created.\n\nEnter in this link to create your password ${resetLink}\n\nBecareful, because this email has an expiry date by 1 Hour.`,
     };
 
@@ -54,7 +53,7 @@ export class EmailService {
       this.logger.log(`Welcome email sent to ${to}: ${info.response}`);
     } catch (error) {
       this.logger.error(`Error sending welcome email to ${to}:`, error.message);
-      throw new Error('Could not send welcome email');
+      throw new Error("Could not send welcome email");
     }
   }
 }

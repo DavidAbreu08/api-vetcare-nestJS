@@ -1,17 +1,20 @@
 //TODO: Implement the NIF Validator, this on isnt workink...
 
+import {
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
+  ValidationArguments,
+} from "class-validator";
 
-import { ValidatorConstraint, ValidatorConstraintInterface, ValidationArguments } from 'class-validator';
-
-@ValidatorConstraint({ name: 'NifValidator', async: false })
+@ValidatorConstraint({ name: "NifValidator", async: false })
 export class NifValidator implements ValidatorConstraintInterface {
   validate(nif: number, args: ValidationArguments): boolean {
-    if (!nif || typeof nif !== 'number') return false; // Ensure it's a valid number
+    if (!nif || typeof nif !== "number") return false; // Ensure it's a valid number
 
     const nifStr = nif.toString(); // Convert number to string safely
     if (!/^\d{9}$/.test(nifStr)) return false; // Ensure it has exactly 9 digits
 
-    const validPrefixes = ['1', '2', '3', '5', '6', '8', '9']; // Valid first digits
+    const validPrefixes = ["1", "2", "3", "5", "6", "8", "9"]; // Valid first digits
     if (!validPrefixes.includes(nifStr.charAt(0))) return false;
 
     // Checksum validation (mod 11 algorithm)
@@ -26,6 +29,6 @@ export class NifValidator implements ValidatorConstraintInterface {
   }
 
   defaultMessage(args: ValidationArguments): string {
-    return 'Invalid NIF number';
+    return "Invalid NIF number";
   }
 }

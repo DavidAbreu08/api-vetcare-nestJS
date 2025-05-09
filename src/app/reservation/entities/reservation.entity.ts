@@ -1,38 +1,57 @@
 import { AnimalEntity } from "src/app/animal/entities/animal.entity";
 import { ReservationStatus } from "src/app/core/enums/reservation-status.enum";
 import { UsersEntity } from "src/app/users/entities/users.entity";
-import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
+import {
+  BeforeInsert,
+  BeforeUpdate,
+  Column,
+  CreateDateColumn,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from "typeorm";
 
-@Entity('reservation')
+@Entity("reservation")
 export class ReservationEntity {
-  @PrimaryGeneratedColumn('uuid')
+  @PrimaryGeneratedColumn("uuid")
   id: string;
 
   @ManyToOne(() => AnimalEntity)
-  @JoinColumn({ name: 'animalId' })
+  @JoinColumn({ name: "animalId" })
   animal: AnimalEntity;
 
   @ManyToOne(() => UsersEntity)
-  @JoinColumn({ name: 'clientId' })
+  @JoinColumn({ name: "clientId" })
   client: UsersEntity;
 
   @ManyToOne(() => UsersEntity, { nullable: true })
-  @JoinColumn({ name: 'employeeId' })
+  @JoinColumn({ name: "employeeId" })
   employee: UsersEntity | null;
 
   @Column()
-  date: Date; // YYYY-MM-DD
+  date: Date;
 
   @Column()
-  time: string; // HH:mm
+  timeStart: string; // Format: "HH:mm"
+
+  @Column()
+  timeEnd: string; // Format: "HH:mm"
+
+  @Column()
+  start: Date;
+
+  @Column()
+  end: Date;
 
   @Column({ nullable: true })
   reason: string;
 
-  @Column({ 
-    type: 'enum', 
-    enum: ReservationStatus, 
-    default: ReservationStatus.PENDING 
+  @Column({
+    type: "enum",
+    enum: ReservationStatus,
+    default: ReservationStatus.PENDING,
   })
   status: ReservationStatus;
 
@@ -44,4 +63,22 @@ export class ReservationEntity {
 
   @UpdateDateColumn()
   updatedAt: Date;
+
+  @BeforeInsert()
+  @BeforeUpdate()
+  combineDateTime() {
+    if (this.date && this.timeStart) {
+      this.start = this.combineDateAndTime(this.date, this.timeStart);
+    }
+    if (this.date && this.timeEnd) {
+      this.end = this.combineDateAndTime(this.date, this.timeEnd);
+    }
+  }
+
+  private combineDateAndTime(date: Date, timeString: string): Date {
+    const [hours, minutes] = timeString.split(":").map(Number);
+    const combined = new Date(date);
+    combined.setHours(hours, minutes, 0, 0);
+    return combined;
+  }
 }

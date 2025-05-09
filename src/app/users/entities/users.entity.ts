@@ -8,7 +8,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from "typeorm";
-import { hashSync } from 'bcrypt';
+import { hashSync } from "bcrypt";
 import { Role } from "../../core/enums/role.enum";
 import { Function } from "../../core/enums/function.enum";
 import { ResetTokenEntity } from "../../../auth/entities/reset-token.entity";
@@ -19,9 +19,8 @@ export class UsersEntity {
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
-  @Column({name: 'nome'})
+  @Column({ name: "nome" })
   name: string;
-
 
   @Column()
   email: string;
@@ -29,17 +28,16 @@ export class UsersEntity {
   @Column()
   password: string;
 
-  @Column({ 
-    type: 'enum', 
+  @Column({
+    type: "enum",
     enum: Role,
-    name: 'user_role',
-    default: Role.CLIENTE 
+    name: "user_role",
+    default: Role.CLIENTE,
   })
   role: Role;
 
-
   @Column({
-    type: 'enum',
+    type: "enum",
     enum: Function,
     default: Function.ATENDIMENTO,
   })
@@ -48,24 +46,23 @@ export class UsersEntity {
   @Column({ name: "is_active", default: true })
   isActive: boolean;
 
-  @Column({nullable:true})
+  @Column({ nullable: true })
   phone: string;
 
-  @Column({ name: 'workLoad' ,nullable: true })
+  @Column({ name: "workLoad", nullable: true })
   workLoad: string;
-  
-  @Column({ name: 'dateBirth' ,nullable: true })
+
+  @Column({ name: "dateBirth", nullable: true })
   dateBirth: string;
 
   @Column({ name: "NIF", nullable: true })
   nif: number;
 
-  @OneToMany(() => ResetTokenEntity, token => token.user)
+  @OneToMany(() => ResetTokenEntity, (token) => token.user)
   resetTokens: ResetTokenEntity[];
 
   @OneToMany(() => AnimalEntity, (animal) => animal.owner)
   idAnimal: AnimalEntity[];
-
 
   @CreateDateColumn({ name: "created_at" })
   createdAt: string;
@@ -77,9 +74,7 @@ export class UsersEntity {
   deletedAt: string;
 
   @BeforeInsert()
-  hashPassword(){
-    this.password = hashSync(this.password, 10)
+  hashPassword() {
+    this.password = hashSync(this.password, 10);
   }
 }
-
-

@@ -1,5 +1,5 @@
-import { Repository, DataSource } from 'typeorm';
-import { ResetTokenEntity } from '../entities/reset-token.entity';
+import { Repository, DataSource } from "typeorm";
+import { ResetTokenEntity } from "../entities/reset-token.entity";
 
 export class ResetTokenEntityRepository extends Repository<ResetTokenEntity> {
   constructor(private readonly dataSource: DataSource) {

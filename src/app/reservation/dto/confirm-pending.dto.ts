@@ -1,8 +1,10 @@
-import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
-import { ReservationStatus } from 'src/app/core/enums/reservation-status.enum';
+import { IsEnum, IsOptional, IsString, IsUUID } from "class-validator";
+import { ReservationStatus } from "src/app/core/enums/reservation-status.enum";
 
 export class ConfirmPendingDto {
-  @IsEnum(ReservationStatus, { message: 'Status must be confirmed or cancelled' })
+  @IsEnum(ReservationStatus, {
+    message: "Status must be confirmed or cancelled",
+  })
   status: ReservationStatus;
 
   @IsOptional()

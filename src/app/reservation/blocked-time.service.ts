@@ -1,36 +1,74 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { CreateBlockedTimeDto } from './dto/create-blocked-time.dto';
-import { BlockedTimeEntity } from './entities/bloked-times.entity';
-import * as moment from 'moment';
+import { Injectable, ConflictException } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import { BlockedTimeEntity } from "./entities/bloked-times.entity";
+import { TimeUtilsService } from "./time-utils.service";
+import { CreateBlockedTimeDto } from "./dto/create-blocked-time.dto";
 
 @Injectable()
 export class BlockedTimeService {
   constructor(
     @InjectRepository(BlockedTimeEntity)
     private readonly blockedTimeRepository: Repository<BlockedTimeEntity>,
-  ) {}
-  
-  // TODO: Enhance Time-Blocking Function to Support Blocking a Time Interval
-  async createBlockedTime(dto: CreateBlockedTimeDto) {
-    const normalizedDate = moment(dto.date).startOf('day').toDate();
-    const normalizedTime = moment(dto.time, ['HH:mm', 'HH:mm:ss']).format('HH:mm');
 
-    const existingBlock = await this.blockedTimeRepository.findOne({
-      where: { date: normalizedDate, time: normalizedTime },
+    private readonly timeUtils: TimeUtilsService
+  ) {}
+
+  // TODO: Enhance Time-Blocking Function to Support Blocking a Time Interval
+
+  async isTimeRangeBlocked(
+    date: Date,
+    timeStart: string,
+    timeEnd: string
+  ): Promise<boolean> {
+    const blockedTimes = await this.blockedTimeRepository.find({
+      where: { date },
     });
 
-    if (existingBlock) {
-      throw new BadRequestException('This time slot is already blocked.');
+    return blockedTimes.some((blocked) => {
+      const blockedTimeStart = blocked.timeStart;
+      const blockedTimeEnd = blocked.timeEnd;
+      return (
+        this.timeUtils.compareTimes(blockedTimeStart, timeStart) >= 0 &&
+        this.timeUtils.compareTimes(blockedTimeEnd, timeEnd) < 0
+      );
+    });
+  }
+
+  async getBlockedTimesForDate(date: Date): Promise<BlockedTimeEntity[]> {
+    return this.blockedTimeRepository.find({ where: { date } });
+  }
+
+  async createBlockedTime(
+    dto: CreateBlockedTimeDto
+  ): Promise<BlockedTimeEntity> {
+    // Create datetime objects for database storage
+    const startDateTime = this.timeUtils.combineDateAndTime(
+      dto.date,
+      dto.timeStart
+    );
+    const endDateTime = this.timeUtils.combineDateAndTime(
+      dto.date,
+      dto.timeEnd
+    );
+
+    const hasReservation = await this.isTimeRangeBlocked(
+      dto.date,
+      dto.timeStart,
+      dto.timeEnd
+    );
+
+    if (hasReservation) {
+      throw new ConflictException("Time range is already blocked");
     }
 
-    const blockedTime = this.blockedTimeRepository.create({
+    return this.blockedTimeRepository.save({
       ...dto,
-      date: normalizedDate,
-      time: normalizedTime,
+      start: startDateTime,
+      end: endDateTime,
+      timeStart: dto.timeStart,
+      timeEnd: dto.timeEnd,
+      reason: dto.reason ?? "No reason provided",
     });
-
-    return this.blockedTimeRepository.save(blockedTime);
   }
 }

@@ -1,14 +1,19 @@
-import { HttpStatus, Injectable, NotFoundException, UnauthorizedException } from "@nestjs/common";
+import {
+  HttpStatus,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from "@nestjs/common";
 import { FindOptionsWhere, Repository } from "typeorm";
 import { UsersEntity } from "./entities/users.entity";
-import { InjectRepository } from '@nestjs/typeorm';
+import { InjectRepository } from "@nestjs/typeorm";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { HttpResponse } from "../core/interface/http-response.interface";
 import { Role } from "../core/enums/role.enum";
 import { CreateEmployeesDto } from "./dto/create-employees.dto";
 import { generateRandomPassword } from "../core/generated/genarate-random.password";
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from "bcrypt";
 import { EmailService } from "src/email/email.service";
 import { generateResetToken } from "../core/generated/generate-reset-token";
 import { ResetTokenEntityRepository } from "src/auth/repository/reset-token.repository";
@@ -31,14 +36,22 @@ export class UsersService {
   async findAllClients(): Promise<UsersEntity[]> {
     return this.usersRepository.find({
       where: { role: Role.CLIENTE },
-      select: ['id', 'name', 'email'],
+      select: ["id", "name", "email"],
     });
   }
 
   async findEmployees() {
     return await this.usersRepository.find({
-      select: ["name" , "email","createdAt", "phone", "function", "isActive", "nif"],
-      where: { role: Role.FUNCIONARIO }, 
+      select: [
+        "name",
+        "email",
+        "createdAt",
+        "phone",
+        "function",
+        "isActive",
+        "nif",
+      ],
+      where: { role: Role.FUNCIONARIO },
     });
   }
 
@@ -55,11 +68,11 @@ export class UsersService {
   }
 
   async findOneOrFail(
-    where: FindOptionsWhere<UsersEntity> | FindOptionsWhere<UsersEntity>[],
+    where: FindOptionsWhere<UsersEntity> | FindOptionsWhere<UsersEntity>[]
   ) {
     const user = await this.usersRepository.findOne({ where });
     if (!user) {
-      throw new NotFoundException('Usuário não encontrado');
+      throw new NotFoundException("Usuário não encontrado");
     }
     return user;
   }
@@ -69,13 +82,13 @@ export class UsersService {
     return await this.usersRepository.save(user);
   }
 
-  async storeEmployees(data: CreateEmployeesDto){
+  async storeEmployees(data: CreateEmployeesDto) {
     const existingUser = await this.usersRepository.findOne({
       where: [{ email: data.email }, { nif: data.nif }],
     });
 
     if (existingUser) {
-      throw new UnauthorizedException('Email or NIF already exists');
+      throw new UnauthorizedException("Email or NIF already exists");
     }
 
     const randomPassword = generateRandomPassword();
@@ -97,17 +110,19 @@ export class UsersService {
 
     // Save the token in the database
     const resetToken = this.resetTokenRepo.create({
-        resetToken: token,
-        user: newEmployee,
-        expiresAt,
+      resetToken: token,
+      user: newEmployee,
+      expiresAt,
     });
     await this.resetTokenRepo.save(resetToken);
 
     await this.emailService.sendEmployeeWelcomeEmail(data.email, token);
 
-    return { message: 'Employee account created successfully. Temporary password sent via email.' };
+    return {
+      message:
+        "Employee account created successfully. Temporary password sent via email.",
+    };
   }
-
 
   async update(id: string, data: UpdateUserDto): Promise<HttpResponse> {
     const user = await this.findOneOrFail({ id });
@@ -116,7 +131,7 @@ export class UsersService {
       statusCode: HttpStatus.ACCEPTED,
       message: "Updated!",
       user: await this.usersRepository.save(user),
-    }
+    };
   }
   async destroy(id: string) {
     await this.findOneOrFail({ id });

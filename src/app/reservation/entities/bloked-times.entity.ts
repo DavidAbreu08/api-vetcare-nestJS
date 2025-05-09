@@ -1,16 +1,24 @@
-import { Column, Entity, Index, PrimaryGeneratedColumn } from "typeorm";
+import { Column, Entity, PrimaryGeneratedColumn } from "typeorm";
 
-@Entity('blocked_times')
-@Index(['date', 'time'], { unique: true })
+@Entity("blocked_times")
 export class BlockedTimeEntity {
-  @PrimaryGeneratedColumn('uuid')
+  @PrimaryGeneratedColumn("uuid")
   id: string;
 
   @Column()
   date: Date; // YYYY-MM-DD
 
   @Column()
-  time: string; // HH:mm
+  timeStart: string; // Format: "HH:mm"
+
+  @Column()
+  timeEnd: string; // Format: "HH:mm"
+
+  @Column()
+  start: Date;
+
+  @Column()
+  end: Date;
 
   @Column({ nullable: true })
   reason: string;

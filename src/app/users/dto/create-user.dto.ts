@@ -1,7 +1,14 @@
-import { IsNotEmpty, IsEmail, Matches, IsString, IsInt, Min, Max } from 'class-validator';
-import { RegExHelper } from '../../helpers/regex.helper';
-import { MessagesHelper } from '../../helpers/messages.helper';
-
+import {
+  IsNotEmpty,
+  IsEmail,
+  Matches,
+  IsString,
+  IsInt,
+  Min,
+  Max,
+} from "class-validator";
+import { RegExHelper } from "../../helpers/regex.helper";
+import { MessagesHelper } from "../../helpers/messages.helper";
 
 export class CreateUserDto {
   @IsString()
@@ -12,7 +19,7 @@ export class CreateUserDto {
   email: string;
 
   @IsNotEmpty()
-  @Matches(RegExHelper.password,{ message: MessagesHelper.PASSWORD_VALID })
+  @Matches(RegExHelper.password, { message: MessagesHelper.PASSWORD_VALID })
   password: string;
 
   // TODO: Later create another dto for inserting, on tests

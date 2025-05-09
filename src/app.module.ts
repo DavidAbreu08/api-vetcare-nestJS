@@ -2,14 +2,13 @@ import { MiddlewareConsumer, Module, NestModule } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule, TypeOrmModuleOptions } from "@nestjs/typeorm";
 import { UsersModule } from "./app/users/users.module";
-import { AuthModule } from './auth/auth.module';
-import * as cors from 'cors';
+import { AuthModule } from "./auth/auth.module";
+import * as cors from "cors";
 import { AuthenticateJWT } from "./auth/authenticateJWT.middleware";
-import { EmailModule } from './email/email.module';
-import { AnimalModule } from './app/animal/animal.module';
-import { ReservationModule } from './app/reservation/reservation.module';
+import { EmailModule } from "./email/email.module";
+import { AnimalModule } from "./app/animal/animal.module";
+import { ReservationModule } from "./app/reservation/reservation.module";
 import { BlockedTimeModule } from "./app/reservation/blocked-time.module";
-
 
 @Module({
   imports: [
@@ -34,17 +33,17 @@ import { BlockedTimeModule } from "./app/reservation/blocked-time.module";
   controllers: [],
   providers: [],
 })
-export class AppModule implements NestModule{
+export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(
-      cors({
-        origin: 'http://localhost:4200', // Allow Angular
-        methods: ['GET', 'POST', 'PUT', 'DELETE'],
-        allowedHeaders: ['Content-Type', 'Authorization']
-      }),
-    ).forRoutes('*'); // Apply to all routes
     consumer
-      .apply(AuthenticateJWT)
-      .forRoutes('auth', 'api/auth/me')
+      .apply(
+        cors({
+          origin: "http://localhost:4200", // Allow Angular
+          methods: ["GET", "POST", "PUT", "DELETE"],
+          allowedHeaders: ["Content-Type", "Authorization"],
+        })
+      )
+      .forRoutes("*"); // Apply to all routes
+    consumer.apply(AuthenticateJWT).forRoutes("auth", "api/auth/me");
   }
 }

@@ -19,7 +19,8 @@ import { DataSource } from "typeorm";
     UsersService,
     {
       provide: ResetTokenEntityRepository,
-      useFactory: (dataSource: DataSource) => new ResetTokenEntityRepository(dataSource),
+      useFactory: (dataSource: DataSource) =>
+        new ResetTokenEntityRepository(dataSource),
       inject: [DataSource],
     },
   ],
