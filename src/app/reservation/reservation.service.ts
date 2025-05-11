@@ -324,7 +324,6 @@ export class ReservationService {
       dto.date,
       dto.timeStart
     );
-    console.log("startDateTime", startDateTime);
     const endDateTime = this.timeUtils.combineDateAndTime(
       dto.date,
       dto.timeEnd

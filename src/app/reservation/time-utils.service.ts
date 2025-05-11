@@ -63,10 +63,16 @@ export class TimeUtilsService {
   public isWithinBusinessHours(
     timeStart: string,
     timeEnd: string,
-    date: Date
+    date: Date | string
   ): boolean {
+     const dateObj = typeof date === 'string' ? new Date(date) : date;
+
+      // Validate the Date object
+  if (isNaN(dateObj.getTime())) {
+    throw new Error('Invalid date provided');
+  }
     // Check day of week
-    const dayOfWeek = date.getDay();
+    const dayOfWeek = dateObj.getDay();
     if (!this.BUSINESS_HOURS.days.includes(dayOfWeek)) return false;
 
     // Check time range
