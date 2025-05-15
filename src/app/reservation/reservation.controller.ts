@@ -5,6 +5,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from "@nestjs/common";
 import { RolesGuard } from "../core/guards/roles/roles.guard";
@@ -62,16 +63,16 @@ export class ReservationController {
     @Param("id") id: string,
     @Body() dto: ConfirmPendingDto
   ) {
-    return this.reservationService.confirmPendingReservation(id, dto);
+    return await this.reservationService.confirmPendingReservation(id, dto);
   }
 
-  @Patch(":id/confirm")
+  @Patch(":id/confirm-rescheduled")
   @Roles(Role.ADMIN)
-  confirmReschedule(
+  async confirmReschedule(
     @Param("id") id: string,
     @Body() dto: ConfirmRescheduleDto
   ) {
-    return this.reservationService.confirmRescheduledReservation(id, dto);
+    return await this.reservationService.confirmRescheduledReservation(id, dto);
   }
 
   @Get(":employeeId/:date")
@@ -80,6 +81,7 @@ export class ReservationController {
     @Param("employeeId") id: string,
     @Param("date") date: Date
   ) {
-    return this.reservationService.findByEmployeeAndDate(id, date);
+    return await this.reservationService.findByEmployeeAndDate(id, date);
   }
+
 }
