@@ -17,6 +17,31 @@ export class EmailService {
     },
   });
 
+  public htmlTemplate(link: string): string {
+    return `
+      <div style="font-family: Arial, sans-serif; color: #333;">
+        <h2>Welcome to VetCare!</h2>
+        <p>Your account has been created.</p>
+        <p>
+          Please click the button below to create your password. This link will expire in 1 hour.
+        </p>
+        <a href="${link}" style="
+          display: inline-block;
+          padding: 10px 20px;
+          background-color: #4CAF50;
+          color: #fff;
+          text-decoration: none;
+          border-radius: 5px;
+          margin: 10px 0;
+        ">Create Password</a>
+        <p>If the button doesn't work, copy and paste this link into your browser:</p>
+        <p><a href="${link}">${link}</a></p>
+        <br>
+        <p>Thank you,<br>VetCare Team</p>
+      </div>
+    `;
+  }
+
   // Method to send the reset password email
   async sendResetPasswordEmail(to: string, resetToken: string) {
     const resetLink = `${process.env.FRONTEND_URL}/auth/reset-password?token=${resetToken}`;
@@ -45,7 +70,26 @@ export class EmailService {
       from: process.env.EMAIL_USER,
       to: to,
       subject: "Your Employee Account Has Been Created",
-      text: `Hello,\n\nYour employee account has been created.\n\nEnter in this link to create your password ${resetLink}\n\nBecareful, because this email has an expiry date by 1 Hour.`,
+      html: this.htmlTemplate(resetLink),
+    };
+
+    try {
+      const info = await this.transporter.sendMail(mailOptions);
+      this.logger.log(`Welcome email sent to ${to}: ${info.response}`);
+    } catch (error) {
+      this.logger.error(`Error sending welcome email to ${to}:`, error.message);
+      throw new Error("Could not send welcome email");
+    }
+  }
+
+  async sendClientWelcomeEmail(to: string, resetToken: string) {
+    const resetLink = `${process.env.FRONTEND_URL}/auth/reset-password?token=${resetToken}`;
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: to,
+      subject: "Your Client Account Has Been Created",
+      html: this.htmlTemplate(resetLink),
     };
 
     try {

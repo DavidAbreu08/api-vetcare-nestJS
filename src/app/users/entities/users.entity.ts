@@ -39,7 +39,7 @@ export class UsersEntity {
   @Column({
     type: "enum",
     enum: Function,
-    default: Function.ATENDIMENTO,
+    default: Function.CLIENTE,
   })
   function: Function;
 
@@ -49,7 +49,7 @@ export class UsersEntity {
   @Column({ nullable: true })
   phone: string;
 
-  @Column({ name: "workLoad", nullable: true })
+  @Column({ name: "workLoad", nullable: true, default: "none" })
   workLoad: string;
 
   @Column({ name: "dateBirth", nullable: true })

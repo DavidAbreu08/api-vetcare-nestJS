@@ -17,6 +17,8 @@ import * as bcrypt from "bcrypt";
 import { EmailService } from "src/email/email.service";
 import { generateResetToken } from "../core/generated/generate-reset-token";
 import { ResetTokenEntityRepository } from "src/auth/repository/reset-token.repository";
+import { CreateClientDto } from "./dto/create-client.dto";
+import { stat } from "fs";
 
 @Injectable()
 export class UsersService {
@@ -36,7 +38,14 @@ export class UsersService {
   async findAllClients(): Promise<UsersEntity[]> {
     return this.usersRepository.find({
       where: { role: Role.CLIENTE },
-      select: ["id", "name", "email"],
+      select: [
+        "name",
+        "email",
+        "createdAt",
+        "phone",
+        "nif",
+        "dateBirth",
+      ],
     });
   }
 
@@ -82,6 +91,48 @@ export class UsersService {
     return await this.usersRepository.save(user);
   }
 
+  async storeClient(data: CreateClientDto) {
+    const existingUser = await this.usersRepository.findOne({
+      where: [{ email: data.email }, { nif: data.nif }],
+    });
+
+    if (existingUser) {
+      throw new UnauthorizedException("Email or NIF already exists");
+    }
+
+    const randomPassword = generateRandomPassword();
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(randomPassword, salt);
+
+    const newClient = this.usersRepository.create({
+      ...data,
+      password: hashedPassword,
+      role: Role.CLIENTE,
+    });
+
+    await this.usersRepository.save(newClient);
+
+    // Generate the reset token and expiration date
+    const { token, expiresAt } = generateResetToken();
+
+    // Save the token in the database
+    const resetToken = this.resetTokenRepo.create({
+      resetToken: token,
+      user: newClient,
+      expiresAt,
+    });
+    await this.resetTokenRepo.save(resetToken);
+
+    await this.emailService.sendClientWelcomeEmail(data.email, token);
+
+    return {
+      message:
+        "Client account created successfully. Temporary password sent via email.",
+      statusCode: HttpStatus.CREATED,
+    };
+  }
+
   async storeEmployees(data: CreateEmployeesDto) {
     const existingUser = await this.usersRepository.findOne({
       where: [{ email: data.email }, { nif: data.nif }],
@@ -121,6 +172,7 @@ export class UsersService {
     return {
       message:
         "Employee account created successfully. Temporary password sent via email.",
+      statusCode: HttpStatus.CREATED,
     };
   }
 

@@ -21,6 +21,7 @@ import { Roles } from "../core/decorators/roles.decorator";
 import { Role } from "../core/enums/role.enum";
 import { RolesGuard } from "../core/guards/roles/roles.guard";
 import { CreateEmployeesDto } from "./dto/create-employees.dto";
+import { CreateClientDto } from "./dto/create-client.dto";
 
 @Controller("api/users")
 export class UsersController {
@@ -56,9 +57,17 @@ export class UsersController {
   }
 
   @UseGuards(AuthGuard("jwt"))
+  @Roles(Role.ADMIN)
   @Post("employees")
   async storeEmployees(@Body() body: CreateEmployeesDto) {
     return await this.usersService.storeEmployees(body);
+  }
+
+  @UseGuards(AuthGuard("jwt"))
+  @Roles(Role.ADMIN)
+  @Post("create-clients")
+  async storeClients(@Body() body: CreateClientDto) {
+    return await this.usersService.storeClient(body);
   }
 
   @UseGuards(AuthGuard("jwt"))
