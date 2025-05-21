@@ -39,6 +39,7 @@ export class UsersService {
     return this.usersRepository.find({
       where: { role: Role.CLIENTE },
       select: [
+        "id",
         "name",
         "email",
         "createdAt",
