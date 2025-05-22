@@ -182,8 +182,7 @@ export class UsersService {
     this.usersRepository.merge(user, data);
     return {
       statusCode: HttpStatus.ACCEPTED,
-      message: "Updated!",
-      user: await this.usersRepository.save(user),
+      message: "ok",
     };
   }
   async destroy(id: string) {

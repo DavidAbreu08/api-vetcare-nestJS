@@ -8,6 +8,7 @@ import {
   HttpStatus,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Put,
   Query,
@@ -77,7 +78,7 @@ export class UsersController {
   }
 
   @UseGuards(AuthGuard("jwt"))
-  @Put(":id")
+  @Patch(":id")
   async update(
     @Param("id", new ParseUUIDPipe()) id: string,
     @Body() body: UpdateUserDto

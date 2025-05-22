@@ -64,6 +64,9 @@ export class UsersEntity {
   @OneToMany(() => AnimalEntity, (animal) => animal.owner)
   idAnimal: AnimalEntity[];
 
+  @Column({ name: "profile_picture", nullable: true })
+  profilePicture: string;
+
   @CreateDateColumn({ name: "created_at" })
   createdAt: string;
 
