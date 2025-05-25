@@ -40,9 +40,9 @@ export class AnimalEntity {
   @Column()
   description: string;
 
-  @Column()
+  @Column({nullable: true})
   image: string;
-
+  
   @Column({ default: false })
   confirmed: boolean;
 }

@@ -50,7 +50,7 @@ export class AnimalController {
   }
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
   @Get("owner/:ownerId")
   async findByOwner(@Param("ownerId") ownerId: string) {
     return this.animalService.findByOwner(ownerId);
