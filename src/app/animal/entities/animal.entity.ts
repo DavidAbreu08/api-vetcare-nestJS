@@ -37,8 +37,11 @@ export class AnimalEntity {
   @Column()
   height: number;
 
-  @Column()
+  @Column({nullable: true})
   description: string;
+
+  @Column()
+  gender: string;
 
   @Column({nullable: true})
   image: string;

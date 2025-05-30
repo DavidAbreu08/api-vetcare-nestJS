@@ -180,8 +180,9 @@ export class UsersService {
   async update(id: string, data: UpdateUserDto): Promise<HttpResponse> {
     const user = await this.findOneOrFail({ id });
     this.usersRepository.merge(user, data);
+    await this.usersRepository.save(user);
     return {
-      statusCode: HttpStatus.ACCEPTED,
+      statusCode: HttpStatus.OK,
       message: "ok",
     };
   }

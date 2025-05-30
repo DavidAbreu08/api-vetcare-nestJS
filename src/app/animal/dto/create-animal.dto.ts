@@ -1,4 +1,4 @@
-import { IsInt, IsNotEmpty, IsString, IsUUID, Min } from "class-validator";
+import { IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, Min } from "class-validator";
 
 export class CreateAnimalDto {
   @IsString()
@@ -26,10 +26,14 @@ export class CreateAnimalDto {
   height: number;
 
   @IsString()
-  description: string;
+  @IsOptional()
+  description?: string;
 
   @IsString()
   image: string;
+
+  @IsString()
+  gender: string;
 
   @IsUUID()
   ownerId: string;
