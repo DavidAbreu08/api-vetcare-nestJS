@@ -26,7 +26,8 @@ export class AuthController {
     return await this.authService.login(req.user);
   }
 
-  @UseGuards(AuthGuard("jwt"))
+  @UseGuards(AuthGuard("jwt"), RolesGuard) 
+  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
   @Get("me")
   async getProfile(@Req() req: any) {
     return await req.user;
