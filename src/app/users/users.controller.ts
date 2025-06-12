@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -10,7 +9,6 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
-  Put,
   Query,
   UseGuards,
 } from "@nestjs/common";
@@ -23,6 +21,7 @@ import { Role } from "../core/enums/role.enum";
 import { RolesGuard } from "../core/guards/roles/roles.guard";
 import { CreateEmployeesDto } from "./dto/create-employees.dto";
 import { CreateClientDto } from "./dto/create-client.dto";
+import { UpdateFuncionarioDto } from "./dto/update-funcionario.dto";
 
 @Controller("api/users")
 export class UsersController {
@@ -85,6 +84,17 @@ export class UsersController {
   ) {
     return await this.usersService.update(id, body);
   }
+
+  @UseGuards(AuthGuard("jwt"), RolesGuard)
+  @Roles(Role.ADMIN, Role.FUNCIONARIO)
+  @Patch("employee/:id")
+  async updateEmployee(
+    @Param("id", new ParseUUIDPipe()) id: string,
+    @Body() body: UpdateFuncionarioDto
+  ) {
+    return await this.usersService.updateEmployee(id, body);
+  }
+  
 
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(AuthGuard("jwt"), RolesGuard)

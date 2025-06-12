@@ -65,12 +65,12 @@ export class TimeUtilsService {
     timeEnd: string,
     date: Date | string
   ): boolean {
-     const dateObj = typeof date === 'string' ? new Date(date) : date;
+    const dateObj = typeof date === 'string' ? new Date(date) : date;
 
       // Validate the Date object
-  if (isNaN(dateObj.getTime())) {
-    throw new Error('Invalid date provided');
-  }
+    if (isNaN(dateObj.getTime())) {
+      throw new Error('Invalid date provided');
+    }
     // Check day of week
     const dayOfWeek = dateObj.getDay();
     if (!this.BUSINESS_HOURS.days.includes(dayOfWeek)) return false;

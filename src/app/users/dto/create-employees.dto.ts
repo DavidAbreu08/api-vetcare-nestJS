@@ -7,6 +7,7 @@ import {
   Min,
   Max,
   Matches,
+  IsEnum,
 } from "class-validator";
 import { Function } from "src/app/core/enums/function.enum";
 import { RegExHelper } from "src/app/helpers/regex.helper";
@@ -40,6 +41,7 @@ export class CreateEmployeesDto {
 
   @IsString()
   @IsNotEmpty()
+  @IsEnum(Function)
   function: Function;
 
   @IsString()

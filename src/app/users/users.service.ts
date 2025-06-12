@@ -18,7 +18,7 @@ import { EmailService } from "src/email/email.service";
 import { generateResetToken } from "../core/generated/generate-reset-token";
 import { ResetTokenEntityRepository } from "src/auth/repository/reset-token.repository";
 import { CreateClientDto } from "./dto/create-client.dto";
-import { stat } from "fs";
+import { UpdateFuncionarioDto } from "./dto/update-funcionario.dto";
 
 @Injectable()
 export class UsersService {
@@ -53,6 +53,7 @@ export class UsersService {
   async findEmployees() {
     return await this.usersRepository.find({
       select: [
+        "id",
         "name",
         "email",
         "createdAt",
@@ -186,6 +187,41 @@ export class UsersService {
       message: "ok",
     };
   }
+
+  async updateEmployee(id: string, data: UpdateFuncionarioDto): Promise<HttpResponse> {
+    const user = await this.findOneOrFail({ id });
+
+    if (data.email && data.email !== user.email) {
+      const emailExists = await this.usersRepository.findOne({
+        where: { email: data.email },
+      });
+      if (emailExists && emailExists.id !== id) {
+        throw new UnauthorizedException("Email já está em uso por outro funcionário");
+      }
+    }
+
+    if (data.nif && data.nif !== user.nif) {
+      const nifExists = await this.usersRepository.findOne({
+        where: { nif: data.nif },
+      });
+      if (nifExists && nifExists.id !== id) {
+        throw new UnauthorizedException("NIF já está em uso por outro funcionário");
+      }
+    }
+
+    // Atualiza apenas os campos enviados
+    this.usersRepository.merge(user, data);
+    await this.usersRepository.save(user);
+
+    
+
+    return {
+      statusCode: HttpStatus.OK,
+      message: "Funcionário atualizado com sucesso",
+      // user: user, // Descomente se quiser retornar o usuário atualizado
+    };
+  }
+
   async destroy(id: string) {
     await this.findOneOrFail({ id });
     // Se softDelete não estiver a funcionar, certificar se a entidade UsersEntity tem a coluna @DeleteDateColumn(). Caso contrário, usar remove em vez de softDelete.

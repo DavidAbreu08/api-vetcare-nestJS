@@ -4,4 +4,6 @@ export enum Function {
   MEDICA = "Médica",
   GESTAO = "Contablista",
   ADMINISTRACAO = "Administrador",
+  FARMACIA = "Farmacia",
+  OUTROS = "Outros",
 }
