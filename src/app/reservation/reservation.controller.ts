@@ -66,7 +66,7 @@ export class ReservationController {
   }
 
   @Patch(":id/confirm-rescheduled")
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
   async confirmReschedule(
     @Param("id") id: string,
     @Body() dto: ConfirmRescheduleDto
@@ -82,5 +82,16 @@ export class ReservationController {
   ) {
     return await this.reservationService.findByEmployeeAndDate(id, date);
   }
+
+
+  @Patch(":id/reject-rescheduled")
+  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
+  async rejectReschedule(
+    @Param("id") id: string,
+    @Body("note") note?: string
+  ) {
+    return await this.reservationService.rejectRescheduledReservation(id, note);
+  }
+
 
 }

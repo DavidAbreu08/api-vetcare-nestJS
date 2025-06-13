@@ -360,8 +360,8 @@ export class ReservationService {
 
     // Notificação: Reserva criada e será analisada pelo veterinário
     await this.emailService.sendReservationCreatedEmail(
-      user.email,
-      user.name,
+      client.email,
+      client.name,
       typeof dto.date === "string"
         ? dto.date
         : new Date(dto.date).toISOString().split("T")[0],
@@ -408,19 +408,19 @@ export class ReservationService {
       await this.reservationRepository.save(reservation);
 
     // Notificações por email
-  if (dto.status === ReservationStatus.RESCHEDULED) {
-    await this.emailService.sendReservationRescheduledEmail(
-      reservation.client.email,
-      reservation.client.name,
-      oldDate,
-      oldTimeStart,
-      oldTimeEnd,
-      reservation.date.toISOString().split("T")[0],
-      reservation.timeStart,
-      reservation.timeEnd,
-      reservation.rescheduleNote
-    );
-  }
+    if (dto.status === ReservationStatus.RESCHEDULED) {
+      await this.emailService.sendReservationRescheduledEmail(
+        reservation.client.email,
+        reservation.client.name,
+        oldDate,
+        oldTimeStart,
+        oldTimeEnd,
+        reservation.date.toISOString().split("T")[0],
+        reservation.timeStart,
+        reservation.timeEnd,
+        reservation.rescheduleNote
+      );
+    }
 
     return updatedReservation;
   }
@@ -500,7 +500,8 @@ export class ReservationService {
       reservation.employee = employee;
       reservation.status = dto.status;
       reservation.rescheduleNote = dto.confirmationNote ?? " ";
-      const updatedReservation = await this.reservationRepository.save(reservation);
+      const updatedReservation =
+        await this.reservationRepository.save(reservation);
 
       // Enviar email de confirmação
       await this.emailService.sendReservationConfirmedEmail(
@@ -574,7 +575,6 @@ export class ReservationService {
         reservation.timeEnd,
         dto.confirmationNote ?? ""
       );
-
     }
 
     reservation.status = dto.status;
@@ -586,29 +586,46 @@ export class ReservationService {
   async findByEmployeeAndDate(
     employeeId: string,
     date: Date
-  ): Promise<string[]> {
-    // 1. Get all reservations for this employee on the specified date
-    const reservations = await this.reservationRepository.find({
+  ): Promise<ReservationEntity[]> {
+    return this.reservationRepository.find({
       where: {
         employee: { id: employeeId },
         date,
-        status: In(["confirmed", "pending", "rescheduled"]),
+        status: In(["confirmed"]),
       },
-      select: ["timeStart", "timeEnd"],
+      relations: ["client", "animal"],
+      order: { timeStart: "ASC" },
+    });
+  }
+
+  async rejectRescheduledReservation(id: string, note?: string) {
+    const reservation = await this.reservationRepository.findOne({
+      where: { id },
+      relations: ["client", "employee"],
     });
 
-    // 2. Generate all possible time slots for business hours
-    const businessHours = this.timeUtils.getBusinessHours();
-    const slotDuration = 30;
-    const timeSlots = this.timeUtils.generateTimeSlots(
-      businessHours.start,
-      businessHours.end,
-      slotDuration
+    if (!reservation) throw new NotFoundException("Reservation not found");
+
+    if (reservation.status !== ReservationStatus.RESCHEDULED) {
+      throw new BadRequestException(
+        "This reservation is not in a rescheduled state."
+      );
+    }
+
+    reservation.status = ReservationStatus.CANCELLED;
+    reservation.rescheduleNote = note ?? "";
+
+    const updatedReservation =
+      await this.reservationRepository.save(reservation);
+
+    // Enviar email de rejeição/cancelamento ao cliente
+    await this.emailService.sendReservationCancelledEmail(
+      reservation.client.email,
+      reservation.client.name,
+      reservation.date.toISOString().split("T")[0],
+      note
     );
 
-    // 3. Filter out occupied slots
-    return timeSlots.filter((slot) => {
-      return !this.isSlotOccupied(slot, reservations, slotDuration);
-    });
+    return updatedReservation;
   }
 }
