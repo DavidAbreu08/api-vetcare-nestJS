@@ -42,6 +42,162 @@ export class EmailService {
     `;
   }
 
+  public reservationCreatedTemplate(
+    userName: string,
+    reservationDate: string,
+    timeStart: string,
+    timeEnd: string
+  ): string {
+    return `
+      <div style="font-family: Arial, sans-serif; color: #333;">
+        <h2>Reserva Recebida!</h2>
+        <p>Olá ${userName},</p>
+        <p>
+          A sua reserva para o dia <strong>${reservationDate}</strong> das <strong>${timeStart}</strong> às <strong>${timeEnd}</strong> foi criada com sucesso e será analisada pelo veterinário.
+        </p>
+        <p>Em breve receberá uma confirmação ou pedido de alteração.</p>
+        <br>
+        <p>Obrigado,<br>VetCare Team</p>
+      </div>
+    `;
+  }
+
+  public reservationConfirmedTemplate(
+    userName: string,
+    reservationDate: string,
+    timeStart: string,
+    timeEnd: string,
+    note?: string
+  ): string {
+    return `
+      <div style="font-family: Arial, sans-serif; color: #333;">
+        <h2>Reserva Confirmada!</h2>
+        <p>Olá ${userName},</p>
+        <p>
+          A sua reserva para o dia <strong>${reservationDate}</strong> das <strong>${timeStart}</strong> às <strong>${timeEnd}</strong> foi confirmada pelo veterinário.
+        </p>
+        ${note ? `<p><strong>O veterinário deixou uma nota para si:</strong> ${note}</p>` : ""}
+        <p>Aguardamos por si na data marcada.</p>
+        <br>
+        <p>Obrigado,<br>VetCare Team</p>
+      </div>
+    `;
+  }
+
+  public reservationRescheduledTemplate(
+    userName: string,
+    oldDate: string,
+    oldTimeStart: string,
+    oldTimeEnd: string,
+    newDate: string,
+    newTimeStart: string,
+    newTimeEnd: string,
+    note?: string
+  ): string {
+    return `
+      <div style="font-family: Arial, sans-serif; color: #333;">
+        <h2>Reserva Reagendada</h2>
+        <p>Olá ${userName},</p>
+        <p>A sua reserva foi <strong>reagendada</strong>.</p>
+        <p>
+          <strong>Data e hora anterior:</strong> ${oldDate} das ${oldTimeStart} às ${oldTimeEnd}<br>
+          <strong>Nova data e hora:</strong> ${newDate} das ${newTimeStart} às ${newTimeEnd}
+        </p>
+        ${note ? `<p><strong>Nota:</strong> ${note}</p>` : ""}
+        <br>
+        <p>Por favor, confirme a sua disponibilidade.</p>
+        <p>Obrigado,<br>VetCare Team</p>
+      </div>
+    `;
+  }
+
+  public reservationCancelledTemplate(
+    userName: string,
+    reservationDate: string,
+    note?: string
+  ): string {
+    return `
+      <div style="font-family: Arial, sans-serif; color: #333;">
+        <h2>Reserva Cancelada</h2>
+        <p>Olá ${userName},</p>
+        <p>Lamentamos informar que a sua reserva para o dia <strong>${reservationDate}</strong> foi <strong>cancelada</strong>.</p>
+        ${note ? `<p><strong>Motivo:</strong> ${note}</p>` : ""}
+        <br>
+        <p>Se tiver dúvidas, por favor contacte-nos.</p>
+        <p>Obrigado,<br>VetCare Team</p>
+      </div>
+    `;
+  }
+
+  // Envio dos emails:
+  async sendReservationCreatedEmail(
+    to: string,
+    userName: string,
+    reservationDate: string,
+    timeStart: string,
+    timeEnd: string
+  ) {
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to,
+      subject: "Reserva Recebida - VetCare",
+      html: this.reservationCreatedTemplate(
+        userName,
+        reservationDate,
+        timeStart,
+        timeEnd
+      ),
+    };
+
+    try {
+      const info = await this.transporter.sendMail(mailOptions);
+      this.logger.log(
+        `Reserva criada: email enviado para ${to}: ${info.response}`
+      );
+    } catch (error) {
+      this.logger.error(
+        `Erro ao enviar email de reserva criada para ${to}:`,
+        error.message
+      );
+      throw new Error("Não foi possível enviar o email de reserva criada");
+    }
+  }
+
+  async sendReservationConfirmedEmail(
+    to: string,
+    userName: string,
+    reservationDate: string,
+    timeStart: string,
+    timeEnd: string,
+    note?: string
+  ) {
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to,
+      subject: "Reserva Confirmada - VetCare",
+      html: this.reservationConfirmedTemplate(
+        userName,
+        reservationDate,
+        timeStart,
+        timeEnd,
+        note
+      ),
+    };
+
+    try {
+      const info = await this.transporter.sendMail(mailOptions);
+      this.logger.log(
+        `Reserva confirmada: email enviado para ${to}: ${info.response}`
+      );
+    } catch (error) {
+      this.logger.error(
+        `Erro ao enviar email de confirmação para ${to}:`,
+        error.message
+      );
+      throw new Error("Não foi possível enviar o email de confirmação");
+    }
+  }
+
   // Method to send the reset password email
   async sendResetPasswordEmail(to: string, resetToken: string) {
     const resetLink = `${process.env.FRONTEND_URL}/auth/reset-password?token=${resetToken}`;
@@ -98,6 +254,72 @@ export class EmailService {
     } catch (error) {
       this.logger.error(`Error sending welcome email to ${to}:`, error.message);
       throw new Error("Could not send welcome email");
+    }
+  }
+
+  async sendReservationRescheduledEmail(
+    to: string,
+    userName: string,
+    oldDate: string,
+    oldTimeStart: string,
+    oldTimeEnd: string,
+    newDate: string,
+    newTimeStart: string,
+    newTimeEnd: string,
+    note?: string
+  ) {
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to,
+      subject: "Reserva Reagendada - VetCare",
+      html: this.reservationRescheduledTemplate(
+        userName,
+        oldDate,
+        oldTimeStart,
+        oldTimeEnd,
+        newDate,
+        newTimeStart,
+        newTimeEnd,
+        note
+      ),
+    };
+    try {
+      const info = await this.transporter.sendMail(mailOptions);
+      this.logger.log(
+        `Reserva reagendada: email enviado para ${to}: ${info.response}`
+      );
+    } catch (error) {
+      this.logger.error(
+        `Erro ao enviar email de reagendamento para ${to}:`,
+        error.message
+      );
+      throw new Error("Não foi possível enviar o email de reagendamento");
+    }
+  }
+
+  async sendReservationCancelledEmail(
+    to: string,
+    userName: string,
+    reservationDate: string,
+    note?: string
+  ) {
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to,
+      subject: "Reserva Cancelada - VetCare",
+      html: this.reservationCancelledTemplate(userName, reservationDate, note),
+    };
+    try {
+      const info = await this.transporter.sendMail(mailOptions);
+      this.logger.log(
+        `Reserva cancelada: email enviado para ${to}: ${info.response}`
+      );
+    } catch (error) {
+      this.logger.error(
+        `Erro ao enviar email de cancelamento para ${to}:`,
+        error.message
+      );
+      throw new Error("Não foi possível enviar o email de cancelamento");
     }
   }
 }

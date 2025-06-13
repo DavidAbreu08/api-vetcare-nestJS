@@ -16,11 +16,14 @@ import { ConfirmRescheduleDto } from "./dto/confirm-reschedule.dto";
 import { BlockedTimeEntity } from "./entities/bloked-times.entity";
 import { ConfirmPendingDto } from "./dto/confirm-pending.dto";
 import { TimeUtilsService } from "./time-utils.service";
+import { EmailService } from "src/email/email.service";
 
 @Injectable()
 export class ReservationService {
   constructor(
     private readonly timeUtils: TimeUtilsService,
+
+    private readonly emailService: EmailService,
 
     @InjectRepository(ReservationEntity)
     private readonly reservationRepository: Repository<ReservationEntity>,
@@ -353,7 +356,20 @@ export class ReservationService {
       status: this.determineReservationStatus(user),
     });
 
-    return await this.reservationRepository.save(reservation);
+    const savedReservation = await this.reservationRepository.save(reservation);
+
+    // Notificação: Reserva criada e será analisada pelo veterinário
+    await this.emailService.sendReservationCreatedEmail(
+      user.email,
+      user.name,
+      typeof dto.date === "string"
+        ? dto.date
+        : new Date(dto.date).toISOString().split("T")[0],
+      dto.timeStart,
+      dto.timeEnd
+    );
+
+    return savedReservation;
   }
 
   async updateReservationStatus(id: string, dto: UpdateReservationStatusDto) {
@@ -374,6 +390,11 @@ export class ReservationService {
       );
     }
 
+    // Guardar dados antigos para email de reagendamento
+    const oldDate = reservation.date.toISOString().split("T")[0];
+    const oldTimeStart = reservation.timeStart;
+    const oldTimeEnd = reservation.timeEnd;
+
     // Handle date/time changes
     if (dto.newDate || dto.newTimeStart || dto.newTimeEnd) {
       await this.handleReschedule(reservation, dto);
@@ -383,7 +404,25 @@ export class ReservationService {
     reservation.status = dto.status;
     reservation.rescheduleNote = dto.rescheduleNote ?? "";
 
-    return this.reservationRepository.save(reservation);
+    const updatedReservation =
+      await this.reservationRepository.save(reservation);
+
+    // Notificações por email
+  if (dto.status === ReservationStatus.RESCHEDULED) {
+    await this.emailService.sendReservationRescheduledEmail(
+      reservation.client.email,
+      reservation.client.name,
+      oldDate,
+      oldTimeStart,
+      oldTimeEnd,
+      reservation.date.toISOString().split("T")[0],
+      reservation.timeStart,
+      reservation.timeEnd,
+      reservation.rescheduleNote
+    );
+  }
+
+    return updatedReservation;
   }
 
   async findAllReservations() {
@@ -420,6 +459,7 @@ export class ReservationService {
   async confirmPendingReservation(id: string, dto: ConfirmPendingDto) {
     const reservation = await this.reservationRepository.findOne({
       where: { id },
+      relations: ["client"],
     });
 
     if (!reservation) throw new NotFoundException("Reservation not found");
@@ -460,7 +500,19 @@ export class ReservationService {
       reservation.employee = employee;
       reservation.status = dto.status;
       reservation.rescheduleNote = dto.confirmationNote ?? " ";
-      return this.reservationRepository.save(reservation);
+      const updatedReservation = await this.reservationRepository.save(reservation);
+
+      // Enviar email de confirmação
+      await this.emailService.sendReservationConfirmedEmail(
+        reservation.client.email,
+        reservation.client.name,
+        reservation.date.toISOString().split("T")[0],
+        reservation.timeStart,
+        reservation.timeEnd,
+        reservation.rescheduleNote
+      );
+
+      return updatedReservation;
     }
 
     throw new BadRequestException(
@@ -471,7 +523,7 @@ export class ReservationService {
   async confirmRescheduledReservation(id: string, dto: ConfirmRescheduleDto) {
     const reservation = await this.reservationRepository.findOne({
       where: { id },
-      relations: ["employee"],
+      relations: ["employee", "client"],
     });
 
     if (!reservation) throw new NotFoundException("Reservation not found");
@@ -512,6 +564,17 @@ export class ReservationService {
           "Employee already has a reservation at this time."
         );
       }
+
+      // Enviar email de confirmação ao cliente
+      await this.emailService.sendReservationConfirmedEmail(
+        reservation.client.email,
+        reservation.client.name,
+        reservation.date.toISOString().split("T")[0],
+        reservation.timeStart,
+        reservation.timeEnd,
+        dto.confirmationNote ?? ""
+      );
+
     }
 
     reservation.status = dto.status;
@@ -548,5 +611,4 @@ export class ReservationService {
       return !this.isSlotOccupied(slot, reservations, slotDuration);
     });
   }
-
 }

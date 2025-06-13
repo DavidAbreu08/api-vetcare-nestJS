@@ -7,6 +7,7 @@ import { UsersEntity } from "../users/entities/users.entity";
 import { ReservationEntity } from "./entities/reservation.entity";
 import { BlockedTimeEntity } from "./entities/bloked-times.entity";
 import { TimeUtilsService } from "./time-utils.service";
+import { EmailModule } from "src/email/email.module";
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { TimeUtilsService } from "./time-utils.service";
       AnimalEntity,
       UsersEntity,
     ]),
+    EmailModule,
   ],
   providers: [ReservationService, TimeUtilsService],
   controllers: [ReservationController],
