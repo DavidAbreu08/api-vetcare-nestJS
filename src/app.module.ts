@@ -38,7 +38,7 @@ export class AppModule implements NestModule {
     consumer
       .apply(
         cors({
-          origin: "http://localhost:4200", // Allow Angular
+          origin: "http://localhost:4200",
           methods: ["GET", "POST", "PUT", "DELETE"],
           allowedHeaders: ["Content-Type", "Authorization"],
         })
