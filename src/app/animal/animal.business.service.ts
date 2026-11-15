@@ -111,9 +111,9 @@ export class AnimalBusinessService {
   }
 
   /** Exposes catalog aliases and independently derived dimensions without storing snapshots. */
-  private async serializeAnimal(animal: AnimalEntity) {
+  private async serializeAnimal(animal: AnimalEntity, latest?: Awaited<ReturnType<MeasurementService["latest"]>>) {
     return {
-      ...animal, ...(await this.measurements.latest(animal.id)), breedDetails: animal.breed, breed: animal.breed?.name ?? null,
+      ...animal, ...(latest ?? await this.measurements.latest(animal.id)), breedDetails: animal.breed, breed: animal.breed?.name ?? null,
       type: animal.species?.name ?? null,
       age: animal.birthDate ? this.calculateAgeFromBirthDate(animal.birthDate) : null,
       gender: animal.sex, image: animal.imageUrl, confirmed: animal.isVerified,
@@ -122,12 +122,8 @@ export class AnimalBusinessService {
 
   /** Bound SQL observation reads even on compatibility collections without pagination. */
   private async serializeAnimals(animals: AnimalEntity[]) {
-    const result: Awaited<ReturnType<AnimalBusinessService["serializeAnimal"]>>[] = [];
-    const concurrency = 5;
-    for (let offset = 0; offset < animals.length; offset += concurrency) {
-      result.push(...await Promise.all(animals.slice(offset, offset + concurrency).map(animal => this.serializeAnimal(animal))));
-    }
-    return result;
+    const latest = await this.measurements.latestMany(animals.map(animal => animal.id));
+    return Promise.all(animals.map(animal => this.serializeAnimal(animal, latest.get(animal.id))));
   }
 
   async getAll(query: ListAnimalsQueryDto, actor: Actor) {

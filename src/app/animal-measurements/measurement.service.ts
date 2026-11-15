@@ -11,5 +11,6 @@ export class MeasurementService {
   create(dto: CreateMeasurementDto, actor: Actor) { return this.business.create(dto, actor); }
   update(id: string, dto: UpdateMeasurementDto, actor: Actor) { return this.business.update(id, dto, actor); }
   delete(id: string, actor: Actor) { return this.business.delete(id, actor); }
+  latestMany(animalIds: string[]) { return this.business.latestMany(animalIds); }
   latest(animalId: string) { return this.business.latest(animalId); }
 }

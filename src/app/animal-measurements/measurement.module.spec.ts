@@ -1,3 +1,4 @@
+import { MeasurementTypeEntity } from "../measurement-types/entities/measurement-type.entity";
 import { Test } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { AnimalModule } from "../animal/animal.module";
@@ -12,7 +13,7 @@ import { MeasurementService } from "./measurement.service";
 
 it("resolves the integrated animal/catalog/measurement dependency graph without a database", async () => {
   const builder = Test.createTestingModule({ imports: [PersistenceModule, AnimalModule] });
-  for (const entity of [AnimalEntity, UsersEntity, SpeciesEntity, BreedEntity, AnimalMeasurementEntity]) {
+  for (const entity of [AnimalEntity, UsersEntity, SpeciesEntity, BreedEntity, AnimalMeasurementEntity, MeasurementTypeEntity]) {
     builder.overrideProvider(getRepositoryToken(entity)).useValue({});
   }
   const module = await builder.compile();
