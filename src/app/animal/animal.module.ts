@@ -8,9 +8,10 @@ import { AnimalEntity } from "./entities/animal.entity";
 import { AnimalService } from "./animal.service";
 import { AnimalBusinessService } from "./animal.business.service";
 import { AnimalController } from "./animal.controller";
+import { RolesModule } from "../roles/roles.module";
 
 @Module({
-  imports: [TypeOrmModule.forFeature([AnimalEntity, UsersEntity]), SpeciesModule, BreedsModule, MeasurementModule],
+  imports: [TypeOrmModule.forFeature([AnimalEntity, UsersEntity]), SpeciesModule, BreedsModule, MeasurementModule, RolesModule],
   controllers: [AnimalController],
   providers: [AnimalService, AnimalBusinessService],
 })

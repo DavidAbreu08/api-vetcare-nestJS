@@ -10,6 +10,8 @@ import { ReservationEntity } from "./entities/reservation.entity";
 import { BlockedTimeEntity } from "./entities/bloked-times.entity";
 import { TimeUtilsService } from "./time-utils.service";
 import { EmailModule } from "src/email/email.module";
+import { RolesModule } from "../roles/roles.module";
+import { EmployeesModule } from "../employees/employees.module";
 
 @Module({
   imports: [
@@ -20,6 +22,8 @@ import { EmailModule } from "src/email/email.module";
       UsersEntity,
     ]),
     EmailModule,
+    RolesModule,
+    EmployeesModule,
   ],
   providers: [ReservationService, ReservationBusinessService, TimeUtilsService],
   controllers: [ReservationController, ClinicController],

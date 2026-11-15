@@ -1,10 +1,10 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from "@nestjs/common";
 import { validate } from "class-validator";
-import { Role } from "../core/enums/role.enum";
+import { Actor } from "../core/authorization";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { MeasurementBusinessService } from "./measurement.business.service";
 import { CreateMeasurementDto } from "./dto/create-measurement.dto";
-const actor = { id: "owner", role: Role.CLIENTE };
+const actor: Actor = { id: "owner", roleIds: ["client-role"], isAdmin: false, isEmployee: false, isClient: true, employeeId: null };
 describe("Typed measurement policies", () => {
  let repo: any, animals: any, types: any, business: MeasurementBusinessService;
  beforeEach(() => {

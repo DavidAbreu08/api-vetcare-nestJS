@@ -9,9 +9,6 @@ import {
 } from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
 import { AuthService } from "./auth.service";
-import { Roles } from "src/app/core/decorators/roles.decorator";
-import { Role } from "src/app/core/enums/role.enum";
-import { RolesGuard } from "src/app/core/guards/roles/roles.guard";
 import { ChangePasswordDto } from "./dto/change-password.dto";
 import { ForgotPasswordDto } from "./dto/forgot-password.dto";
 import { ResetPasswordDto } from "./dto/reset-password.dto";
@@ -26,18 +23,11 @@ export class AuthController {
     return await this.authService.login(req.user);
   }
 
-  @UseGuards(AuthGuard("jwt"), RolesGuard) 
-  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
+  /** Any authenticated account: profile, roles [{id, code, name}] and employee (or null). */
+  @UseGuards(AuthGuard("jwt"))
   @Get("me")
   async getProfile(@Req() req: any) {
-    return await req.user;
-  }
-
-  @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @Roles(Role.ADMIN)
-  @Get("employees")
-  async getEmployees() {
-    return await this.authService.getEmployees();
+    return await this.authService.getProfile(req.user);
   }
 
   @UseGuards(AuthGuard("jwt"))

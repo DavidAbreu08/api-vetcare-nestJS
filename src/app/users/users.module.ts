@@ -5,27 +5,17 @@ import { UsersBusinessService } from "./users.business.service";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { UsersEntity } from "./entities/users.entity";
 import { EmailModule } from "src/email/email.module";
-import { ResetTokenEntity } from "src/auth/entities/reset-token.entity";
-import { ResetTokenEntityRepository } from "src/auth/repository/reset-token.repository";
-import { DataSource } from "typeorm";
+import { EmployeeEntity } from "../employees/entities/employee.entity";
+import { RolesModule } from "../roles/roles.module";
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([UsersEntity]),
+    TypeOrmModule.forFeature([UsersEntity, EmployeeEntity]),
     EmailModule,
-    TypeOrmModule.forFeature([ResetTokenEntity]),
+    RolesModule,
   ],
   controllers: [UsersController],
-  providers: [
-    UsersService,
-    UsersBusinessService,
-    {
-      provide: ResetTokenEntityRepository,
-      useFactory: (dataSource: DataSource) =>
-        new ResetTokenEntityRepository(dataSource),
-      inject: [DataSource],
-    },
-  ],
+  providers: [UsersService, UsersBusinessService],
   exports: [UsersService],
 })
 export class UsersModule {}

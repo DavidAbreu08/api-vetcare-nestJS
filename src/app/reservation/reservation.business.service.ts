@@ -7,7 +7,7 @@ import {
   ConflictException,
   NotFoundException,
 } from "@nestjs/common";
-import { Actor, requireOwnerOrAdmin } from "../core/authorization";
+import { Actor, isStaff, requireOwnerOrAdmin, sameId } from "../core/authorization";
 import { InjectRepository } from "@nestjs/typeorm";
 import { ReservationEntity } from "./entities/reservation.entity";
 import { FindOptionsWhere, In, Repository } from "typeorm";
@@ -15,7 +15,9 @@ import { UsersEntity } from "../users/entities/users.entity";
 import { AnimalEntity } from "../animal/entities/animal.entity";
 import { AnimalRelation } from "../animal/enums/animal-relation.enum";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
-import { Role } from "../core/enums/role.enum";
+import { SystemRole } from "../core/enums/system-role.enum";
+import { RoleMembershipService } from "../roles/role-membership.service";
+import { EmployeesService } from "../employees/employees.service";
 import { ReservationStatus } from "../core/enums/reservation-status.enum";
 import { UpdateReservationStatusDto } from "./dto/update-reservation.dto";
 import { ConfirmRescheduleDto } from "./dto/confirm-reschedule.dto";
@@ -26,21 +28,26 @@ import { EmailService } from "src/email/email.service";
 import { assertTransition, CLINIC_POLICY, dateKey, minutes, overlaps, policyError, validateInterval } from './reservation-policy';
 import { ListReservationsQueryDto } from "./dto/list-reservations-query.dto";
 import { ReservationRelation } from "./reservation-relations.enum";
+import { serializeReservation, serializeReservations } from "./reservation.serializer";
 
+/**
+ * Responses are projected per actor (see serializeReservation): related accounts are reduced for
+ * non-administrators and never include password hashes.
+ */
 @Injectable()
 export class ReservationBusinessService {
-  async getAll(query: ListReservationsQueryDto) {
+  async getAll(query: ListReservationsQueryDto, actor: Actor) {
     const where: FindOptionsWhere<ReservationEntity> = {};
     if (query.status) where.status = query.status;
     if (query.clientId) where.client = { id: query.clientId };
     if (query.employeeId) where.employee = { id: query.employeeId };
     if (query.animalId) where.animalId = query.animalId;
     if (query.date) where.date = new Date(dateKey(query.date) + "T00:00:00Z");
-    return this.historicalAnimals(await this.reservationRepository.find({
+    return serializeReservations(await this.historicalAnimals(await this.reservationRepository.find({
       where, skip: query.skip, take: query.take,
       relations: [ReservationRelation.CLIENT, ReservationRelation.EMPLOYEE, ReservationRelation.ANIMAL],
       order: { date: "ASC", timeStart: "ASC", id: "ASC" },
-    }));
+    })), actor);
   }
 
   async getById(id: string, actor: Actor) {
@@ -51,12 +58,12 @@ export class ReservationBusinessService {
     if (!reservation) throw new NotFoundException(ReservationMessages.RESERVATION_NOT_FOUND);
     requireOwnerOrAdmin(actor, reservation.client?.id ?? "");
     await this.historicalAnimals([reservation]);
-    return reservation;
+    return serializeReservation(reservation, actor);
   }
 
   /** Preserve appointment history: DELETE cancels through the existing transition rules. */
-  cancel(id: string) {
-    return this.updateReservationStatus(id, { status: ReservationStatus.CANCELLED });
+  cancel(id: string, actor: Actor) {
+    return this.updateReservationStatus(id, { status: ReservationStatus.CANCELLED }, actor);
   }
 
   private readonly logger = new Logger(ReservationBusinessService.name);
@@ -73,7 +80,7 @@ export class ReservationBusinessService {
 
   private async validateAvailability(date: Date, start: string, end: string, employeeId?: string, excludeId?: string) {
     validateInterval(date, start, end);
-    if (employeeId) await this.validateAndAssignEmployee(employeeId);
+    if (employeeId) await this.validateAndAssignEmployee(employeeId, date);
     if (await this.isTimeBlocked(date, start, end)) policyError('TIME_BLOCKED', ReservationMessages.TIME_BLOCKED);
     if (employeeId && await this.isEmployeeReserved(employeeId, date, start, end, excludeId)) {
       throw new ConflictException({ statusCode: 409, code: 'EMPLOYEE_UNAVAILABLE', message: ReservationMessages.EMPLOYEE_UNAVAILABLE });
@@ -96,25 +103,32 @@ export class ReservationBusinessService {
     private readonly animalRepository: Repository<AnimalEntity>,
 
     @InjectRepository(BlockedTimeEntity)
-    private readonly blockedTimeRepository: Repository<BlockedTimeEntity>
+    private readonly blockedTimeRepository: Repository<BlockedTimeEntity>,
+
+    private readonly membership: RoleMembershipService,
+
+    private readonly employees: EmployeesService,
   ) {}
 
+  /**
+   * Staff may book for another active client account (role from CLIENT_ROLE_ID); everyone else, and staff
+   * booking for themselves, book as the client and need the CLIENT role.
+   */
   private async validateAndGetClient(
+    actor: Actor,
     user: UsersEntity,
     ownerId?: string
   ): Promise<UsersEntity> {
-    if (
-      (user.role === Role.ADMIN || user.role === Role.FUNCIONARIO) &&
-      ownerId
-    ) {
+    if (isStaff(actor) && ownerId && !sameId(ownerId, actor.id)) {
       const owner = await this.usersRepository.findOne({
         where: { id: ownerId },
       });
-      if (!owner || !owner.isActive || owner.role !== Role.CLIENTE) {
+      if (!owner || !owner.isActive || !(await this.membership.hasSystemRole(owner.id, SystemRole.CLIENT))) {
         throw new BadRequestException(ReservationMessages.INVALID_CLIENT);
       }
       return owner;
     }
+    if (!actor.isClient) throw new BadRequestException(ReservationMessages.INVALID_CLIENT);
     return user;
   }
 
@@ -127,7 +141,7 @@ export class ReservationBusinessService {
       relations: [AnimalRelation.Owner],
     });
     if (!animal) throw new NotFoundException(ReservationMessages.ANIMAL_NOT_FOUND);
-    if (!animal.owner || animal.owner.id !== client.id) {
+    if (!animal.owner || !sameId(animal.owner.id, client.id)) {
       throw new BadRequestException(
         ReservationMessages.ANIMAL_OWNER_MISMATCH
       );
@@ -135,33 +149,46 @@ export class ReservationBusinessService {
     return animal;
   }
 
+  /**
+   * The assigned user needs a bookable employee profile (available for bookings, active account,
+   * termination date absent or after today and the reservation date), independently of roles.
+   */
   private async validateAndAssignEmployee(
-    employeeId: string
+    employeeId: string,
+    date?: Date | string
   ): Promise<UsersEntity> {
-    const employee = await this.usersRepository.findOne({
-      where: { id: employeeId },
-    });
-    if (!employee || !employee.isActive || ![Role.FUNCIONARIO, Role.ADMIN].includes(employee.role)) {
+    const employee = await this.employees.findBookableUser(employeeId, date);
+    if (!employee) {
       throw new BadRequestException(ReservationMessages.INVALID_EMPLOYEE);
     }
     return employee;
   }
 
+  /**
+   * Explicit employee, otherwise staff booking for a client are self-assigned only when their own profile
+   * is bookable. A personal booking (the actor is the client) never self-assigns.
+   */
   private async determineAssignedEmployee(
     employeeId: string | undefined,
-    user: UsersEntity
+    actor: Actor,
+    date: Date | string,
+    personal: boolean
   ): Promise<UsersEntity | null> {
     if (employeeId) {
-      return this.validateAndAssignEmployee(employeeId);
+      return this.validateAndAssignEmployee(employeeId, date);
     }
-    if (user.role === Role.ADMIN || user.role === Role.FUNCIONARIO) {
-      return user;
+    if (!personal && isStaff(actor) && actor.employeeId) {
+      return this.employees.findBookableUser(actor.id, date);
     }
     return null;
   }
 
-  private determineReservationStatus(user: UsersEntity): ReservationStatus {
-    return user.role === Role.ADMIN || user.role === Role.FUNCIONARIO
+  /**
+   * Staff bookings for a client are confirmed directly when an employee is assigned; personal bookings
+   * (staff booking for their own animals as clients) and client bookings await confirmation.
+   */
+  private determineReservationStatus(actor: Actor, employee: UsersEntity | null, personal: boolean): ReservationStatus {
+    return !personal && isStaff(actor) && employee
       ? ReservationStatus.CONFIRMED
       : ReservationStatus.PENDING;
   }
@@ -233,9 +260,9 @@ export class ReservationBusinessService {
     return (await query.getCount()) > 0;
   }
 
-  async createReservation(dto: CreateReservationDto, userId: string) {
+  async createReservation(dto: CreateReservationDto, actor: Actor) {
 
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    const user = await this.usersRepository.findOne({ where: { id: actor.id } });
     if (!user) throw new NotFoundException(ReservationMessages.USER_NOT_FOUND);
 
     // Create datetime objects for database storage
@@ -249,13 +276,16 @@ export class ReservationBusinessService {
     );
 
     // Get client and validate animal ownership
-    const client = await this.validateAndGetClient(user, dto.ownerId);
+    const client = await this.validateAndGetClient(actor, user, dto.ownerId);
     const animal = await this.validateAnimalOwnership(dto.animalId, client);
+    const personal = sameId(client.id, actor.id);
 
     // Determine assigned employee
     const assignedEmployee = await this.determineAssignedEmployee(
       dto.employeeId,
-      user
+      actor,
+      dto.date,
+      personal
     );
 
     await this.validateAvailability(dto.date, dto.timeStart, dto.timeEnd, assignedEmployee?.id);
@@ -272,22 +302,26 @@ export class ReservationBusinessService {
       client,
       animal,
       employee: assignedEmployee,
-      status: this.determineReservationStatus(user),
+      status: this.determineReservationStatus(actor, assignedEmployee, personal),
     });
 
     const savedReservation = await this.persistence.execute(() => this.reservationRepository.save(reservation));
 
     // Notificação: Reserva criada e será analisada pelo veterinário
-    return this.notify(savedReservation, () => this.emailService.sendReservationCreatedEmail(
+    return serializeReservation(await this.notify(savedReservation, () => this.emailService.sendReservationCreatedEmail(
       client.email,
       client.name,
       dateKey(dto.date),
       dto.timeStart,
       dto.timeEnd
-    ));
+    )), actor);
   }
 
-  async updateReservationStatus(id: string, dto: UpdateReservationStatusDto) {
+  async updateReservationStatus(id: string, dto: UpdateReservationStatusDto, actor: Actor) {
+    return serializeReservation(await this.applyStatusUpdate(id, dto), actor);
+  }
+
+  private async applyStatusUpdate(id: string, dto: UpdateReservationStatusDto) {
     // Find the existing reservation
     const reservation = await this.reservationRepository.findOne({
       where: { id },
@@ -308,7 +342,8 @@ export class ReservationBusinessService {
     // Validate and assign employee if specified
     if (dto.employeeId) {
       reservation.employee = await this.validateAndAssignEmployee(
-        dto.employeeId
+        dto.employeeId,
+        dto.newDate ?? reservation.date
       );
     }
 
@@ -371,38 +406,36 @@ export class ReservationBusinessService {
     return reservations;
   }
 
-  async findAllReservations() {
-    return this.historicalAnimals(await this.reservationRepository.find({
+  async findAllReservations(actor: Actor) {
+    return serializeReservations(await this.historicalAnimals(await this.reservationRepository.find({
       relations: [ReservationRelation.CLIENT, ReservationRelation.EMPLOYEE, ReservationRelation.ANIMAL],
       order: { date: "ASC", timeStart: "ASC" },
-    }));
+    })), actor);
   }
 
-  async findByClient(clientId: string) {
-    return this.historicalAnimals(await this.reservationRepository.find({
-      where: { client: { id: clientId } },
+  /** The caller's own reservations as client. */
+  async findByClient(actor: Actor) {
+    return serializeReservations(await this.historicalAnimals(await this.reservationRepository.find({
+      where: { client: { id: actor.id } },
       relations: [ReservationRelation.ANIMAL, ReservationRelation.EMPLOYEE],
       order: { date: "DESC" },
-    }));
+    })), actor);
   }
 
-  async findByEmployee(employeeId: string) {
-    const employee = await this.usersRepository.findOne({
-      where: { id: employeeId, role: Role.FUNCIONARIO },
-    });
-
-    if (!employee) {
+  /** Reservations assigned to the caller. */
+  async findByEmployee(actor: Actor) {
+    if (!(await this.employees.hasProfile(actor.id))) {
       throw new NotFoundException(ReservationMessages.EMPLOYEE_NOT_FOUND);
     }
 
-    return this.historicalAnimals(await this.reservationRepository.find({
-      where: { employee: { id: employeeId } },
+    return serializeReservations(await this.historicalAnimals(await this.reservationRepository.find({
+      where: { employee: { id: actor.id } },
       relations: [ReservationRelation.CLIENT, ReservationRelation.ANIMAL],
       order: { date: "ASC", timeStart: "ASC" },
-    }));
+    })), actor);
   }
 
-  async confirmPendingReservation(id: string, dto: ConfirmPendingDto) {
+  async confirmPendingReservation(id: string, dto: ConfirmPendingDto, actor: Actor) {
     const reservation = await this.reservationRepository.findOne({
       where: { id },
       relations: [ReservationRelation.CLIENT],
@@ -421,14 +454,7 @@ export class ReservationBusinessService {
     }
 
     if (dto.employeeId) {
-      const employee = await this.usersRepository.findOne({
-        where: {
-          id: dto.employeeId,
-          role: In([Role.FUNCIONARIO, Role.ADMIN]),
-        },
-      });
-
-      if (!employee || !employee.isActive) throw new BadRequestException(ReservationMessages.INVALID_EMPLOYEE);
+      const employee = await this.validateAndAssignEmployee(dto.employeeId, reservation.date);
 
       await this.validateAvailability(reservation.date, reservation.timeStart, reservation.timeEnd, employee.id, reservation.id);
       reservation.employee = employee;
@@ -438,14 +464,14 @@ export class ReservationBusinessService {
         await this.persistence.execute(() => this.reservationRepository.save(reservation));
 
       // Enviar email de confirmação
-      return this.notify(updatedReservation, () => this.emailService.sendReservationConfirmedEmail(
+      return serializeReservation(await this.notify(updatedReservation, () => this.emailService.sendReservationConfirmedEmail(
         reservation.client.email,
         reservation.client.name,
         dateKey(reservation.date),
         reservation.timeStart,
         reservation.timeEnd,
         reservation.rescheduleNote
-      ));
+      )), actor);
     }
 
     throw new BadRequestException(
@@ -494,19 +520,20 @@ export class ReservationBusinessService {
 
     const saved = await this.persistence.execute(() => this.reservationRepository.save(reservation));
     if (dto.status === ReservationStatus.CONFIRMED) {
-      return this.notify(saved, () => this.emailService.sendReservationConfirmedEmail(
+      return serializeReservation(await this.notify(saved, () => this.emailService.sendReservationConfirmedEmail(
         reservation.client.email, reservation.client.name, dateKey(reservation.date),
-        reservation.timeStart, reservation.timeEnd, reservation.rescheduleNote));
+        reservation.timeStart, reservation.timeEnd, reservation.rescheduleNote)), actor);
     }
-    return this.notify(saved, () => this.emailService.sendReservationCancelledEmail(
-      reservation.client.email, reservation.client.name, dateKey(reservation.date), reservation.rescheduleNote));
+    return serializeReservation(await this.notify(saved, () => this.emailService.sendReservationCancelledEmail(
+      reservation.client.email, reservation.client.name, dateKey(reservation.date), reservation.rescheduleNote)), actor);
   }
 
   async findByEmployeeAndDate(
     employeeId: string,
-    date: Date
-  ): Promise<ReservationEntity[]> {
-    return this.historicalAnimals(await this.reservationRepository.find({
+    date: Date,
+    actor: Actor
+  ) {
+    return serializeReservations(await this.historicalAnimals(await this.reservationRepository.find({
       where: {
         employee: { id: employeeId },
         date,
@@ -514,7 +541,7 @@ export class ReservationBusinessService {
       },
       relations: [ReservationRelation.CLIENT, ReservationRelation.ANIMAL],
       order: { timeStart: "ASC" },
-    }));
+    })), actor);
   }
 
   async rejectRescheduledReservation(id: string, actor: Actor, note?: string) {
@@ -540,11 +567,11 @@ export class ReservationBusinessService {
       await this.persistence.execute(() => this.reservationRepository.save(reservation));
 
     // Enviar email de rejeição/cancelamento ao cliente
-    return this.notify(updatedReservation, () => this.emailService.sendReservationCancelledEmail(
+    return serializeReservation(await this.notify(updatedReservation, () => this.emailService.sendReservationCancelledEmail(
       reservation.client.email,
       reservation.client.name,
       dateKey(reservation.date),
       note
-    ));
+    )), actor);
   }
 }

@@ -3,7 +3,7 @@ import { PersistenceService } from "../core/persistence/persistence.service";
 import { MeasurementTypeBusinessService } from "./measurement-type.business.service";
 import { MeasurementTypeController } from "./measurement-type.controller";
 import { MessagesHelper } from "../helpers/messages.helper";
-import { Role } from "../core/enums/role.enum";
+import { SystemRole } from "../core/enums/system-role.enum";
 describe("Configurable measurement types", () => {
  let repo: any, business: MeasurementTypeBusinessService;
  beforeEach(() => { repo = { findOneBy: jest.fn().mockResolvedValue({ id: "t", code: "CUSTOM", unit: "pts", isActive: true }), create: jest.fn(row => row), save: jest.fn(async row => row), remove: jest.fn() }; business = new MeasurementTypeBusinessService(repo, new PersistenceService()); });
@@ -28,7 +28,7 @@ describe("Configurable measurement types", () => {
   await expect(business.delete("t")).rejects.toBeInstanceOf(ConflictException);
  });
  it("restricts every mutation to administrators", () => {
-  for (const method of ["create", "update", "updatePartial", "delete"]) expect(Reflect.getMetadata(MessagesHelper.ROLES_KEY, MeasurementTypeController.prototype[method])).toEqual([Role.ADMIN]);
+  for (const method of ["create", "update", "updatePartial", "delete"]) expect(Reflect.getMetadata(MessagesHelper.ROLES_KEY, MeasurementTypeController.prototype[method])).toEqual([SystemRole.ADMIN]);
   expect(Reflect.getMetadata(MessagesHelper.ROLES_KEY, MeasurementTypeController.prototype.getAll)).toBeUndefined();
  });
 });

@@ -17,7 +17,7 @@ export class AnimalEntity {
   @Column()
   name: string;
 
-  @ManyToOne(() => UsersEntity, user => user.idAnimal, { nullable: true })
+  @ManyToOne(() => UsersEntity, user => user.animals, { nullable: true })
   @JoinColumn({ name: "owner_id" })
   owner: UsersEntity | null;
 

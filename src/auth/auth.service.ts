@@ -5,6 +5,7 @@ import { UsersService } from "src/app/users/users.service";
 import { compareSync, hashSync } from "bcrypt";
 import { JwtService } from "@nestjs/jwt";
 import { CurrentUser } from "./types/current-user";
+import { normalizeEmail } from "src/app/core/catalog";
 import { EmailService } from "src/email/email.service";
 import { ResetTokenEntityRepository } from "./repository/reset-token.repository";
 import { generateResetToken } from "src/app/core/generated/generate-reset-token";
@@ -33,34 +34,27 @@ export class AuthService {
   }
 
   async validateUser(email: string, password: string) {
-    const user = await this.userService.findForAuthentication({ email });
+    const normalized = normalizeEmail(email);
+    if (typeof normalized !== "string" || !normalized || typeof password !== "string") return null;
+    const user = await this.userService.findForAuthentication({ email: normalized });
     if (!user || !user.isActive) return null;
 
-    const isPasswordValid = compareSync(password, user.password);
+    const isPasswordValid = compareSync(password, user.passwordHash);
     if (!isPasswordValid) return null;
 
     return user;
   }
 
-  async validateJwtUser(id: string) {
-    const user = await this.userService.findOneOrFail({ id });
-    if (!user || !user.isActive) throw new UnauthorizedException(AuthMessages.USER_NOT_FOUND_AUTHENTICATION);
-    const currentUser: CurrentUser = {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      phone: user?.phone,
-      dateBirth: user?.dateBirth,
-      nif: user?.nif,
-      role: user.role,
-      function: user.function,
-      profilePicture: user.profilePicture,
-    };
+  /** Loads active roles (via vc_user_roles) and the employee profile on every authenticated request. */
+  async validateJwtUser(id: string): Promise<CurrentUser> {
+    const currentUser = await this.userService.loadActor(id);
+    if (!currentUser) throw new UnauthorizedException(AuthMessages.USER_NOT_FOUND_AUTHENTICATION);
     return currentUser;
   }
 
-  async getEmployees() {
-    return await this.userService.findEmployees();
+  /** Account without password, active roles and employee profile (with job titles) or null. */
+  async getProfile(user: CurrentUser) {
+    return this.userService.getAccountProfile(user.id);
   }
 
   async changePassword(
@@ -74,7 +68,7 @@ export class AuthService {
       throw new UnauthorizedException(AuthMessages.USER_NOT_FOUND_AUTHENTICATION);
     }
 
-    const isPasswordValid = compareSync(oldPassword, user.password);
+    const isPasswordValid = compareSync(oldPassword, user.passwordHash);
 
     if (!isPasswordValid)
       throw new UnauthorizedException(AuthMessages.INVALID_OLD_PASSWORD);
@@ -84,10 +78,7 @@ export class AuthService {
         AuthMessages.PASSWORD_CONFIRMATION_MISMATCH
       );
 
-    const newHashedPassword = await hashSync(newPassword, 10);
-    user.password = newHashedPassword;
-
-    await this.userService.save(user);
+    await this.userService.updatePasswordHash(user.id, hashSync(newPassword, 10));
 
     return {
       statusCode: HttpStatus.ACCEPTED,
@@ -97,7 +88,7 @@ export class AuthService {
 
   async forgotPassword(email: string) {
     try {
-      const user = await this.userService.findOneOrFail({ email });
+      const user = await this.userService.findOneOrFail({ email: normalizeEmail(email) as string });
 
       // Delete any existing reset tokens for the user
       await this.resetTokenRepo.delete({ user: { id: user.id } });
@@ -154,9 +145,7 @@ export class AuthService {
       throw new UnauthorizedException(AuthMessages.USER_NOT_FOUND);
     }
 
-    user.password = await hashSync(newPassword, 10);
-
-    await this.userService.save(user);
+    await this.userService.updatePasswordHash(user.id, hashSync(newPassword, 10));
 
     await this.resetTokenRepo.delete(resetTokenEntity.resetToken);
 

@@ -2,10 +2,9 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { AnimalEntity } from "../animal/entities/animal.entity";
-import { Actor, requireAnimalAccess } from "../core/authorization";
+import { Actor, isStaff, requireAnimalAccess } from "../core/authorization";
 import { MeasurementTypeService } from "../measurement-types/measurement-type.service";
 import { MeasurementTypeCode } from "../measurement-types/enums/measurement-type-code.enum";
-import { Role } from "../core/enums/role.enum";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { AnimalMeasurementEntity } from "./entities/animal-measurement.entity";
 import { CreateMeasurementDto, ListMeasurementsQueryDto, UpdateMeasurementDto } from "./dto/create-measurement.dto";
@@ -25,7 +24,7 @@ export class MeasurementBusinessService {
     const animal = await this.persistence.execute(() => this.animals.findOne({ where: { id }, relations: [MeasurementRelation.Owner] }));
     if (!animal) throw new NotFoundException(MeasurementMessage.AnimalNotFound);
     if (animal.owner) requireAnimalAccess(actor, animal.owner.id);
-    else if (actor.role !== Role.ADMIN && actor.role !== Role.FUNCIONARIO) throw new ForbiddenException(MeasurementMessage.MissingOwner);
+    else if (!isStaff(actor)) throw new ForbiddenException(MeasurementMessage.MissingOwner);
     return animal;
   }
 
@@ -46,7 +45,7 @@ export class MeasurementBusinessService {
     const builder = this.measurements.createQueryBuilder("measurement")
       .leftJoinAndSelect("measurement.measurementType", "measurementType")
       .innerJoin("measurement.animal", "animal", "animal.deleted_at IS NULL");
-    if (actor.role === Role.CLIENTE) builder.innerJoin("animal.owner", "owner").andWhere("owner.id = :ownerId", { ownerId: actor.id });
+    if (!isStaff(actor)) builder.innerJoin("animal.owner", "owner").andWhere("owner.id = :ownerId", { ownerId: actor.id });
     if (query.animalId) builder.andWhere("measurement.animalId = :animalId", { animalId: query.animalId });
     if (query.measurementTypeId) builder.andWhere("measurement.measurementTypeId = :typeId", { typeId: query.measurementTypeId });
     return this.persistence.execute(() => builder.orderBy("measurement.createdAt", "DESC").addOrderBy("measurement.id", "DESC").skip(query.skip).take(query.take).getMany());

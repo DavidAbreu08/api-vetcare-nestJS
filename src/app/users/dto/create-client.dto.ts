@@ -1,47 +1,26 @@
 import { DescriptiveMetadataDto } from "../../core/dto/metadata.dto";
 import { ApiProperty } from "@nestjs/swagger";
-import {
-  IsNotEmpty,
-  IsEmail,
-  Matches,
-  IsString,
-  Min,
-  Max,
-  IsInt,
-} from "class-validator";
-import { RegExHelper } from "../../helpers/regex.helper";
-import { Type } from "class-transformer";
+import { AccountField } from "./account-fields";
 
-/** Create a client account and send its welcome instructions. */
+/** Create a client account (role from CLIENT_ROLE_ID) and send its welcome instructions. */
 export class CreateClientDto extends DescriptiveMetadataDto {
-  @IsNotEmpty()
-  @IsString()
-  @ApiProperty({ description: "Full display name.", required: true })
+  @AccountField.name()
+  @ApiProperty({ description: "Full display name.", maxLength: 150 })
   name: string;
 
-  @IsNotEmpty()
-  @IsEmail()
-  @ApiProperty({ description: "Email address used for the account.", required: true })
+  @AccountField.email()
+  @ApiProperty({ description: "Email address used for the account (stored lowercase).", maxLength: 255 })
   email: string;
 
-  @IsNotEmpty()
-  @IsString()
-  @ApiProperty({ description: "Birth date using the existing account date format.", required: true })
-  dateBirth: string;
+  @AccountField.birthDate()
+  @ApiProperty({ description: "Birth date, YYYY-MM-DD.", example: "1990-05-20" })
+  birthDate: string;
 
-  @IsNotEmpty()
-  @IsString()
-  @Matches(RegExHelper.phoneRegex, {
-    message: "Phone number must be 9 digits and only contain numbers",
-  })
-  @ApiProperty({ description: "Nine-digit phone number.", required: true })
+  @AccountField.phone()
+  @ApiProperty({ description: "Nine-digit phone number." })
   phone: string;
 
-  @IsInt({ message: "NIF must be an integer" })
-  @Type(() => Number)
-  @Min(100000000, { message: "NIF Invalid" })
-  @Max(999999999, { message: "NIF Invalid" })
-  @ApiProperty({ description: "Nine-digit Portuguese taxpayer number.", required: true })
-  nif: number;
-
+  @AccountField.nif()
+  @ApiProperty({ description: "Nine-digit Portuguese taxpayer number, as a string.", example: "123456789" })
+  nif: string;
 }

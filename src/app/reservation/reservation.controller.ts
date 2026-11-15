@@ -16,7 +16,7 @@ import { RolesGuard } from "../core/guards/roles/roles.guard";
 import { AuthGuard } from "@nestjs/passport";
 import { ReservationService } from "./reservation.service";
 import { Roles } from "../core/decorators/roles.decorator";
-import { Role } from "../core/enums/role.enum";
+import { SystemRole } from "../core/enums/system-role.enum";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
 import { CurrentUser } from "../core/decorators/current-user.decorator";
 import { UpdateReservationStatusDto } from "./dto/update-reservation.dto";
@@ -30,74 +30,77 @@ export class ReservationController {
   constructor(private readonly reservationService: ReservationService) {}
 
   @Get()
-  @Roles(Role.ADMIN)
-  findAll(@Query() query: ListReservationsQueryDto) {
-    return this.reservationService.getAll(query);
+  @Roles(SystemRole.ADMIN)
+  findAll(@Query() query: ListReservationsQueryDto, @CurrentUser() actor: Actor) {
+    return this.reservationService.getAll(query, actor);
   }
 
   @Post()
-  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
+  @Roles(SystemRole.ADMIN, SystemRole.EMPLOYEE, SystemRole.CLIENT)
   createAtBase(@CurrentUser() actor: Actor, @Body() dto: CreateReservationDto) {
-    return this.reservationService.create(dto, actor.id);
+    return this.reservationService.create(dto, actor);
   }
 
   @Put(":id")
-  @Roles(Role.ADMIN)
-  update(@Param("id", ParseUUIDPipe) id: string, @Body() dto: UpdateReservationStatusDto) {
-    return this.reservationService.update(id, dto);
+  @Roles(SystemRole.ADMIN)
+  update(@Param("id", ParseUUIDPipe) id: string, @Body() dto: UpdateReservationStatusDto, @CurrentUser() actor: Actor) {
+    return this.reservationService.update(id, dto, actor);
   }
 
   /** Cancel an appointment while preserving its history and transition rules. */
   @Delete(":id")
-  @Roles(Role.ADMIN)
-  cancel(@Param("id", ParseUUIDPipe) id: string) {
-    return this.reservationService.delete(id);
+  @Roles(SystemRole.ADMIN)
+  cancel(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() actor: Actor) {
+    return this.reservationService.delete(id, actor);
   }
 
   @Post("create")
-  @Roles(Role.CLIENTE, Role.FUNCIONARIO, Role.ADMIN)
-  async create(@CurrentUser() user, @Body() dto: CreateReservationDto) {
-    return this.reservationService.createReservation(dto, user.id);
+  @Roles(SystemRole.CLIENT, SystemRole.EMPLOYEE, SystemRole.ADMIN)
+  async create(@CurrentUser() actor: Actor, @Body() dto: CreateReservationDto) {
+    return this.reservationService.createReservation(dto, actor);
   }
 
   @Patch("update-status/:id")
-  @Roles(Role.ADMIN)
+  @Roles(SystemRole.ADMIN)
   async updateStatus(
     @Param("id") id: string,
-    @Body() dto: UpdateReservationStatusDto
+    @Body() dto: UpdateReservationStatusDto,
+    @CurrentUser() actor: Actor
   ) {
-    return this.reservationService.updateReservationStatus(id, dto);
+    return this.reservationService.updateReservationStatus(id, dto, actor);
   }
 
   @Get("all")
-  @Roles(Role.ADMIN)
-  async getAll() {
-    return this.reservationService.findAllReservations();
+  @Roles(SystemRole.ADMIN)
+  async getAll(@CurrentUser() actor: Actor) {
+    return this.reservationService.findAllReservations(actor);
   }
 
   @Get("client")
-  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
-  async getByClient(@CurrentUser() user) {
-    return this.reservationService.findByClient(user.id);
+  @Roles(SystemRole.ADMIN, SystemRole.EMPLOYEE, SystemRole.CLIENT)
+  async getByClient(@CurrentUser() actor: Actor) {
+    return this.reservationService.findByClient(actor);
   }
 
+  /** Reservations assigned to the caller; requires an employee profile, whatever the roles. */
   @Get("employee")
-  @Roles(Role.FUNCIONARIO)
-  async getByEmployee(@CurrentUser() user) {
-    return this.reservationService.findByEmployee(user.id);
+  @Roles(SystemRole.EMPLOYEE, SystemRole.ADMIN)
+  async getByEmployee(@CurrentUser() actor: Actor) {
+    return this.reservationService.findByEmployee(actor);
   }
 
   @Patch(":id/confirm-pending")
-  @Roles(Role.ADMIN)
+  @Roles(SystemRole.ADMIN)
   async confirmPending(
     @Param("id") id: string,
-    @Body() dto: ConfirmPendingDto
+    @Body() dto: ConfirmPendingDto,
+    @CurrentUser() actor: Actor
   ) {
-    return await this.reservationService.confirmPendingReservation(id, dto);
+    return await this.reservationService.confirmPendingReservation(id, dto, actor);
   }
 
   @Patch(":id/confirm-rescheduled")
-  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
+  @Roles(SystemRole.ADMIN, SystemRole.EMPLOYEE, SystemRole.CLIENT)
   async confirmReschedule(
     @Param("id") id: string,
     @Body() dto: ConfirmRescheduleDto,
@@ -107,17 +110,18 @@ export class ReservationController {
   }
 
   @Get(":employeeId/:date")
-  @Roles(Role.ADMIN, Role.FUNCIONARIO)
+  @Roles(SystemRole.ADMIN, SystemRole.EMPLOYEE)
   async getReservationsByEmployeeAndDate(
     @Param("employeeId") id: string,
-    @Param("date") date: Date
+    @Param("date") date: Date,
+    @CurrentUser() actor: Actor
   ) {
-    return await this.reservationService.findByEmployeeAndDate(id, date);
+    return await this.reservationService.findByEmployeeAndDate(id, date, actor);
   }
 
 
   @Patch(":id/reject-rescheduled")
-  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
+  @Roles(SystemRole.ADMIN, SystemRole.EMPLOYEE, SystemRole.CLIENT)
   async rejectReschedule(
     @Param("id") id: string,
     @CurrentUser() actor: Actor,
@@ -127,7 +131,7 @@ export class ReservationController {
   }
 
   @Get(":id")
-  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
+  @Roles(SystemRole.ADMIN, SystemRole.EMPLOYEE, SystemRole.CLIENT)
   findOne(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() actor: Actor) {
     return this.reservationService.getById(id, actor);
   }

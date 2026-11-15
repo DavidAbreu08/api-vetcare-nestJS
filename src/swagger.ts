@@ -23,6 +23,10 @@ export function setupSwagger(app: INestApplication): void {
     .addBearerAuth({ type: "http", scheme: "bearer", bearerFormat: "JWT" }, "bearer")
     .addTag("Autenticação", "Login, perfil autenticado e recuperação de acesso.")
     .addTag("Utilizadores", "Contas de clientes e colaboradores.")
+    .addTag("Funcionários", "Perfis de funcionário e cargos atribuídos.")
+    .addTag("Perfis de acesso", "Catálogo de roles atribuídos a utilizadores.")
+    .addTag("Cargos", "Catálogo de cargos profissionais.")
+    .addTag("Configurações", "Configurações do sistema, incluindo os roles de sistema.")
     .addTag("Animais", "Animais e associação aos seus tutores.")
     .addTag("Reservas", "Marcações, estados e propostas de reagendamento.")
     .addTag("Horários bloqueados", "Períodos indisponíveis para marcação.")
@@ -31,6 +35,10 @@ export function setupSwagger(app: INestApplication): void {
   const tags: Record<string, string> = {
     auth: "Autenticação",
     users: "Utilizadores",
+    employees: "Funcionários",
+    roles: "Perfis de acesso",
+    "job-titles": "Cargos",
+    "system-settings": "Configurações",
     animal: "Animais",
     reservation: "Reservas",
     "blocked-times": "Horários bloqueados",

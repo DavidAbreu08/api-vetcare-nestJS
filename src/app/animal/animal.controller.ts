@@ -4,7 +4,7 @@ import { Actor } from "../core/authorization";
 import { CurrentUser } from "../core/decorators/current-user.decorator";
 import { RolesGuard } from "../core/guards/roles/roles.guard";
 import { Roles } from "../core/decorators/roles.decorator";
-import { Role } from "../core/enums/role.enum";
+import { SystemRole } from "../core/enums/system-role.enum";
 import { AnimalService } from "./animal.service";
 import { CreateAnimalDto } from "./dto/create-animal.dto";
 import { UpdateAnimalDto } from "./dto/update-animal.dto";
@@ -26,8 +26,8 @@ export class AnimalController {
   createLegacy(@Body() dto: CreateAnimalDto, @CurrentUser() actor: Actor) { return this.service.create(dto, actor); }
 
   @Get("all")
-  @Roles(Role.ADMIN)
-  findAll() { return this.service.findAll(); }
+  @Roles(SystemRole.ADMIN)
+  findAll(@CurrentUser() actor: Actor) { return this.service.findAll(actor); }
 
   @Get("owner/:ownerId")
   findByOwner(@Param("ownerId", ParseUUIDPipe) ownerId: string, @CurrentUser() actor: Actor) {
@@ -35,8 +35,8 @@ export class AnimalController {
   }
 
   @Put("confirm/:id")
-  @Roles(Role.ADMIN)
-  confirm(@Param("id", ParseUUIDPipe) id: string) { return this.service.confirm(id); }
+  @Roles(SystemRole.ADMIN)
+  confirm(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() actor: Actor) { return this.service.confirm(id, actor); }
 
   @Patch("update/:id")
   updateLegacy(@Param("id", ParseUUIDPipe) id: string, @Body() dto: UpdateAnimalDto, @CurrentUser() actor: Actor) {
@@ -52,6 +52,6 @@ export class AnimalController {
   }
 
   @Delete(":id")
-  @Roles(Role.ADMIN)
+  @Roles(SystemRole.ADMIN)
   delete(@Param("id", ParseUUIDPipe) id: string) { return this.service.delete(id); }
 }

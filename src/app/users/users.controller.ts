@@ -20,33 +20,27 @@ import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { AuthGuard } from "@nestjs/passport";
 import { Roles } from "../core/decorators/roles.decorator";
-import { Role } from "../core/enums/role.enum";
+import { SystemRole } from "../core/enums/system-role.enum";
 import { RolesGuard } from "../core/guards/roles/roles.guard";
-import { CreateEmployeesDto } from "./dto/create-employees.dto";
 import { CreateClientDto } from "./dto/create-client.dto";
-import { UpdateFuncionarioDto } from "./dto/update-funcionario.dto";
 import { ListUsersQueryDto } from "./dto/list-users-query.dto";
+import { ReplaceUserRolesDto } from "./dto/replace-user-roles.dto";
 
+/** Account data only; employee profiles live in /api/employees. */
 @Controller("api/users")
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
+
   @Get()
   @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(SystemRole.ADMIN)
   async index(@Query() query: ListUsersQueryDto) {
     return await this.usersService.getAll(query);
   }
 
-  @Get("available/:date")
-  @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @Roles(Role.ADMIN)
-  async getAvailableEmployees(@Param("date") date: Date) {
-    return this.usersService.getAvailableEmployeesByDate(date);
-  }
-
   @Get("clients")
   @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @Roles(Role.ADMIN, Role.FUNCIONARIO)
+  @Roles(SystemRole.ADMIN, SystemRole.EMPLOYEE)
   async getAllClients() {
     return this.usersService.findAllClients();
   }
@@ -62,17 +56,25 @@ export class UsersController {
   }
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @Roles(Role.ADMIN)
-  @Post("employees")
-  async storeEmployees(@Body() body: CreateEmployeesDto) {
-    return await this.usersService.storeEmployees(body);
+  @Roles(SystemRole.ADMIN)
+  @Post("create-clients")
+  async storeClients(@Body() body: CreateClientDto, @CurrentUser() actor: Actor) {
+    return await this.usersService.storeClient(body, actor);
   }
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @Roles(Role.ADMIN)
-  @Post("create-clients")
-  async storeClients(@Body() body: CreateClientDto) {
-    return await this.usersService.storeClient(body);
+  @Get(":id/roles")
+  async getRoles(@Param("id", new ParseUUIDPipe()) id: string, @CurrentUser() actor: Actor) {
+    requireOwnerOrAdmin(actor, id);
+    return this.usersService.getRoles(id);
+  }
+
+  /** Replaces the whole role list; the last active administrator cannot lose the administrator role. */
+  @UseGuards(AuthGuard("jwt"), RolesGuard)
+  @Roles(SystemRole.ADMIN)
+  @Put(":id/roles")
+  async replaceRoles(@Param("id", new ParseUUIDPipe()) id: string, @Body() body: ReplaceUserRolesDto, @CurrentUser() actor: Actor) {
+    return this.usersService.replaceRoles(id, body.roleIds, actor);
   }
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
@@ -90,30 +92,19 @@ export class UsersController {
     @CurrentUser() actor: Actor
   ) {
     requireOwnerOrAdmin(actor, id);
-    return await this.usersService.update(id, body);
+    return await this.usersService.update(id, body, actor);
   }
 
   @Put(":id")
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   async replace(@Param("id", new ParseUUIDPipe()) id: string, @Body() body: UpdateUserDto, @CurrentUser() actor: Actor) {
     requireOwnerOrAdmin(actor, id);
-    return this.usersService.update(id, body);
+    return this.usersService.update(id, body, actor);
   }
-
-  @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @Roles(Role.ADMIN)
-  @Patch("employee/:id")
-  async updateEmployee(
-    @Param("id", new ParseUUIDPipe()) id: string,
-    @Body() body: UpdateFuncionarioDto
-  ) {
-    return await this.usersService.updateEmployee(id, body);
-  }
-  
 
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(SystemRole.ADMIN)
   @Delete(":id")
   async destroy(@Param("id", new ParseUUIDPipe()) id: string) {
     await this.usersService.delete(id);

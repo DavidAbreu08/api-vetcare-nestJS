@@ -1,7 +1,7 @@
 import { Body, Controller, Post, UseGuards, Get, Put, Delete, Param, Query, ParseUUIDPipe, HttpCode, HttpStatus } from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
 import { RolesGuard } from "../core/guards/roles/roles.guard";
-import { Role } from "../core/enums/role.enum";
+import { SystemRole } from "../core/enums/system-role.enum";
 import { Roles } from "../core/decorators/roles.decorator";
 import { CreateBlockedTimeDto } from "./dto/create-blocked-time.dto";
 import { BlockedTimeService } from "./blocked-time.service";
@@ -10,7 +10,7 @@ import { ListBlockedTimesQueryDto } from "./dto/list-blocked-times-query.dto";
 
 @Controller("api/blocked-times")
 @UseGuards(AuthGuard("jwt"), RolesGuard)
-@Roles(Role.ADMIN)
+@Roles(SystemRole.ADMIN)
 export class BlockedTimeController {
   constructor(private readonly blockedTimeService: BlockedTimeService) {}
 
@@ -25,7 +25,7 @@ export class BlockedTimeController {
   }
 
   @Post()
-  @Roles(Role.ADMIN)
+  @Roles(SystemRole.ADMIN)
   createBlockedTime(@Body() dto: CreateBlockedTimeDto) {
     return this.blockedTimeService.create(dto);
   }

@@ -1,13 +1,7 @@
-import { Role } from "src/app/core/enums/role.enum";
+import { Actor } from "src/app/core/authorization";
 
-export type CurrentUser = {
-  id: string;
+/** request.user after JWT validation: account identity plus active role ids and derived flags. */
+export type CurrentUser = Actor & {
   email: string;
   name: string;
-  phone?: string;
-  nif?:number;
-  dateBirth?: string;
-  role: Role;
-  function?: string;
-  profilePicture?: string;
 };

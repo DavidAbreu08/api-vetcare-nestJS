@@ -25,9 +25,9 @@ export class AnimalService {
   /** Keeps historical reservation references by soft-deleting the animal. */
   delete(id: string) { return this.business.delete(id); }
   /** Administrative verification action retained for existing clients. */
-  confirm(id: string) { return this.business.confirm(id); }
+  confirm(id: string, actor: Actor) { return this.business.confirm(id, actor); }
   /** Compatibility route; the canonical collection endpoint provides pagination. */
-  findAll() { return this.business.findAll(); }
+  findAll(actor: Actor) { return this.business.findAll(actor); }
   /** Compatibility route scoped to an existing owner. */
   findByOwner(ownerId: string, actor: Actor) { return this.business.findByOwner(ownerId, actor); }
 }

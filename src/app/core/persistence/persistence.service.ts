@@ -6,7 +6,8 @@ import { PersistenceMessage } from "./persistence.messages";
 enum SqlServerError {
   DuplicateIndex = 2601,
   DuplicateConstraint = 2627,
-  ReferenceConstraint = 547,
+  /** Raised for both CHECK and FOREIGN KEY/REFERENCE violations; the driver message tells them apart. */
+  ConstraintViolation = 547,
   NullValue = 515,
   TruncatedValue = 2628,
   TruncatedValueLegacy = 8152,
@@ -15,9 +16,19 @@ enum SqlServerError {
 
 type DriverError = {
   number?: number;
+  message?: string;
   driverError?: DriverError;
-  originalError?: { info?: { number?: number } };
+  originalError?: { message?: string; info?: { number?: number; message?: string } };
 };
+
+/** SQL Server: "The INSERT statement conflicted with the CHECK constraint ..." (vs "... FOREIGN KEY/REFERENCE constraint"). */
+function isCheckViolation(driver: DriverError | null): boolean {
+  const messages = [
+    driver?.message, driver?.driverError?.message, driver?.originalError?.message, driver?.originalError?.info?.message,
+    driver?.driverError?.originalError?.message, driver?.driverError?.originalError?.info?.message,
+  ];
+  return messages.some(message => typeof message === "string" && /\bCHECK constraint\b/i.test(message));
+}
 
 /** Executes repository work and translates persistence failures into safe HTTP errors. */
 @Injectable()
@@ -33,7 +44,8 @@ export class PersistenceService {
         case SqlServerError.DuplicateIndex:
         case SqlServerError.DuplicateConstraint:
           throw new ConflictException(PersistenceMessage.Duplicate);
-        case SqlServerError.ReferenceConstraint:
+        case SqlServerError.ConstraintViolation:
+          if (isCheckViolation(driver)) throw new BadRequestException(PersistenceMessage.CheckViolation);
           throw new ConflictException(PersistenceMessage.ReferenceConflict);
         case SqlServerError.NullValue:
         case SqlServerError.TruncatedValue:
