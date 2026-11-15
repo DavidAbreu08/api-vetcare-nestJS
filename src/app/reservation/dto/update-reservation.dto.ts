@@ -11,10 +11,11 @@ import { ReservationStatus } from "src/app/core/enums/reservation-status.enum";
 export class UpdateReservationStatusDto {
   @IsOptional()
   @IsEnum(ReservationStatus)
-  status: ReservationStatus;
+  status?: ReservationStatus;
 
   @IsOptional()
   @IsDateString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
   newDate: Date;
 
   @IsOptional()

@@ -8,4 +8,6 @@ export type CurrentUser = {
   nif?:number;
   dateBirth?: string;
   role: Role;
+  function?: string;
+  profilePicture?: string;
 };

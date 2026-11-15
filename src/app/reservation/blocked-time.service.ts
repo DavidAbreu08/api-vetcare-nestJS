@@ -3,6 +3,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { BlockedTimeEntity } from "./entities/bloked-times.entity";
 import { TimeUtilsService } from "./time-utils.service";
+import { overlaps, minutes, dateKey, policyError } from "./reservation-policy";
 import { CreateBlockedTimeDto } from "./dto/create-blocked-time.dto";
 
 @Injectable()
@@ -25,14 +26,7 @@ export class BlockedTimeService {
       where: { date },
     });
 
-    return blockedTimes.some((blocked) => {
-      const blockedTimeStart = blocked.timeStart;
-      const blockedTimeEnd = blocked.timeEnd;
-      return (
-        this.timeUtils.compareTimes(blockedTimeStart, timeStart) >= 0 &&
-        this.timeUtils.compareTimes(blockedTimeEnd, timeEnd) < 0
-      );
-    });
+    return blockedTimes.some(blocked => overlaps(timeStart, timeEnd, blocked.timeStart, blocked.timeEnd));
   }
 
   async getBlockedTimesForDate(date: Date): Promise<BlockedTimeEntity[]> {
@@ -42,6 +36,8 @@ export class BlockedTimeService {
   async createBlockedTime(
     dto: CreateBlockedTimeDto
   ): Promise<BlockedTimeEntity> {
+    dateKey(dto.date);
+    if (minutes(dto.timeEnd) <= minutes(dto.timeStart)) policyError('INVALID_INTERVAL', 'End time must be after start time');
     // Create datetime objects for database storage
     const startDateTime = this.timeUtils.combineDateAndTime(
       dto.date,
@@ -64,6 +60,7 @@ export class BlockedTimeService {
 
     return this.blockedTimeRepository.save({
       ...dto,
+      date: new Date(dateKey(dto.date) + "T00:00:00Z"),
       start: startDateTime,
       end: endDateTime,
       timeStart: dto.timeStart,

@@ -7,6 +7,7 @@ import {
   Post,
   UseGuards,
 } from "@nestjs/common";
+import { Actor } from "../core/authorization";
 import { RolesGuard } from "../core/guards/roles/roles.guard";
 import { AuthGuard } from "@nestjs/passport";
 import { ReservationService } from "./reservation.service";
@@ -69,9 +70,10 @@ export class ReservationController {
   @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
   async confirmReschedule(
     @Param("id") id: string,
-    @Body() dto: ConfirmRescheduleDto
+    @Body() dto: ConfirmRescheduleDto,
+    @CurrentUser() actor: Actor
   ) {
-    return await this.reservationService.confirmRescheduledReservation(id, dto);
+    return await this.reservationService.confirmRescheduledReservation(id, dto, actor);
   }
 
   @Get(":employeeId/:date")
@@ -88,9 +90,10 @@ export class ReservationController {
   @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
   async rejectReschedule(
     @Param("id") id: string,
+    @CurrentUser() actor: Actor,
     @Body("note") note?: string
   ) {
-    return await this.reservationService.rejectRescheduledReservation(id, note);
+    return await this.reservationService.rejectRescheduledReservation(id, actor, note);
   }
 
 

@@ -1,3 +1,4 @@
+import { ClinicController } from "./clinic.controller";
 import { Module } from "@nestjs/common";
 import { ReservationService } from "./reservation.service";
 import { ReservationController } from "./reservation.controller";
@@ -20,6 +21,6 @@ import { EmailModule } from "src/email/email.module";
     EmailModule,
   ],
   providers: [ReservationService, TimeUtilsService],
-  controllers: [ReservationController],
+  controllers: [ReservationController, ClinicController],
 })
 export class ReservationModule {}

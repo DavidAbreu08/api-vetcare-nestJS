@@ -78,6 +78,13 @@ export class UsersService {
     return !!user;
   }
 
+  async findForAuthentication(where: FindOptionsWhere<UsersEntity>) {
+    return this.usersRepository.findOne({
+      where,
+      select: ["id", "name", "email", "password", "role", "isActive"],
+    });
+  }
+
   async findOneOrFail(
     where: FindOptionsWhere<UsersEntity> | FindOptionsWhere<UsersEntity>[]
   ) {
@@ -89,8 +96,10 @@ export class UsersService {
   }
 
   async store(data: CreateUserDto) {
-    const user = this.usersRepository.create(data);
-    return await this.usersRepository.save(user);
+    const user = this.usersRepository.create({ name: data.name, email: data.email, password: data.password, role: Role.CLIENTE });
+    const saved = await this.usersRepository.save(user);
+    const { password, ...profile } = saved;
+    return profile;
   }
 
   async storeClient(data: CreateClientDto) {

@@ -1,10 +1,10 @@
-import { MiddlewareConsumer, Module, NestModule } from "@nestjs/common";
+import "./database/environment";
+import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
-import { TypeOrmModule, TypeOrmModuleOptions } from "@nestjs/typeorm";
+import { TypeOrmModule } from "@nestjs/typeorm";
+import { databaseOptions, databaseEnvFile } from "./database/database.config";
 import { UsersModule } from "./app/users/users.module";
 import { AuthModule } from "./auth/auth.module";
-import * as cors from "cors";
-import { AuthenticateJWT } from "./auth/authenticateJWT.middleware";
 import { EmailModule } from "./email/email.module";
 import { AnimalModule } from "./app/animal/animal.module";
 import { ReservationModule } from "./app/reservation/reservation.module";
@@ -12,17 +12,8 @@ import { BlockedTimeModule } from "./app/reservation/blocked-time.module";
 
 @Module({
   imports: [
-    ConfigModule.forRoot(),
-    TypeOrmModule.forRoot({
-      type: process.env.TYPEORM_CONNECTION,
-      host: process.env.TYPEORM_HOST,
-      port: process.env.TYPEORM_PORT,
-      username: process.env.TYPEORM_USERNAME,
-      password: process.env.TYPEORM_PASSWORD,
-      database: process.env.TYPEORM_DATABASE,
-      entities: [__dirname + "/**/*.entity{.ts,.js}"],
-      synchronize: false, //em dev
-    } as TypeOrmModuleOptions),
+    ConfigModule.forRoot({ envFilePath: databaseEnvFile(), isGlobal: true }),
+    TypeOrmModule.forRoot(databaseOptions()),
     UsersModule,
     AuthModule,
     EmailModule,
@@ -33,17 +24,4 @@ import { BlockedTimeModule } from "./app/reservation/blocked-time.module";
   controllers: [],
   providers: [],
 })
-export class AppModule implements NestModule {
-  configure(consumer: MiddlewareConsumer) {
-    consumer
-      .apply(
-        cors({
-          origin: "http://localhost:4200",
-          methods: ["GET", "POST", "PUT", "DELETE"],
-          allowedHeaders: ["Content-Type", "Authorization"],
-        })
-      )
-      .forRoutes("*"); // Apply to all routes
-    consumer.apply(AuthenticateJWT).forRoutes("auth", "api/auth/me");
-  }
-}
+export class AppModule {}

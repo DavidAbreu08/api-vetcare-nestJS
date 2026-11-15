@@ -1,3 +1,4 @@
+import { jwtSecret } from './jwt-secret';
 import { HttpStatus, Injectable, NestMiddleware } from "@nestjs/common";
 import { Request, Response, NextFunction } from "express";
 
@@ -19,7 +20,7 @@ export class AuthenticateJWT implements NestMiddleware {
       const jwt = require("jsonwebtoken");
       const decoded = jwt.verify(
         token,
-        process.env.JWT_SECRET_KEY || "chave-secreta"
+        jwtSecret()
       );
       req.user = decoded;
       next();

@@ -12,6 +12,8 @@ import {
   Query,
   UseGuards,
 } from "@nestjs/common";
+import { CurrentUser } from "../core/decorators/current-user.decorator";
+import { Actor, requireOwnerOrAdmin } from "../core/authorization";
 import { UsersService } from "./users.service";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
@@ -27,7 +29,8 @@ import { UpdateFuncionarioDto } from "./dto/update-funcionario.dto";
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
   @Get()
-  @UseGuards(AuthGuard("jwt"))
+  @UseGuards(AuthGuard("jwt"), RolesGuard)
+  @Roles(Role.ADMIN)
   async index() {
     return await this.usersService.findAll();
   }
@@ -40,7 +43,7 @@ export class UsersController {
   }
 
   @Get("clients")
-  @UseGuards(AuthGuard("jwt"))
+  @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(Role.ADMIN, Role.FUNCIONARIO)
   async getAllClients() {
     return this.usersService.findAllClients();
@@ -56,37 +59,40 @@ export class UsersController {
     return await this.usersService.store(body);
   }
 
-  @UseGuards(AuthGuard("jwt"))
+  @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(Role.ADMIN)
   @Post("employees")
   async storeEmployees(@Body() body: CreateEmployeesDto) {
     return await this.usersService.storeEmployees(body);
   }
 
-  @UseGuards(AuthGuard("jwt"))
+  @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(Role.ADMIN)
   @Post("create-clients")
   async storeClients(@Body() body: CreateClientDto) {
     return await this.usersService.storeClient(body);
   }
 
-  @UseGuards(AuthGuard("jwt"))
+  @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Get(":id")
-  async show(@Param("id", new ParseUUIDPipe()) id: string) {
+  async show(@Param("id", new ParseUUIDPipe()) id: string, @CurrentUser() actor: Actor) {
+    requireOwnerOrAdmin(actor, id);
     return await this.usersService.findOneOrFail({ id });
   }
 
-  @UseGuards(AuthGuard("jwt"))
+  @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Patch(":id")
   async update(
     @Param("id", new ParseUUIDPipe()) id: string,
-    @Body() body: UpdateUserDto
+    @Body() body: UpdateUserDto,
+    @CurrentUser() actor: Actor
   ) {
+    requireOwnerOrAdmin(actor, id);
     return await this.usersService.update(id, body);
   }
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @Roles(Role.ADMIN, Role.FUNCIONARIO)
+  @Roles(Role.ADMIN)
   @Patch("employee/:id")
   async updateEmployee(
     @Param("id", new ParseUUIDPipe()) id: string,
@@ -98,7 +104,7 @@ export class UsersController {
 
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @Roles(Role.ADMIN, Role.FUNCIONARIO)
+  @Roles(Role.ADMIN)
   @Delete(":id")
   async destroy(@Param("id", new ParseUUIDPipe()) id: string) {
     await this.usersService.destroy(id);

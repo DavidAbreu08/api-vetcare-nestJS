@@ -1,8 +1,11 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
+  ConflictException,
   NotFoundException,
 } from "@nestjs/common";
+import { Actor, requireOwnerOrAdmin } from "../core/authorization";
 import { InjectRepository } from "@nestjs/typeorm";
 import { ReservationEntity } from "./entities/reservation.entity";
 import { In, Repository } from "typeorm";
@@ -17,9 +20,31 @@ import { BlockedTimeEntity } from "./entities/bloked-times.entity";
 import { ConfirmPendingDto } from "./dto/confirm-pending.dto";
 import { TimeUtilsService } from "./time-utils.service";
 import { EmailService } from "src/email/email.service";
+import { assertTransition, CLINIC_POLICY, dateKey, minutes, overlaps, policyError, validateInterval } from './reservation-policy';
 
 @Injectable()
 export class ReservationService {
+  private readonly logger = new Logger(ReservationService.name);
+
+  private async notify(reservation: ReservationEntity, send: () => Promise<unknown>) {
+    try {
+      await send();
+      return Object.assign(reservation, { notificationStatus: 'sent' as const });
+    } catch {
+      this.logger.warn(`Reservation ${reservation.id} persisted; email delivery failed`);
+      return Object.assign(reservation, { notificationStatus: 'failed' as const });
+    }
+  }
+
+  private async validateAvailability(date: Date, start: string, end: string, employeeId?: string, excludeId?: string) {
+    validateInterval(date, start, end);
+    if (employeeId) await this.validateAndAssignEmployee(employeeId);
+    if (await this.isTimeBlocked(date, start, end)) policyError('TIME_BLOCKED', 'This time slot is blocked');
+    if (employeeId && await this.isEmployeeReserved(employeeId, date, start, end, excludeId)) {
+      throw new ConflictException({ statusCode: 409, code: 'EMPLOYEE_UNAVAILABLE', message: 'Employee is already booked during this time' });
+    }
+  }
+
   constructor(
     private readonly timeUtils: TimeUtilsService,
 
@@ -38,11 +63,6 @@ export class ReservationService {
     private readonly blockedTimeRepository: Repository<BlockedTimeEntity>
   ) {}
 
-  private getSlotDuration(): number {
-    // TODO: make this dynamic later (core/service/DB)
-    return 15; // minutes
-  }
-
   private async validateAndGetClient(
     user: UsersEntity,
     ownerId?: string
@@ -54,7 +74,7 @@ export class ReservationService {
       const owner = await this.usersRepository.findOne({
         where: { id: ownerId },
       });
-      if (!owner || owner.role !== Role.CLIENTE) {
+      if (!owner || !owner.isActive || owner.role !== Role.CLIENTE) {
         throw new BadRequestException("Invalid client provided");
       }
       return owner;
@@ -85,96 +105,10 @@ export class ReservationService {
     const employee = await this.usersRepository.findOne({
       where: { id: employeeId },
     });
-    if (!employee || employee.role !== Role.FUNCIONARIO) {
+    if (!employee || !employee.isActive || ![Role.FUNCIONARIO, Role.ADMIN].includes(employee.role)) {
       throw new BadRequestException("Invalid employee ID");
     }
     return employee;
-  }
-
-  private async validateReservation(dto: CreateReservationDto): Promise<void> {
-    // 1. Basic time validation
-    if (this.timeUtils.compareTimes(dto.timeEnd, dto.timeStart) <= 0) {
-      throw new BadRequestException("End time must be after start time");
-    }
-
-    // 2. Business hours check
-    if (
-      !this.timeUtils.isWithinBusinessHours(
-        dto.timeStart,
-        dto.timeEnd,
-        dto.date
-      )
-    ) {
-      throw new BadRequestException(
-        "Outside business hours (Mon-Fri 07:00-20:00)"
-      );
-    }
-
-    // 3. Blocked times check
-    if (await this.isTimeBlocked(dto.date, dto.timeStart, dto.timeEnd)) {
-      throw new BadRequestException("This time slot is blocked");
-    }
-
-    // 4. Employee availability check
-    if (dto.employeeId) {
-      if (
-        await this.isEmployeeReserved(
-          dto.employeeId,
-          dto.date,
-          dto.timeStart,
-          dto.timeEnd
-        )
-      ) {
-        throw new BadRequestException(
-          "Employee is already booked during this time"
-        );
-      }
-    }
-  }
-
-  private async validateUpdateReservation(
-    dto: UpdateReservationStatusDto
-  ): Promise<void> {
-    // 1. Basic time validation
-    if (this.timeUtils.compareTimes(dto.newTimeEnd, dto.newTimeStart) <= 0) {
-      throw new BadRequestException("End time must be after start time");
-    }
-
-    // 2. Business hours check
-    if (
-      !this.timeUtils.isWithinBusinessHours(
-        dto.newTimeStart,
-        dto.newTimeEnd,
-        dto.newDate
-      )
-    ) {
-      throw new BadRequestException(
-        "Outside business hours (Mon-Fri 07:00-20:00)"
-      );
-    }
-
-    // 3. Blocked times check
-    if (
-      await this.isTimeBlocked(dto.newDate, dto.newTimeStart, dto.newTimeEnd)
-    ) {
-      throw new BadRequestException("This time slot is blocked");
-    }
-
-    // 4. Employee availability check
-    if (dto.employeeId) {
-      if (
-        await this.isEmployeeReserved(
-          dto.employeeId,
-          dto.newDate,
-          dto.newTimeStart,
-          dto.newTimeEnd
-        )
-      ) {
-        throw new BadRequestException(
-          "Employee is already booked during this time"
-        );
-      }
-    }
   }
 
   private async determineAssignedEmployee(
@@ -205,72 +139,19 @@ export class ReservationService {
       where: { date },
     });
 
-    return blockedTimes.some((blocked) => {
-      const blockedTimeStart = blocked.timeStart;
-      const blockedTimeEnd = blocked.timeEnd;
-      return (
-        this.timeUtils.compareTimes(blockedTimeStart, timeStart) >= 0 &&
-        this.timeUtils.compareTimes(blockedTimeEnd, timeEnd) < 0
-      );
-    });
-  }
-
-  private isSlotOccupied(
-    slot: string,
-    reservations: { timeStart: string; timeEnd: string }[],
-    bufferMinutes: number
-  ): boolean {
-    const slotStart = this.timeUtils.minusMinutes(slot, bufferMinutes);
-    const slotEnd = this.timeUtils.plusMinutes(slot, bufferMinutes);
-
-    return reservations.some((reservation) => {
-      return (
-        this.timeUtils.compareTimes(slotStart, reservation.timeEnd) < 0 &&
-        this.timeUtils.compareTimes(slotEnd, reservation.timeStart) > 0
-      );
-    });
+    return blockedTimes.some(blocked => overlaps(timeStart, timeEnd, blocked.timeStart, blocked.timeEnd));
   }
 
   private async handleReschedule(
     reservation: ReservationEntity,
     dto: UpdateReservationStatusDto
   ): Promise<void> {
-    const newDate = dto.newDate ? new Date(dto.newDate) : reservation.date;
+    const newDate = new Date(dateKey(dto.newDate ?? reservation.date) + "T00:00:00Z");
     const newTimeStart = dto.newTimeStart ?? reservation.timeStart;
     const newTimeEnd = dto.newTimeEnd ?? reservation.timeEnd;
 
-    // Validate business hours
-    if (
-      !this.timeUtils.isWithinBusinessHours(newTimeStart, newTimeEnd, newDate)
-    ) {
-      throw new BadRequestException(
-        "New time must be within business hours (Mon-Fri 07:00-20:00)"
-      );
-    }
-
-    // Check for blocked times
-    if (await this.isTimeBlocked(newDate, newTimeStart, newTimeEnd)) {
-      throw new BadRequestException(
-        "This time period is blocked and unavailable"
-      );
-    }
-
-    // Check employee availability (if employee is assigned)
-    const employeeId = dto.employeeId ?? reservation.employee?.id;
-    if (employeeId) {
-      const isReserved = await this.isEmployeeReserved(
-        employeeId,
-        newDate,
-        newTimeStart,
-        newTimeEnd,
-        reservation.id
-      );
-      if (isReserved) {
-        throw new BadRequestException(
-          "Employee already has a reservation during this time"
-        );
-      }
-    }
+    await this.validateAvailability(newDate, newTimeStart, newTimeEnd,
+      dto.employeeId ?? reservation.employee?.id, reservation.id);
 
     // Update the reservation times
     reservation.date = newDate;
@@ -290,7 +171,7 @@ export class ReservationService {
     timeEnd: string,
     excludeReservationId?: string
   ): Promise<boolean> {
-    const bufferMinutes = 15; // Buffer time between appointments
+    const bufferMinutes = CLINIC_POLICY.bufferMinutes;
 
     const query = this.reservationRepository
       .createQueryBuilder("r")
@@ -304,8 +185,8 @@ export class ReservationService {
             (r.timeStart < :bufferedEnd AND r.timeEnd > :bufferedStart)
         `,
         {
-          bufferedStart: this.timeUtils.minusMinutes(timeStart, bufferMinutes),
-          bufferedEnd: this.timeUtils.plusMinutes(timeEnd, bufferMinutes),
+          bufferedStart: `${String(Math.floor(Math.max(0, minutes(timeStart) - bufferMinutes) / 60)).padStart(2, '0')}:${String(Math.max(0, minutes(timeStart) - bufferMinutes) % 60).padStart(2, '0')}`,
+          bufferedEnd: `${String(Math.floor(Math.min(1439, minutes(timeEnd) + bufferMinutes) / 60)).padStart(2, '0')}:${String(Math.min(1439, minutes(timeEnd) + bufferMinutes) % 60).padStart(2, '0')}`,
         }
       );
 
@@ -317,7 +198,6 @@ export class ReservationService {
   }
 
   async createReservation(dto: CreateReservationDto, userId: string) {
-    await this.validateReservation(dto);
 
     const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (!user) throw new NotFoundException("User not found");
@@ -342,9 +222,11 @@ export class ReservationService {
       user
     );
 
+    await this.validateAvailability(dto.date, dto.timeStart, dto.timeEnd, assignedEmployee?.id);
+
     // Create and save the reservation
     const reservation = this.reservationRepository.create({
-      date: dto.date,
+      date: new Date(dateKey(dto.date) + "T00:00:00Z"),
       timeStart: dto.timeStart,
       timeEnd: dto.timeEnd,
       start: startDateTime,
@@ -359,29 +241,32 @@ export class ReservationService {
     const savedReservation = await this.reservationRepository.save(reservation);
 
     // Notificação: Reserva criada e será analisada pelo veterinário
-    await this.emailService.sendReservationCreatedEmail(
+    return this.notify(savedReservation, () => this.emailService.sendReservationCreatedEmail(
       client.email,
       client.name,
-      typeof dto.date === "string"
-        ? dto.date
-        : new Date(dto.date).toISOString().split("T")[0],
+      dateKey(dto.date),
       dto.timeStart,
       dto.timeEnd
-    );
-
-    return savedReservation;
+    ));
   }
 
   async updateReservationStatus(id: string, dto: UpdateReservationStatusDto) {
-    // First validate the DTO
-    await this.validateUpdateReservation(dto);
-
     // Find the existing reservation
     const reservation = await this.reservationRepository.findOne({
       where: { id },
       relations: ["client", "animal", "employee"],
     });
     if (!reservation) throw new NotFoundException("Reservation not found");
+
+    const changesTime = !!(dto.newDate || dto.newTimeStart || dto.newTimeEnd);
+    const nextStatus = dto.status ?? (changesTime ? ReservationStatus.RESCHEDULED : reservation.status);
+    if (nextStatus !== reservation.status || changesTime ||
+        (dto.employeeId && [ReservationStatus.CANCELLED, ReservationStatus.COMPLETED].includes(reservation.status))) {
+      assertTransition(reservation.status, nextStatus);
+    }
+    if (changesTime && nextStatus !== ReservationStatus.RESCHEDULED) {
+      policyError('INVALID_TRANSITION', 'Time changes must propose a reschedule');
+    }
 
     // Validate and assign employee if specified
     if (dto.employeeId) {
@@ -391,38 +276,50 @@ export class ReservationService {
     }
 
     // Guardar dados antigos para email de reagendamento
-    const oldDate = reservation.date.toISOString().split("T")[0];
+    const oldDate = dateKey(reservation.date);
     const oldTimeStart = reservation.timeStart;
     const oldTimeEnd = reservation.timeEnd;
 
     // Handle date/time changes
-    if (dto.newDate || dto.newTimeStart || dto.newTimeEnd) {
+    if (changesTime) {
       await this.handleReschedule(reservation, dto);
+    } else if ((nextStatus === ReservationStatus.CONFIRMED && nextStatus !== reservation.status) || (dto.employeeId && [ReservationStatus.CONFIRMED, ReservationStatus.RESCHEDULED].includes(nextStatus))) {
+      if (!reservation.employee) policyError('EMPLOYEE_REQUIRED', 'Employee ID is required to confirm a reservation');
+      await this.validateAvailability(reservation.date, reservation.timeStart, reservation.timeEnd, reservation.employee.id, reservation.id);
     }
 
     // Update status and notes
-    reservation.status = dto.status;
-    reservation.rescheduleNote = dto.rescheduleNote ?? "";
+    reservation.status = nextStatus;
+    reservation.rescheduleNote = dto.rescheduleNote ?? reservation.rescheduleNote ?? "";
 
     const updatedReservation =
       await this.reservationRepository.save(reservation);
 
     // Notificações por email
-    if (dto.status === ReservationStatus.RESCHEDULED) {
-      await this.emailService.sendReservationRescheduledEmail(
+    if (nextStatus === ReservationStatus.RESCHEDULED) {
+      return this.notify(updatedReservation, () => this.emailService.sendReservationRescheduledEmail(
         reservation.client.email,
         reservation.client.name,
         oldDate,
         oldTimeStart,
         oldTimeEnd,
-        reservation.date.toISOString().split("T")[0],
+        dateKey(reservation.date),
         reservation.timeStart,
         reservation.timeEnd,
         reservation.rescheduleNote
-      );
+      ));
     }
 
-    return updatedReservation;
+    if (dto.status === ReservationStatus.CANCELLED) {
+      return this.notify(updatedReservation, () => this.emailService.sendReservationCancelledEmail(
+        reservation.client.email, reservation.client.name, dateKey(reservation.date), reservation.rescheduleNote));
+    }
+    if (dto.status === ReservationStatus.CONFIRMED) {
+      return this.notify(updatedReservation, () => this.emailService.sendReservationConfirmedEmail(
+        reservation.client.email, reservation.client.name, dateKey(reservation.date),
+        reservation.timeStart, reservation.timeEnd, reservation.rescheduleNote));
+    }
+    return Object.assign(updatedReservation, { notificationStatus: 'not_requested' as const });
   }
 
   async findAllReservations() {
@@ -482,21 +379,9 @@ export class ReservationService {
         },
       });
 
-      if (!employee) throw new BadRequestException("Invalid employee ID.");
+      if (!employee || !employee.isActive) throw new BadRequestException("Invalid employee ID.");
 
-      const isReserved = await this.isEmployeeReserved(
-        dto.employeeId,
-        reservation.date,
-        reservation.timeStart,
-        reservation.timeEnd,
-        reservation.id
-      );
-
-      if (isReserved) {
-        throw new BadRequestException(
-          "Employee already has a reservation at that time."
-        );
-      }
+      await this.validateAvailability(reservation.date, reservation.timeStart, reservation.timeEnd, employee.id, reservation.id);
       reservation.employee = employee;
       reservation.status = dto.status;
       reservation.rescheduleNote = dto.confirmationNote ?? " ";
@@ -504,16 +389,14 @@ export class ReservationService {
         await this.reservationRepository.save(reservation);
 
       // Enviar email de confirmação
-      await this.emailService.sendReservationConfirmedEmail(
+      return this.notify(updatedReservation, () => this.emailService.sendReservationConfirmedEmail(
         reservation.client.email,
         reservation.client.name,
-        reservation.date.toISOString().split("T")[0],
+        dateKey(reservation.date),
         reservation.timeStart,
         reservation.timeEnd,
         reservation.rescheduleNote
-      );
-
-      return updatedReservation;
+      ));
     }
 
     throw new BadRequestException(
@@ -521,13 +404,15 @@ export class ReservationService {
     );
   }
 
-  async confirmRescheduledReservation(id: string, dto: ConfirmRescheduleDto) {
+  async confirmRescheduledReservation(id: string, dto: ConfirmRescheduleDto, actor: Actor) {
     const reservation = await this.reservationRepository.findOne({
       where: { id },
       relations: ["employee", "client"],
     });
 
     if (!reservation) throw new NotFoundException("Reservation not found");
+
+    requireOwnerOrAdmin(actor, reservation.client.id);
 
     if (reservation.status !== ReservationStatus.RESCHEDULED) {
       throw new BadRequestException(
@@ -552,35 +437,20 @@ export class ReservationService {
         );
       }
 
-      const isReserved = await this.isEmployeeReserved(
-        reservation.employee.id,
-        reservation.date,
-        reservation.timeStart,
-        reservation.timeEnd,
-        reservation.id
-      );
-
-      if (isReserved) {
-        throw new BadRequestException(
-          "Employee already has a reservation at this time."
-        );
-      }
-
-      // Enviar email de confirmação ao cliente
-      await this.emailService.sendReservationConfirmedEmail(
-        reservation.client.email,
-        reservation.client.name,
-        reservation.date.toISOString().split("T")[0],
-        reservation.timeStart,
-        reservation.timeEnd,
-        dto.confirmationNote ?? ""
-      );
+      await this.validateAvailability(reservation.date, reservation.timeStart, reservation.timeEnd, reservation.employee.id, reservation.id);
     }
 
     reservation.status = dto.status;
     reservation.rescheduleNote = dto.confirmationNote ?? "";
 
-    return this.reservationRepository.save(reservation);
+    const saved = await this.reservationRepository.save(reservation);
+    if (dto.status === ReservationStatus.CONFIRMED) {
+      return this.notify(saved, () => this.emailService.sendReservationConfirmedEmail(
+        reservation.client.email, reservation.client.name, dateKey(reservation.date),
+        reservation.timeStart, reservation.timeEnd, reservation.rescheduleNote));
+    }
+    return this.notify(saved, () => this.emailService.sendReservationCancelledEmail(
+      reservation.client.email, reservation.client.name, dateKey(reservation.date), reservation.rescheduleNote));
   }
 
   async findByEmployeeAndDate(
@@ -598,13 +468,15 @@ export class ReservationService {
     });
   }
 
-  async rejectRescheduledReservation(id: string, note?: string) {
+  async rejectRescheduledReservation(id: string, actor: Actor, note?: string) {
     const reservation = await this.reservationRepository.findOne({
       where: { id },
       relations: ["client", "employee"],
     });
 
     if (!reservation) throw new NotFoundException("Reservation not found");
+
+    requireOwnerOrAdmin(actor, reservation.client.id);
 
     if (reservation.status !== ReservationStatus.RESCHEDULED) {
       throw new BadRequestException(
@@ -619,13 +491,11 @@ export class ReservationService {
       await this.reservationRepository.save(reservation);
 
     // Enviar email de rejeição/cancelamento ao cliente
-    await this.emailService.sendReservationCancelledEmail(
+    return this.notify(updatedReservation, () => this.emailService.sendReservationCancelledEmail(
       reservation.client.email,
       reservation.client.name,
-      reservation.date.toISOString().split("T")[0],
+      dateKey(reservation.date),
       note
-    );
-
-    return updatedReservation;
+    ));
   }
 }

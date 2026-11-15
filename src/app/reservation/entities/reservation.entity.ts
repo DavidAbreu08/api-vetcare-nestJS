@@ -1,6 +1,7 @@
 import { AnimalEntity } from "src/app/animal/entities/animal.entity";
 import { ReservationStatus } from "src/app/core/enums/reservation-status.enum";
 import { UsersEntity } from "src/app/users/entities/users.entity";
+import { clinicDateTime } from "../reservation-policy";
 import {
   BeforeInsert,
   BeforeUpdate,
@@ -49,7 +50,7 @@ export class ReservationEntity {
   reason: string;
 
   @Column({
-    type: "enum",
+    type: "simple-enum",
     enum: ReservationStatus,
     default: ReservationStatus.PENDING,
   })
@@ -76,9 +77,6 @@ export class ReservationEntity {
   }
 
   private combineDateAndTime(date: Date, timeString: string): Date {
-    const [hours, minutes] = timeString.split(":").map(Number);
-    const combined = new Date(date);
-    combined.setHours(hours, minutes, 0, 0);
-    return combined;
+    return clinicDateTime(date, timeString);
   }
 }

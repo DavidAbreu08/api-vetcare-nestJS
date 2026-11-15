@@ -8,6 +8,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from "typeorm";
+import { Exclude } from "class-transformer";
 import { hashSync } from "bcrypt";
 import { Role } from "../../core/enums/role.enum";
 import { Function } from "../../core/enums/function.enum";
@@ -25,11 +26,12 @@ export class UsersEntity {
   @Column()
   email: string;
 
-  @Column()
+  @Exclude()
+  @Column({ select: false })
   password: string;
 
   @Column({
-    type: "enum",
+    type: "simple-enum",
     enum: Role,
     name: "user_role",
     default: Role.CLIENTE,
@@ -37,7 +39,7 @@ export class UsersEntity {
   role: Role;
 
   @Column({
-    type: "enum",
+    type: "simple-enum",
     enum: Function,
     default: Function.CLIENTE,
   })
@@ -64,7 +66,7 @@ export class UsersEntity {
   @OneToMany(() => AnimalEntity, (animal) => animal.owner)
   idAnimal: AnimalEntity[];
 
-  @Column({ name: "profile_picture", nullable: true })
+  @Column({ name: "profile_picture", type: "nvarchar", length: "MAX", nullable: true })
   profilePicture: string;
 
   @CreateDateColumn({ name: "created_at" })

@@ -43,7 +43,7 @@ export class AnimalEntity {
   @Column()
   gender: string;
 
-  @Column({nullable: true})
+  @Column({type: "nvarchar", length: "MAX", nullable: true})
   image: string;
   
   @Column({ default: false })

@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import { Actor, requireAnimalAccess } from "../core/authorization";
 import { CreateAnimalDto } from "./dto/create-animal.dto";
 import { Role } from "../core/enums/role.enum";
 import { UsersEntity } from "../users/entities/users.entity";
@@ -21,7 +22,8 @@ export class AnimalService {
     private readonly userRepository: Repository<UsersEntity>
   ) {}
 
-  async create(dto: CreateAnimalDto, createdByRole: Role) {
+  async create(dto: CreateAnimalDto, actor: Actor) {
+    requireAnimalAccess(actor, dto.ownerId);
     const owner = await this.userRepository.findOne({
       where: { id: dto.ownerId },
     });
@@ -31,7 +33,7 @@ export class AnimalService {
     }
 
     const confirmed =
-      createdByRole === Role.ADMIN || createdByRole === Role.FUNCIONARIO;
+      actor.role === Role.ADMIN || actor.role === Role.FUNCIONARIO;
 
     const animal = this.animalRepository.create({
       ...dto,
@@ -42,11 +44,19 @@ export class AnimalService {
     return this.animalRepository.save(animal);
   }
 
-  async update(id: string, dto: UpdateAnimalDto) {
-    const animal = await this.animalRepository.findOne({ where: { id } });
+  async update(id: string, dto: UpdateAnimalDto, actor: Actor) {
+    const animal = await this.animalRepository.findOne({ where: { id }, relations: ["owner"] });
     if (!animal) throw new NotFoundException("Animal not found");
 
-    Object.assign(animal, dto);
+    requireAnimalAccess(actor, animal.owner.id);
+    const { ownerId, ...fields } = dto;
+    if (ownerId && ownerId !== animal.owner.id) {
+      requireAnimalAccess(actor, ownerId);
+      const owner = await this.userRepository.findOne({ where: { id: ownerId } });
+      if (!owner || owner.role !== Role.CLIENTE) throw new BadRequestException("Owner must be a client");
+      animal.owner = owner;
+    }
+    Object.assign(animal, fields);
     return this.animalRepository.save(animal);
   }
 
@@ -62,7 +72,8 @@ export class AnimalService {
     return this.animalRepository.find({ relations: ["owner"] });
   }
 
-  async findByOwner(ownerId: string) {
+  async findByOwner(ownerId: string, actor: Actor) {
+    requireAnimalAccess(actor, ownerId);
     const owner = await this.userRepository.findOne({ where: { id: ownerId } });
 
     if (!owner || owner.role !== Role.CLIENTE) {

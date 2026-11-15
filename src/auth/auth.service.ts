@@ -21,7 +21,7 @@ export class AuthService {
     const userEntity = await this.userService.findOneOrFail({
       email: user.email,
     });
-    if (!userEntity) {
+    if (!userEntity || !userEntity.isActive) {
       throw new UnauthorizedException("Invalid credentials");
     }
     const payload = { sub: user.id, email: user.email, name: user.name };
@@ -32,17 +32,8 @@ export class AuthService {
   }
 
   async validateUser(email: string, password: string) {
-    const user = await this.userService.findOneOrFail({ email });
-    try {
-      if (!user) {
-        return null;
-      }
-    } catch (error: unknown) {
-      if (error instanceof Error) {
-        return error.message;
-      }
-      return "An unknown error occurred";
-    }
+    const user = await this.userService.findForAuthentication({ email });
+    if (!user || !user.isActive) return null;
 
     const isPasswordValid = compareSync(password, user.password);
     if (!isPasswordValid) return null;
@@ -52,7 +43,7 @@ export class AuthService {
 
   async validateJwtUser(id: string) {
     const user = await this.userService.findOneOrFail({ id });
-    if (!user) throw new UnauthorizedException("User not Found!");
+    if (!user || !user.isActive) throw new UnauthorizedException("User not Found!");
     const currentUser: CurrentUser = {
       id: user.id,
       email: user.email,
@@ -61,6 +52,8 @@ export class AuthService {
       dateBirth: user?.dateBirth,
       nif: user?.nif,
       role: user.role,
+      function: user.function,
+      profilePicture: user.profilePicture,
     };
     return currentUser;
   }
@@ -75,7 +68,7 @@ export class AuthService {
     newPassword: string,
     confirmNewPassword: string
   ) {
-    const user = await this.userService.findOneOrFail({ id });
+    const user = await this.userService.findForAuthentication({ id });
     if (!user) {
       throw new UnauthorizedException("User not Found!");
     }

@@ -10,7 +10,7 @@ import { UsersEntity } from "../../app/users/entities/users.entity";
 
 @Entity({ name: "resetToken" })
 export class ResetTokenEntity {
-  @PrimaryColumn() // Fixed decorator syntax
+  @PrimaryColumn({ type: "nvarchar", length: 255 })
   resetToken: string;
 
   @Index("IDX_RESET_TOKEN", ["resetToken"])
@@ -22,7 +22,7 @@ export class ResetTokenEntity {
 
   @Column({
     name: "expires_at",
-    type: "timestamp",
+    type: "datetime2",
     nullable: true,
   })
   expiresAt: Date;

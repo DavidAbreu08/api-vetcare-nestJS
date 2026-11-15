@@ -1,3 +1,4 @@
+import { Matches } from "class-validator";
 import {
   IsDateString,
   IsNotEmpty,
@@ -11,14 +12,17 @@ export class CreateReservationDto {
   animalId: string;
 
   @IsDateString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
   date: Date;
 
   @IsString()
   @IsNotEmpty()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
   timeStart: string;
 
   @IsString()
   @IsNotEmpty()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
   timeEnd: string;
 
   @IsOptional()
