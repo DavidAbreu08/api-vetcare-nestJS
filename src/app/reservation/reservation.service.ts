@@ -91,7 +91,7 @@ export class ReservationService {
       relations: ["owner"],
     });
     if (!animal) throw new NotFoundException("Animal not found");
-    if (animal.owner.id !== client.id) {
+    if (!animal.owner || animal.owner.id !== client.id) {
       throw new BadRequestException(
         "Animal does not belong to the specified client"
       );
@@ -175,7 +175,7 @@ export class ReservationService {
 
     const query = this.reservationRepository
       .createQueryBuilder("r")
-      .where("r.employeeId = :employeeId", { employeeId })
+      .where("r.employee_id = :employeeId", { employeeId })
       .andWhere("r.date = :date", { date })
       .andWhere("r.status IN (:...statuses)", {
         statuses: ["confirmed", "pending", "rescheduled"],
@@ -254,7 +254,7 @@ export class ReservationService {
     // Find the existing reservation
     const reservation = await this.reservationRepository.findOne({
       where: { id },
-      relations: ["client", "animal", "employee"],
+      relations: ["client", "employee"],
     });
     if (!reservation) throw new NotFoundException("Reservation not found");
 
@@ -322,19 +322,28 @@ export class ReservationService {
     return Object.assign(updatedReservation, { notificationStatus: 'not_requested' as const });
   }
 
+  private async historicalAnimals(reservations: ReservationEntity[]) {
+    for (const reservation of reservations) {
+      if (!reservation.animal && reservation.animalId) {
+        reservation.animal = (await this.animalRepository.findOne({ where: { id: reservation.animalId }, withDeleted: true }))!;
+      }
+    }
+    return reservations;
+  }
+
   async findAllReservations() {
-    return this.reservationRepository.find({
+    return this.historicalAnimals(await this.reservationRepository.find({
       relations: ["client", "employee", "animal"],
       order: { date: "ASC", timeStart: "ASC" },
-    });
+    }));
   }
 
   async findByClient(clientId: string) {
-    return this.reservationRepository.find({
+    return this.historicalAnimals(await this.reservationRepository.find({
       where: { client: { id: clientId } },
       relations: ["animal", "employee"],
       order: { date: "DESC" },
-    });
+    }));
   }
 
   async findByEmployee(employeeId: string) {
@@ -346,11 +355,11 @@ export class ReservationService {
       throw new NotFoundException("Employee not found");
     }
 
-    return this.reservationRepository.find({
+    return this.historicalAnimals(await this.reservationRepository.find({
       where: { employee: { id: employeeId } },
       relations: ["client", "animal"],
       order: { date: "ASC", timeStart: "ASC" },
-    });
+    }));
   }
 
   async confirmPendingReservation(id: string, dto: ConfirmPendingDto) {
@@ -457,7 +466,7 @@ export class ReservationService {
     employeeId: string,
     date: Date
   ): Promise<ReservationEntity[]> {
-    return this.reservationRepository.find({
+    return this.historicalAnimals(await this.reservationRepository.find({
       where: {
         employee: { id: employeeId },
         date,
@@ -465,7 +474,7 @@ export class ReservationService {
       },
       relations: ["client", "animal"],
       order: { timeStart: "ASC" },
-    });
+    }));
   }
 
   async rejectRescheduledReservation(id: string, actor: Actor, note?: string) {

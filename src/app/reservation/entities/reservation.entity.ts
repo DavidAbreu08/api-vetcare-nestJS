@@ -11,33 +11,37 @@ import {
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
+  RelationId,
   UpdateDateColumn,
 } from "typeorm";
 
-@Entity("reservation")
+@Entity("vc_reservations")
 export class ReservationEntity {
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
   @ManyToOne(() => AnimalEntity)
-  @JoinColumn({ name: "animalId" })
+  @JoinColumn({ name: "animal_id" })
   animal: AnimalEntity;
 
+  @RelationId((reservation: ReservationEntity) => reservation.animal)
+  animalId: string | null;
+
   @ManyToOne(() => UsersEntity)
-  @JoinColumn({ name: "clientId" })
+  @JoinColumn({ name: "client_id" })
   client: UsersEntity;
 
   @ManyToOne(() => UsersEntity, { nullable: true })
-  @JoinColumn({ name: "employeeId" })
+  @JoinColumn({ name: "employee_id" })
   employee: UsersEntity | null;
 
   @Column()
   date: Date;
 
-  @Column()
+  @Column({ name: "time_start" })
   timeStart: string; // Format: "HH:mm"
 
-  @Column()
+  @Column({ name: "time_end" })
   timeEnd: string; // Format: "HH:mm"
 
   @Column()
@@ -56,13 +60,13 @@ export class ReservationEntity {
   })
   status: ReservationStatus;
 
-  @Column({ nullable: true })
+  @Column({ name: "reschedule_note", nullable: true })
   rescheduleNote: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ name: "created_at" })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ name: "updated_at" })
   updatedAt: Date;
 
   @BeforeInsert()

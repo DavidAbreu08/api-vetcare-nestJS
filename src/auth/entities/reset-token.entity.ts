@@ -8,9 +8,9 @@ import {
 } from "typeorm";
 import { UsersEntity } from "../../app/users/entities/users.entity";
 
-@Entity({ name: "resetToken" })
+@Entity({ name: "vc_reset_tokens" })
 export class ResetTokenEntity {
-  @PrimaryColumn({ type: "nvarchar", length: 255 })
+  @PrimaryColumn({ name: "reset_token", type: "nvarchar", length: 255 })
   resetToken: string;
 
   @Index("IDX_RESET_TOKEN", ["resetToken"])

@@ -15,12 +15,12 @@ import { Function } from "../../core/enums/function.enum";
 import { ResetTokenEntity } from "../../../auth/entities/reset-token.entity";
 import { AnimalEntity } from "src/app/animal/entities/animal.entity";
 
-@Entity({ name: "users" })
+@Entity({ name: "vc_users" })
 export class UsersEntity {
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
-  @Column({ name: "nome" })
+  @Column({ name: "name" })
   name: string;
 
   @Column()
@@ -51,13 +51,13 @@ export class UsersEntity {
   @Column({ nullable: true })
   phone: string;
 
-  @Column({ name: "workLoad", nullable: true, default: "none" })
+  @Column({ name: "work_load", nullable: true, default: "none" })
   workLoad: string;
 
-  @Column({ name: "dateBirth", nullable: true })
+  @Column({ name: "birth_date", nullable: true })
   dateBirth: string;
 
-  @Column({ name: "NIF", nullable: true })
+  @Column({ name: "nif", nullable: true })
   nif: number;
 
   @OneToMany(() => ResetTokenEntity, (token) => token.user)
