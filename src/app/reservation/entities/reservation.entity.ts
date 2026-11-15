@@ -11,12 +11,20 @@ import {
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
-  RelationId,
   UpdateDateColumn,
 } from "typeorm";
 
 @Entity("vc_reservations")
 export class ReservationEntity {
+  @Column({ type: "nvarchar", length: 255, nullable: true })
+  name: string | null;
+
+  @Column({ type: "nvarchar", length: 240, nullable: true })
+  description: string | null;
+
+  @Column({ type: "nvarchar", length: 500, nullable: true })
+  notes: string | null;
+
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
@@ -24,7 +32,7 @@ export class ReservationEntity {
   @JoinColumn({ name: "animal_id" })
   animal: AnimalEntity;
 
-  @RelationId((reservation: ReservationEntity) => reservation.animal)
+  @Column({ name: "animal_id", type: "uniqueidentifier", nullable: true })
   animalId: string | null;
 
   @ManyToOne(() => UsersEntity)

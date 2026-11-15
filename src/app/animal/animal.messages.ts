@@ -1,0 +1,17 @@
+/** Public messages for animal business validation and lookups. */
+export enum AnimalMessage {
+  NotFound = "Animal not found",
+  InvalidOwner = "Owner must be a client",
+  MissingOwner = "Animal has no owner",
+  NullRequiredField = "A required animal field cannot be null",
+  FutureBirthDate = "Birth date cannot be in the future",
+  SexAliasConflict = "sex conflicts with gender",
+  ImageAliasConflict = "imageUrl conflicts with image",
+  InvalidSpecies = "Provide a valid speciesId or an existing legacy type",
+  InvalidBreed = "Unknown breed",
+  BreedSpeciesMismatch = "Breed does not belong to this species",
+  SpeciesAliasConflict = "type conflicts with speciesId",
+  BreedAliasConflict = "breed conflicts with breedId",
+  NullTaxonomyLabel = "Taxonomy identifiers and legacy labels cannot be null; use breedId:null to clear a breed",
+  Deleted = "Animal deleted successfully",
+}

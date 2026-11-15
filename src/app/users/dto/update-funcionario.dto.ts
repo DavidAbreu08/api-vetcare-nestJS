@@ -1,3 +1,4 @@
+import { DescriptiveMetadataDto } from "../../core/dto/metadata.dto";
 import { Type } from "class-transformer";
 import {
   IsBoolean,
@@ -14,7 +15,7 @@ import {
 } from "class-validator";
 import { Function } from "src/app/core/enums/function.enum";
 
-export class UpdateFuncionarioDto {
+export class UpdateFuncionarioDto extends DescriptiveMetadataDto {
   @IsOptional()
   @IsString({ message: "O nome deve ser uma string" })
   @MinLength(2, { message: "O nome deve ter pelo menos 2 caracteres" })

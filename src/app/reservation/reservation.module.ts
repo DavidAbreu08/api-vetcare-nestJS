@@ -1,6 +1,7 @@
 import { ClinicController } from "./clinic.controller";
 import { Module } from "@nestjs/common";
 import { ReservationService } from "./reservation.service";
+import { ReservationBusinessService } from "./reservation.business.service";
 import { ReservationController } from "./reservation.controller";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { AnimalEntity } from "../animal/entities/animal.entity";
@@ -20,7 +21,7 @@ import { EmailModule } from "src/email/email.module";
     ]),
     EmailModule,
   ],
-  providers: [ReservationService, TimeUtilsService],
+  providers: [ReservationService, ReservationBusinessService, TimeUtilsService],
   controllers: [ReservationController, ClinicController],
 })
 export class ReservationModule {}

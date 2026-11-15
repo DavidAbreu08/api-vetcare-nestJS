@@ -1,24 +1,99 @@
-﻿import { IsBoolean, IsDateString, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min, ValidateIf, Matches } from "class-validator";
+import { IsBoolean, IsDateString, IsNotEmpty, IsOptional, IsString, IsUUID, Matches, MaxLength, ValidateIf } from "class-validator";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
+/**
+ * Creates an animal belonging to an existing client.
+ * Prefer speciesId/breedId and birthDate; species and breed labels remain catalog lookup aliases.
+ * Physical measurements are written through the measurements resource.
+ */
 export class CreateAnimalDto {
-  @IsString() @IsNotEmpty() @MaxLength(255) name: string;
-  @ValidateIf(o => o.type == null || o.speciesId != null) @IsUUID() speciesId?: string;
-  @IsOptional() @IsUUID() breedId?: string | null;
-  @IsOptional() @IsDateString({ strict: true }) @Matches(/^\d{4}-\d{2}-\d{2}$/) birthDate?: string | null;
-  @IsString() @MaxLength(255) color: string;
-  @IsNumber({ maxDecimalPlaces: 3 }) @Min(0) weight: number;
-  @IsNumber({ maxDecimalPlaces: 3 }) @Min(0) height: number;
-  @IsOptional() @IsString() @MaxLength(255) description?: string | null;
-  @IsOptional() @IsString() imageUrl?: string | null;
-  @ValidateIf(o => o.gender == null || o.sex != null) @IsString() @IsNotEmpty() @MaxLength(255) sex?: string;
-  @IsOptional() @IsString() @MaxLength(255) microchipNumber?: string | null;
-  @IsOptional() @IsBoolean() isNeutered?: boolean | null;
-  @IsUUID() ownerId: string;
+  @ApiProperty({ description: "Animal display name", example: "Rex", maxLength: 255 })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  name: string;
 
-  // Temporary compatibility for existing clients; taxonomy must already exist.
-  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(255) type?: string;
-  @IsOptional() @IsString() @MaxLength(255) breed?: string;
-  @IsOptional() @IsInt() @Min(0) age?: number;
-  @IsOptional() @IsString() @MaxLength(255) gender?: string;
-  @IsOptional() @IsString() image?: string;
+  @ApiPropertyOptional({ description: "Existing species UUID; required unless legacy type identifies an existing species", format: "uuid" })
+  @ValidateIf(dto => dto.type == null || dto.speciesId != null)
+  @IsUUID()
+  speciesId?: string;
+
+  @ApiPropertyOptional({ description: "Breed UUID belonging to speciesId; null means no breed specified", format: "uuid", nullable: true })
+  @IsOptional()
+  @IsUUID()
+  breedId?: string | null;
+
+  @ApiPropertyOptional({ description: "Known birth date, YYYY-MM-DD, not in the future; null means unknown", example: "2022-06-15", nullable: true })
+  @IsOptional()
+  @IsDateString({ strict: true })
+  @Matches(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/)
+  birthDate?: string | null;
+
+  @ApiProperty({ description: "Coat color", example: "Brown", maxLength: 255 })
+  @IsString()
+  @MaxLength(255)
+  color: string;
+
+  @ApiPropertyOptional({ description: "Additional animal information", maxLength: 255, nullable: true })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  description?: string | null;
+
+  @ApiPropertyOptional({ description: "Animal notes", maxLength: 500, nullable: true })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  notes?: string | null;
+
+  @ApiPropertyOptional({ description: "Image reference; legacy embedded data URLs are still supported", nullable: true })
+  @IsOptional()
+  @IsString()
+  imageUrl?: string | null;
+
+  @ApiPropertyOptional({ description: "Sex description; required unless legacy gender is supplied", example: "Female", maxLength: 255 })
+  @ValidateIf(dto => dto.gender == null || dto.sex != null)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  sex?: string;
+
+  @ApiPropertyOptional({ description: "Microchip identifier; no global uniqueness policy is assumed", maxLength: 255, nullable: true })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  microchipNumber?: string | null;
+
+  @ApiPropertyOptional({ description: "Whether the animal is neutered; null means unknown", nullable: true })
+  @IsOptional()
+  @IsBoolean()
+  isNeutered?: boolean | null;
+
+  @ApiProperty({ description: "Existing client owner UUID", format: "uuid" })
+  @IsUUID()
+  ownerId: string;
+
+  @ApiPropertyOptional({ description: "Legacy species label; must match an existing catalog entry", deprecated: true, maxLength: 255 })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  type?: string;
+
+  @ApiPropertyOptional({ description: "Legacy breed label within the selected species; blank means no breed", deprecated: true, maxLength: 255 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  breed?: string;
+
+  @ApiPropertyOptional({ description: "Legacy alias for sex", deprecated: true, maxLength: 255 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  gender?: string;
+
+  @ApiPropertyOptional({ description: "Legacy alias for imageUrl", deprecated: true })
+  @IsOptional()
+  @IsString()
+  image?: string;
 }

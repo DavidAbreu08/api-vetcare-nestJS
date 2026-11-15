@@ -1,3 +1,4 @@
+import { AuthMessages } from "./auth.messages";
 import { HttpStatus, Injectable, UnauthorizedException } from "@nestjs/common";
 import { UsersEntity } from "src/app/users/entities/users.entity";
 import { UsersService } from "src/app/users/users.service";
@@ -22,7 +23,7 @@ export class AuthService {
       email: user.email,
     });
     if (!userEntity || !userEntity.isActive) {
-      throw new UnauthorizedException("Invalid credentials");
+      throw new UnauthorizedException(AuthMessages.INVALID_CREDENTIALS);
     }
     const payload = { sub: user.id, email: user.email, name: user.name };
 
@@ -43,7 +44,7 @@ export class AuthService {
 
   async validateJwtUser(id: string) {
     const user = await this.userService.findOneOrFail({ id });
-    if (!user || !user.isActive) throw new UnauthorizedException("User not Found!");
+    if (!user || !user.isActive) throw new UnauthorizedException(AuthMessages.USER_NOT_FOUND_AUTHENTICATION);
     const currentUser: CurrentUser = {
       id: user.id,
       email: user.email,
@@ -70,17 +71,17 @@ export class AuthService {
   ) {
     const user = await this.userService.findForAuthentication({ id });
     if (!user) {
-      throw new UnauthorizedException("User not Found!");
+      throw new UnauthorizedException(AuthMessages.USER_NOT_FOUND_AUTHENTICATION);
     }
 
     const isPasswordValid = compareSync(oldPassword, user.password);
 
     if (!isPasswordValid)
-      throw new UnauthorizedException("Old Password is invalid!");
+      throw new UnauthorizedException(AuthMessages.INVALID_OLD_PASSWORD);
 
     if (newPassword !== confirmNewPassword)
       throw new UnauthorizedException(
-        "New Password and Confirm New Password must be the same!"
+        AuthMessages.PASSWORD_CONFIRMATION_MISMATCH
       );
 
     const newHashedPassword = await hashSync(newPassword, 10);
@@ -90,7 +91,7 @@ export class AuthService {
 
     return {
       statusCode: HttpStatus.ACCEPTED,
-      message: "Password changed successfully!",
+      message: AuthMessages.PASSWORD_CHANGED,
     };
   }
 
@@ -115,13 +116,13 @@ export class AuthService {
       // Send the email
       await this.emailService.sendResetPasswordEmail(user.email, token);
 
-      return { message: "If this user exists, they will receive an email!" };
-    } catch (err) {
-      console.error("Error occurred during password reset:", err);
+      return { message: AuthMessages.PASSWORD_RESET_REQUESTED };
+    } catch {
+      console.error(AuthMessages.PASSWORD_RESET_FAILED);
     }
 
     return {
-      message: "If this user exists, they will receive an email!",
+      message: AuthMessages.PASSWORD_RESET_REQUESTED,
     };
   }
 
@@ -135,22 +136,22 @@ export class AuthService {
       relations: ["user"],
     });
     if (!resetTokenEntity) {
-      throw new UnauthorizedException("Invalid or expired reset token");
+      throw new UnauthorizedException(AuthMessages.INVALID_RESET_TOKEN);
     }
 
     if (resetTokenEntity.expiresAt < new Date()) {
-      throw new UnauthorizedException("Reset token has expired");
+      throw new UnauthorizedException(AuthMessages.EXPIRED_RESET_TOKEN);
     }
 
     if (newPassword !== confirmNewPassword) {
       throw new UnauthorizedException(
-        "New Password and Confirm New Password must be the same!"
+        AuthMessages.PASSWORD_CONFIRMATION_MISMATCH
       );
     }
     const user = resetTokenEntity.user;
 
     if (!user) {
-      throw new UnauthorizedException("User not found");
+      throw new UnauthorizedException(AuthMessages.USER_NOT_FOUND);
     }
 
     user.password = await hashSync(newPassword, 10);
@@ -161,7 +162,7 @@ export class AuthService {
 
     return {
       statusCode: HttpStatus.ACCEPTED,
-      message: "Password reset successfully!",
+      message: AuthMessages.PASSWORD_RESET,
     };
   }
 }

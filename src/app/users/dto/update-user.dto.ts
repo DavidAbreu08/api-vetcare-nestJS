@@ -1,7 +1,8 @@
+import { DescriptiveMetadataDto } from "../../core/dto/metadata.dto";
 import { Type } from "class-transformer";
 import { IsInt, IsOptional, IsString, Max, Min } from "class-validator";
 
-export class UpdateUserDto {
+export class UpdateUserDto extends DescriptiveMetadataDto {
   @IsOptional()
   @IsString()
   name: string;

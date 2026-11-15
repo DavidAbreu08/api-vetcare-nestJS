@@ -2,6 +2,15 @@ import { Column, Entity, PrimaryGeneratedColumn } from "typeorm";
 
 @Entity("vc_blocked_times")
 export class BlockedTimeEntity {
+  @Column({ type: "nvarchar", length: 255, nullable: true })
+  name: string | null;
+
+  @Column({ type: "nvarchar", length: 240, nullable: true })
+  description: string | null;
+
+  @Column({ type: "nvarchar", length: 500, nullable: true })
+  notes: string | null;
+
   @PrimaryGeneratedColumn("uuid")
   id: string;
 

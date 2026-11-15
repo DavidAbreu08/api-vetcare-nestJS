@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from "@nestjs/common";
@@ -24,6 +25,7 @@ import { RolesGuard } from "../core/guards/roles/roles.guard";
 import { CreateEmployeesDto } from "./dto/create-employees.dto";
 import { CreateClientDto } from "./dto/create-client.dto";
 import { UpdateFuncionarioDto } from "./dto/update-funcionario.dto";
+import { ListUsersQueryDto } from "./dto/list-users-query.dto";
 
 @Controller("api/users")
 export class UsersController {
@@ -31,8 +33,8 @@ export class UsersController {
   @Get()
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(Role.ADMIN)
-  async index() {
-    return await this.usersService.findAll();
+  async index(@Query() query: ListUsersQueryDto) {
+    return await this.usersService.getAll(query);
   }
 
   @Get("available/:date")
@@ -56,7 +58,7 @@ export class UsersController {
 
   @Post()
   async store(@Body() body: CreateUserDto) {
-    return await this.usersService.store(body);
+    return await this.usersService.create(body);
   }
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
@@ -77,7 +79,7 @@ export class UsersController {
   @Get(":id")
   async show(@Param("id", new ParseUUIDPipe()) id: string, @CurrentUser() actor: Actor) {
     requireOwnerOrAdmin(actor, id);
-    return await this.usersService.findOneOrFail({ id });
+    return await this.usersService.getById(id);
   }
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
@@ -89,6 +91,13 @@ export class UsersController {
   ) {
     requireOwnerOrAdmin(actor, id);
     return await this.usersService.update(id, body);
+  }
+
+  @Put(":id")
+  @UseGuards(AuthGuard("jwt"), RolesGuard)
+  async replace(@Param("id", new ParseUUIDPipe()) id: string, @Body() body: UpdateUserDto, @CurrentUser() actor: Actor) {
+    requireOwnerOrAdmin(actor, id);
+    return this.usersService.update(id, body);
   }
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
@@ -107,6 +116,6 @@ export class UsersController {
   @Roles(Role.ADMIN)
   @Delete(":id")
   async destroy(@Param("id", new ParseUUIDPipe()) id: string) {
-    await this.usersService.destroy(id);
+    await this.usersService.delete(id);
   }
 }

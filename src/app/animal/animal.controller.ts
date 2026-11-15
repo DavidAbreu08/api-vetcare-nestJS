@@ -1,66 +1,57 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Put,
-  UseGuards,
-} from "@nestjs/common";
-import { Actor } from "../core/authorization";
-import { AnimalService } from "./animal.service";
-import { CreateAnimalDto } from "./dto/create-animal.dto";
-import { UpdateAnimalDto } from "./dto/update-animal.dto";
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Put, Query, UseGuards } from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
+import { Actor } from "../core/authorization";
 import { CurrentUser } from "../core/decorators/current-user.decorator";
-import { UsersEntity } from "../users/entities/users.entity";
 import { RolesGuard } from "../core/guards/roles/roles.guard";
 import { Roles } from "../core/decorators/roles.decorator";
 import { Role } from "../core/enums/role.enum";
+import { AnimalService } from "./animal.service";
+import { CreateAnimalDto } from "./dto/create-animal.dto";
+import { UpdateAnimalDto } from "./dto/update-animal.dto";
+import { ListAnimalsQueryDto } from "./dto/list-animals-query.dto";
 
 @Controller("api/animal")
+@UseGuards(AuthGuard("jwt"), RolesGuard)
 export class AnimalController {
-  constructor(private readonly animalService: AnimalService) {}
+  constructor(private readonly service: AnimalService) {}
 
-  @UseGuards(AuthGuard("jwt"))
+  @Get()
+  getAll(@Query() query: ListAnimalsQueryDto, @CurrentUser() actor: Actor) { return this.service.getAll(query, actor); }
+
+  @Post()
+  create(@Body() dto: CreateAnimalDto, @CurrentUser() actor: Actor) { return this.service.create(dto, actor); }
+
+  // Static compatibility routes precede the generic identifier route.
   @Post("create")
-  async create(@Body() dto: CreateAnimalDto, @CurrentUser() user: UsersEntity) {
-    return this.animalService.create(dto, user);
-  }
+  createLegacy(@Body() dto: CreateAnimalDto, @CurrentUser() actor: Actor) { return this.service.create(dto, actor); }
 
-  @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @Patch("update/:id")
-  async update(@Param("id") id: string, @Body() dto: UpdateAnimalDto, @CurrentUser() actor: Actor) {
-    return this.animalService.update(id, dto, actor);
-  }
-
-  @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @Roles(Role.ADMIN)
-  @Put("confirm/:id")
-  async confirm(@Param("id") id: string) {
-    return this.animalService.confirm(id);
-  }
-
-  @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @Roles(Role.ADMIN)
   @Get("all")
-  async findAll() {
-    return this.animalService.findAll();
-  }
+  @Roles(Role.ADMIN)
+  findAll() { return this.service.findAll(); }
 
-  @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
   @Get("owner/:ownerId")
-  async findByOwner(@Param("ownerId") ownerId: string, @CurrentUser() actor: Actor) {
-    return this.animalService.findByOwner(ownerId, actor);
+  findByOwner(@Param("ownerId", ParseUUIDPipe) ownerId: string, @CurrentUser() actor: Actor) {
+    return this.service.findByOwner(ownerId, actor);
   }
 
-  @UseGuards(AuthGuard("jwt"), RolesGuard)
+  @Put("confirm/:id")
+  @Roles(Role.ADMIN)
+  confirm(@Param("id", ParseUUIDPipe) id: string) { return this.service.confirm(id); }
+
+  @Patch("update/:id")
+  updateLegacy(@Param("id", ParseUUIDPipe) id: string, @Body() dto: UpdateAnimalDto, @CurrentUser() actor: Actor) {
+    return this.service.update(id, dto, actor);
+  }
+
+  @Get(":id")
+  getById(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() actor: Actor) { return this.service.getById(id, actor); }
+
+  @Put(":id")
+  update(@Param("id", ParseUUIDPipe) id: string, @Body() dto: UpdateAnimalDto, @CurrentUser() actor: Actor) {
+    return this.service.update(id, dto, actor);
+  }
+
   @Delete(":id")
   @Roles(Role.ADMIN)
-  async deleteAnimal(@Param("id") id: string) {
-    return this.animalService.delete(id);
-  }
+  delete(@Param("id", ParseUUIDPipe) id: string) { return this.service.delete(id); }
 }

@@ -17,6 +17,12 @@ import { AnimalEntity } from "src/app/animal/entities/animal.entity";
 
 @Entity({ name: "vc_users" })
 export class UsersEntity {
+  @Column({ type: "nvarchar", length: 240, nullable: true })
+  description: string | null;
+
+  @Column({ type: "nvarchar", length: 500, nullable: true })
+  notes: string | null;
+
   @PrimaryGeneratedColumn("uuid")
   id: string;
 

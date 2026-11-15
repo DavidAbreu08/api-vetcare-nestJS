@@ -1,18 +1,17 @@
+import { MeasurementModule } from "../animal-measurements/measurement.module";
 import { Module } from "@nestjs/common";
-import { AnimalService } from "./animal.service";
-import { AnimalController } from "./animal.controller";
-import { UsersEntity } from "../users/entities/users.entity";
 import { TypeOrmModule } from "@nestjs/typeorm";
+import { UsersEntity } from "../users/entities/users.entity";
+import { SpeciesModule } from "../species/species.module";
+import { BreedsModule } from "../breeds/breeds.module";
 import { AnimalEntity } from "./entities/animal.entity";
-
-import { SpeciesEntity } from "./entities/species.entity";
-import { BreedEntity } from "./entities/breed.entity";
-import { TaxonomyService } from "./taxonomy.service";
-import { SpeciesController, BreedsController } from "./taxonomy.controller";
+import { AnimalService } from "./animal.service";
+import { AnimalBusinessService } from "./animal.business.service";
+import { AnimalController } from "./animal.controller";
 
 @Module({
-  imports: [TypeOrmModule.forFeature([AnimalEntity, UsersEntity, SpeciesEntity, BreedEntity])],
-  controllers: [AnimalController, SpeciesController, BreedsController],
-  providers: [AnimalService, TaxonomyService],
+  imports: [TypeOrmModule.forFeature([AnimalEntity, UsersEntity]), SpeciesModule, BreedsModule, MeasurementModule],
+  controllers: [AnimalController],
+  providers: [AnimalService, AnimalBusinessService],
 })
 export class AnimalModule {}

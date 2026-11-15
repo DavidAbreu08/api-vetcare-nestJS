@@ -9,11 +9,13 @@ import { EmailModule } from "./email/email.module";
 import { AnimalModule } from "./app/animal/animal.module";
 import { ReservationModule } from "./app/reservation/reservation.module";
 import { BlockedTimeModule } from "./app/reservation/blocked-time.module";
+import { PersistenceModule } from "./app/core/persistence/persistence.module";
 
 @Module({
   imports: [
     ConfigModule.forRoot({ envFilePath: databaseEnvFile(), isGlobal: true }),
     TypeOrmModule.forRoot(databaseOptions()),
+    PersistenceModule,
     UsersModule,
     AuthModule,
     EmailModule,

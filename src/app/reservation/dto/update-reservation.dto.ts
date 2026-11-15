@@ -1,3 +1,4 @@
+import { NamedMetadataDto } from "../../core/dto/metadata.dto";
 import {
   IsDateString,
   IsEnum,
@@ -8,7 +9,7 @@ import {
 } from "class-validator";
 import { ReservationStatus } from "src/app/core/enums/reservation-status.enum";
 
-export class UpdateReservationStatusDto {
+export class UpdateReservationStatusDto extends NamedMetadataDto {
   @IsOptional()
   @IsEnum(ReservationStatus)
   status?: ReservationStatus;
@@ -16,17 +17,17 @@ export class UpdateReservationStatusDto {
   @IsOptional()
   @IsDateString()
   @Matches(/^\d{4}-\d{2}-\d{2}$/)
-  newDate: Date;
+  newDate?: Date;
 
   @IsOptional()
   @IsString()
   @Matches(/^([01]\d|2[0-3]):([0-5]\d)$/) // HH:mm format
-  newTimeStart: string;
+  newTimeStart?: string;
 
   @IsOptional()
   @IsString()
   @Matches(/^([01]\d|2[0-3]):([0-5]\d)$/) // HH:mm format
-  newTimeEnd: string;
+  newTimeEnd?: string;
 
   @IsOptional()
   @IsString()

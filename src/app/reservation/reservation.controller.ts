@@ -5,6 +5,10 @@ import {
   Param,
   Patch,
   Post,
+  Put,
+  Delete,
+  Query,
+  ParseUUIDPipe,
   UseGuards,
 } from "@nestjs/common";
 import { Actor } from "../core/authorization";
@@ -18,11 +22,37 @@ import { CurrentUser } from "../core/decorators/current-user.decorator";
 import { UpdateReservationStatusDto } from "./dto/update-reservation.dto";
 import { ConfirmRescheduleDto } from "./dto/confirm-reschedule.dto";
 import { ConfirmPendingDto } from "./dto/confirm-pending.dto";
+import { ListReservationsQueryDto } from "./dto/list-reservations-query.dto";
 
 @Controller("api/reservation")
 @UseGuards(AuthGuard("jwt"), RolesGuard)
 export class ReservationController {
   constructor(private readonly reservationService: ReservationService) {}
+
+  @Get()
+  @Roles(Role.ADMIN)
+  findAll(@Query() query: ListReservationsQueryDto) {
+    return this.reservationService.getAll(query);
+  }
+
+  @Post()
+  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
+  createAtBase(@CurrentUser() actor: Actor, @Body() dto: CreateReservationDto) {
+    return this.reservationService.create(dto, actor.id);
+  }
+
+  @Put(":id")
+  @Roles(Role.ADMIN)
+  update(@Param("id", ParseUUIDPipe) id: string, @Body() dto: UpdateReservationStatusDto) {
+    return this.reservationService.update(id, dto);
+  }
+
+  /** Cancel an appointment while preserving its history and transition rules. */
+  @Delete(":id")
+  @Roles(Role.ADMIN)
+  cancel(@Param("id", ParseUUIDPipe) id: string) {
+    return this.reservationService.delete(id);
+  }
 
   @Post("create")
   @Roles(Role.CLIENTE, Role.FUNCIONARIO, Role.ADMIN)
@@ -94,6 +124,12 @@ export class ReservationController {
     @Body("note") note?: string
   ) {
     return await this.reservationService.rejectRescheduledReservation(id, actor, note);
+  }
+
+  @Get(":id")
+  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.CLIENTE)
+  findOne(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() actor: Actor) {
+    return this.reservationService.getById(id, actor);
   }
 
 
