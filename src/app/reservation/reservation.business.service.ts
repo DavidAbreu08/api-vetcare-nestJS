@@ -48,7 +48,7 @@ const ACTIVE_VISIT_STATUSES = [ClinicalVisitStatus.IN_PROGRESS, ClinicalVisitSta
  * Creation, confirmation and reschedule lock the animal and the client account and re-check them (not deleted,
  * active), serializing with animal deletion and account deactivation/deletion, which lock those rows and then
  * read open reservations. Every flow that assigns or confirms an employee locks the employee profile, serializing
- * with termination/unavailability (PUT /api/employees/:id) and account deactivation, which lock it and then read
+ * with termination/unavailability (PUT /api/vetcare/employees/:id) and account deactivation, which lock it and then read
  * the employee's open reservations. Those readers never lock reservations, so no cycle can form.
  *
  * Access: administrators see and manage everything; an active employee sees the reservations assigned to them;

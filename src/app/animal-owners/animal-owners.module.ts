@@ -6,7 +6,7 @@ import { AnimalOwnersBusinessService } from "./animal-owners.business.service";
 import { AnimalOwnersController } from "./animal-owners.controller";
 
 /**
- * Tutorship management routes (/api/animal/:id/owners, /api/animal/:id/transfer). Depends only on leaf modules
+ * Tutorship management routes (/api/vetcare/animal/:id/owners, /api/vetcare/animal/:id/transfer). Depends only on leaf modules
  * (access, roles, reservation history), so AnimalModule can import it without a cycle.
  */
 @Module({

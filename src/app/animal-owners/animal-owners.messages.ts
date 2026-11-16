@@ -10,7 +10,7 @@ export enum AnimalOwnersMessage {
   AlreadyPrimary = "The account is already the primary tutor of this animal",
   NotTutor = "The account is not an active tutor of this animal",
   PrimaryNotRemovable = "The primary tutor cannot be removed; transfer the animal to another primary tutor first",
-  NoPrimary = "The animal has no primary tutor; an administrator must assign one through POST /api/animal/:id/transfer",
+  NoPrimary = "The animal has no primary tutor; an administrator must assign one through POST /api/vetcare/animal/:id/transfer",
   PrimaryInactive = "The primary tutor's account is inactive or deleted; reservations cannot be moved to it",
   PreviousTutorUnavailable = "The previous primary tutor's account no longer exists; it cannot be kept as a secondary tutor",
   FutureReservations = "The tutor is the client of pending or confirmed reservations of this animal not yet finished; send transferFutureReservations: true to move them, or cancel them first",

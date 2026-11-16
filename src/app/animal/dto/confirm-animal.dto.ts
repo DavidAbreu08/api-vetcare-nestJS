@@ -2,7 +2,7 @@ import { ApiPropertyOptional } from "@nestjs/swagger";
 import { IsOptional, IsUUID, ValidateIf } from "class-validator";
 
 /**
- * Optional body of PUT /api/animal/confirm/:id: the species and breed the approver reviewed. When sent, the approval
+ * Optional body of PUT /api/vetcare/animal/confirm/:id: the species and breed the approver reviewed. When sent, the approval
  * only succeeds if the stored values still match (409 ANIMAL_DATA_CHANGED otherwise); omitted fields are not checked.
  */
 export class ConfirmAnimalDto {
@@ -11,7 +11,7 @@ export class ConfirmAnimalDto {
   @IsUUID()
   expectedSpeciesId?: string;
 
-  @ApiPropertyOptional({ description: "Breed UUID the approver reviewed; null means the animal had no breed", format: "uuid", nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Breed UUID the approver reviewed; null means the animal had no breed", format: "uuid", nullable: true })
   @ValidateIf((_dto, value) => value !== undefined && value !== null)
   @IsUUID()
   expectedBreedId?: string | null;

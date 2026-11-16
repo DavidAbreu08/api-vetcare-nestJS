@@ -181,7 +181,7 @@ export class EmployeesBusinessService {
   /**
    * EMPLOYEE follows the profile in the same transaction: an active profile (termination absent or in the
    * future) gets it (again) and a terminated one loses it. The profile row is locked (UPDLOCK) so this
-   * serializes with PUT /api/users/:id/roles and with reservation assignment/confirmation without relying on
+   * serializes with PUT /api/vetcare/users/:id/roles and with reservation assignment/confirmation without relying on
    * blocking reads. Termination or unavailability with open reservations assigned returns 409 (their ids).
    */
   async update(id: string, dto: UpdateEmployeeDto, actor: Actor) {

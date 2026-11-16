@@ -9,10 +9,10 @@ export const UsersMessages = {
   INVALID_ROLES: "Roles must exist; new assignments require active roles",
   LAST_ADMIN: "At least one active administrator must remain",
   EMPLOYEE_ROLE_REQUIRED: "Users with an active employee profile must keep the employee role",
-  ACTIVE_EMPLOYEE_PROFILE: "This user has an active employee profile; terminate or delete the profile through /api/employees first",
+  ACTIVE_EMPLOYEE_PROFILE: "This user has an active employee profile; terminate or delete the profile through /api/vetcare/employees first",
   CLIENT_OPEN_RESERVATIONS: "The client has pending or confirmed reservations not yet finished; cancel them before deactivating or deleting the account",
   EMPLOYEE_OPEN_RESERVATIONS: "The account's employee profile has pending or confirmed reservations not yet finished assigned; cancel or reassign them first",
   INACTIVE_ACCOUNT_ROLES: "Roles cannot be assigned to an inactive account; reactivate it first",
-  PRIMARY_TUTOR_OF_ANIMALS: "The account is the primary tutor of animals; transfer them to another primary tutor (POST /api/animal/:id/transfer) first",
-  EMPLOYEE_ROLE_WITHOUT_PROFILE: "The employee role requires an active employee profile; create or reactivate it through /api/employees",
+  PRIMARY_TUTOR_OF_ANIMALS: "The account is the primary tutor of animals; transfer them to another primary tutor (POST /api/vetcare/animal/:id/transfer) first",
+  EMPLOYEE_ROLE_WITHOUT_PROFILE: "The employee role requires an active employee profile; create or reactivate it through /api/vetcare/employees",
 } as const;

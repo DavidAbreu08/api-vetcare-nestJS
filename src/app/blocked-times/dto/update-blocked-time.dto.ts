@@ -1,4 +1,4 @@
-import { PartialType } from "@nestjs/mapped-types";
+import { PartialType } from "@nestjs/swagger";
 import { CreateBlockedTimeDto } from "./create-blocked-time.dto";
 
 /** Update selected fields of a global clinic time block. */

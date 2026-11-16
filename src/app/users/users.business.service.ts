@@ -132,7 +132,7 @@ export class UsersBusinessService {
     return { id: user.id, email: user.email, name: user.name, roleIds, ...flags, isEmployee, employeeId: employee?.id ?? null };
   }
 
-  /** Contract of GET /api/auth/me: account, active roles and employee profile (or null). */
+  /** Contract of GET /api/vetcare/auth/me: account, active roles and employee profile (or null). */
   async getAccountProfile(id: string) {
     const user = await this.findOneOrFail({ id });
     const roles = await this.membership.activeRolesOf(user.id);
@@ -349,7 +349,7 @@ export class UsersBusinessService {
 
   /**
    * EMPLOYEE follows the employee profile: required while it is active, never granted without one.
-   * The profile row is locked (UPDLOCK) so the check serializes with PUT /api/employees/:id even when
+   * The profile row is locked (UPDLOCK) so the check serializes with PUT /api/vetcare/employees/:id even when
    * reads do not block (READ_COMMITTED_SNAPSHOT).
    */
   private async assertEmployeeRoleMatchesProfile(manager: EntityManager, userId: string, hadRole: boolean, keepsRole: boolean) {

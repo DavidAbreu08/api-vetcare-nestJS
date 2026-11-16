@@ -19,7 +19,7 @@ export class AddAnimalOwnerDto {
   userId: string;
 }
 
-/** Body and/or query of DELETE /api/animal/:id/owners/:userId. */
+/** Body and/or query of DELETE /api/vetcare/animal/:id/owners/:userId. */
 export class RemoveAnimalOwnerDto {
   @ApiPropertyOptional({ description: "Move the tutor's open reservations of this animal to the primary tutor (409 otherwise)", default: false })
   @IsOptional()

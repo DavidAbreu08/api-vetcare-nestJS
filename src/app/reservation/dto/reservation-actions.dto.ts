@@ -4,7 +4,7 @@ import { IsoInstant } from "./create-reservation.dto";
 
 /** Optional justification recorded in the reservation history (and sent in the notification when applicable). */
 export class ReservationReasonDto {
-  @ApiPropertyOptional({ maxLength: 500, nullable: true })
+  @ApiPropertyOptional({ type: String, maxLength: 500, nullable: true })
   @IsOptional()
   @IsString()
   @MaxLength(500)

@@ -1,3 +1,4 @@
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiBadRequestResponse, ApiResponse } from "@nestjs/swagger";
 import {
   Body,
   Controller,
@@ -27,13 +28,17 @@ import { ListUsersQueryDto } from "./dto/list-users-query.dto";
 import { ReplaceUserRolesDto } from "./dto/replace-user-roles.dto";
 import { ResponseMessage } from "../core/decorators/response-message.decorator";
 import { UsersMessages } from "./users.messages";
+import { CheckEmailQueryDto } from "./dto/check-email-query.dto";
 
-/** Account data only; employee profiles live in /api/employees. */
-@Controller("api/users")
+/** Account data only; employee profiles live in /api/vetcare/employees. */
+@Controller("users")
+@ApiTags("Utilizadores")
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Get()
+  @ApiOperation({ summary: "Listar utilizadores" })
+  @ApiBearerAuth("bearer")
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(SystemRole.ADMIN)
   async index(@Query() query: ListUsersQueryDto) {
@@ -41,6 +46,8 @@ export class UsersController {
   }
 
   @Get("clients")
+  @ApiOperation({ summary: "Listar contas de clientes" })
+  @ApiBearerAuth("bearer")
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(SystemRole.ADMIN, SystemRole.EMPLOYEE)
   async getAllClients() {
@@ -48,18 +55,34 @@ export class UsersController {
   }
 
   @Get("check-email")
-  async checkEmail(@Query("email") email: string): Promise<boolean> {
-    return this.usersService.checkEmailExists(email);
+  @ApiOperation({ summary: "Verificar se um email está registado", description: "Operação pública. Email obrigatório e válido; entrada ausente ou inválida devolve 400." })
+  @ApiBadRequestResponse({ description: "Email obrigatório e válido." })
+  @ApiResponse({ status: HttpStatus.OK, description: "Indica se o email está registado.", schema: { type: "boolean" } })
+  async checkEmail(@Query() query: CheckEmailQueryDto): Promise<boolean> {
+    return this.usersService.checkEmailExists(query.email);
   }
 
   @Post()
+  @ApiOperation({ summary: "Criar utilizador" })
   async store(@Body() body: CreateUserDto) {
     return await this.usersService.create(body);
   }
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(SystemRole.ADMIN)
+  @Post("clients")
+  @ApiOperation({ summary: "Criar uma conta de cliente", description: "Operação reservada a administradores. Cria a conta e envia as instruções de acesso." })
+  @ApiBearerAuth("bearer")
+  @ResponseMessage(UsersMessages.CLIENT_CREATED)
+  async createClient(@Body() body: CreateClientDto, @CurrentUser() actor: Actor) {
+    return this.usersService.storeClient(body, actor);
+  }
+
+  @UseGuards(AuthGuard("jwt"), RolesGuard)
+  @Roles(SystemRole.ADMIN)
   @Post("create-clients")
+  @ApiOperation({ summary: "Criar uma conta de cliente", description: "Rota legada reservada a administradores; preferir POST /api/vetcare/users/clients.", deprecated: true })
+  @ApiBearerAuth("bearer")
   @ResponseMessage(UsersMessages.CLIENT_CREATED)
   async storeClients(@Body() body: CreateClientDto, @CurrentUser() actor: Actor) {
     return await this.usersService.storeClient(body, actor);
@@ -67,6 +90,9 @@ export class UsersController {
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Get(":id/roles")
+  @ApiOperation({ summary: "Consultar os perfis de acesso do utilizador" })
+  @ApiBearerAuth("bearer")
+  @ApiParam({ name: "id", description: "Identificador UUID", schema: { type: "string", format: "uuid" } })
   async getRoles(@Param("id", new ParseUUIDPipe()) id: string, @CurrentUser() actor: Actor) {
     requireOwnerOrAdmin(actor, id);
     return this.usersService.getRoles(id);
@@ -76,12 +102,18 @@ export class UsersController {
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(SystemRole.ADMIN)
   @Put(":id/roles")
+  @ApiOperation({ summary: "Substituir os perfis de acesso do utilizador" })
+  @ApiBearerAuth("bearer")
+  @ApiParam({ name: "id", description: "Identificador UUID", schema: { type: "string", format: "uuid" } })
   async replaceRoles(@Param("id", new ParseUUIDPipe()) id: string, @Body() body: ReplaceUserRolesDto, @CurrentUser() actor: Actor) {
     return this.usersService.replaceRoles(id, body.roleIds, actor);
   }
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Get(":id")
+  @ApiOperation({ summary: "Consultar utilizador" })
+  @ApiBearerAuth("bearer")
+  @ApiParam({ name: "id", description: "Identificador UUID", schema: { type: "string", format: "uuid" } })
   async show(@Param("id", new ParseUUIDPipe()) id: string, @CurrentUser() actor: Actor) {
     requireOwnerOrAdmin(actor, id);
     return await this.usersService.getById(id);
@@ -89,6 +121,9 @@ export class UsersController {
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Patch(":id")
+  @ApiOperation({ summary: "Atualizar utilizador" })
+  @ApiBearerAuth("bearer")
+  @ApiParam({ name: "id", description: "Identificador UUID", schema: { type: "string", format: "uuid" } })
   @ResponseMessage(UsersMessages.OK)
   async update(
     @Param("id", new ParseUUIDPipe()) id: string,
@@ -100,6 +135,9 @@ export class UsersController {
   }
 
   @Put(":id")
+  @ApiOperation({ summary: "Atualizar utilizador", description: "Compatibilidade: este PUT aceita atualização parcial, tal como PATCH; os campos omitidos mantêm-se." })
+  @ApiBearerAuth("bearer")
+  @ApiParam({ name: "id", description: "Identificador UUID", schema: { type: "string", format: "uuid" } })
   @ResponseMessage(UsersMessages.OK)
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   async replace(@Param("id", new ParseUUIDPipe()) id: string, @Body() body: UpdateUserDto, @CurrentUser() actor: Actor) {
@@ -111,6 +149,9 @@ export class UsersController {
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(SystemRole.ADMIN)
   @Delete(":id")
+  @ApiOperation({ summary: "Eliminar utilizador" })
+  @ApiBearerAuth("bearer")
+  @ApiParam({ name: "id", description: "Identificador UUID", schema: { type: "string", format: "uuid" } })
   async destroy(@Param("id", new ParseUUIDPipe()) id: string, @CurrentUser() actor: Actor) {
     await this.usersService.delete(id, actor);
   }

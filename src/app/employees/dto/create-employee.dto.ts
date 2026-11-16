@@ -21,35 +21,35 @@ export class CreateEmployeeUserDto extends DescriptiveMetadataDto {
 
   @IsOptional()
   @AccountField.phone()
-  @ApiPropertyOptional({ description: "Nine-digit phone number.", nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Nine-digit phone number.", nullable: true })
   phone?: string | null;
 
   @IsOptional()
   @AccountField.birthDate()
-  @ApiPropertyOptional({ description: "Birth date, YYYY-MM-DD.", nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Birth date, YYYY-MM-DD.", nullable: true })
   birthDate?: string | null;
 
   @IsOptional()
   @AccountField.nif()
-  @ApiPropertyOptional({ description: "Nine-digit taxpayer number, as a string.", nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Nine-digit taxpayer number, as a string.", nullable: true })
   nif?: string | null;
 }
 
 /** Employment attributes; omitted fields are retained on update and null clears optional values. */
 export class EmployeeFieldsDto extends DescriptiveMetadataDto {
-  @ApiPropertyOptional({ description: "Internal employee number; unique when present.", maxLength: 30, nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Internal employee number; unique when present.", maxLength: 30, nullable: true })
   @IsOptional() @Transform(trim) @IsString() @Matches(/\S/) @MaxLength(30)
   employeeNumber?: string | null;
 
-  @ApiPropertyOptional({ description: "Professional license number.", maxLength: 50, nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Professional license number.", maxLength: 50, nullable: true })
   @IsOptional() @Transform(trim) @IsString() @Matches(/\S/) @MaxLength(50)
   licenseNumber?: string | null;
 
-  @ApiPropertyOptional({ description: "Hire date, YYYY-MM-DD.", nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Hire date, YYYY-MM-DD.", nullable: true })
   @IsOptional() @IsDateString({ strict: true }) @Matches(/^\d{4}-\d{2}-\d{2}$/)
   hireDate?: string | null;
 
-  @ApiPropertyOptional({ description: "Termination date, YYYY-MM-DD; on or after hireDate.", nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Termination date, YYYY-MM-DD; on or after hireDate.", nullable: true })
   @IsOptional() @IsDateString({ strict: true }) @Matches(/^\d{4}-\d{2}-\d{2}$/)
   terminationDate?: string | null;
 

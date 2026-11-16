@@ -24,7 +24,16 @@
 
 ## Description
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+VetCare API: gestão de uma clínica veterinária, desenvolvida com NestJS e TypeScript.
+
+A API usa o prefixo global `/api/vetcare`, por exemplo:
+
+- `POST /api/vetcare/auth/login`
+- `GET /api/vetcare/animal`
+- `GET /api/vetcare/reservations`
+- `GET /api/vetcare/clinic/hours`
+
+Swagger: `/docs`. Documento OpenAPI: `/docs-json`. Consultar o [inventário de rotas](docs/API_ROUTES.md) e o [contrato de respostas](docs/HTTP_RESPONSES.md).
 
 ## Project setup
 

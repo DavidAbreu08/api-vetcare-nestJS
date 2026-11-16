@@ -35,19 +35,19 @@ export class CreateReservationDto {
   @IsoInstant()
   endAt: string;
 
-  @ApiPropertyOptional({ description: "Reason for the appointment.", maxLength: 500, nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Reason for the appointment.", maxLength: 500, nullable: true })
   @IsOptional()
   @IsString()
   @MaxLength(500)
   reason?: string | null;
 
-  @ApiPropertyOptional({ maxLength: 240, nullable: true })
+  @ApiPropertyOptional({ type: String, maxLength: 240, nullable: true })
   @IsOptional()
   @IsString()
   @MaxLength(240)
   description?: string | null;
 
-  @ApiPropertyOptional({ description: "Free-text notes.", nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Free-text notes.", nullable: true })
   @IsOptional()
   @IsString()
   @MaxLength(100000)

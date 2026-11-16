@@ -1,4 +1,4 @@
-﻿# SQL Server schema: configurable measurements
+# SQL Server schema: configurable measurements
 
 The incremental migration `ConfigurableMeasurementTypes1794916800000` follows `AnimalMeasurementsAndMetadata1794830400000`. Existing migrations remain unchanged. No migration was executed against the database during this work. `synchronize` and `migrationsRun` remain disabled.
 
@@ -177,7 +177,7 @@ Steps:
 
 1. `vc_clinical_visits.completed_by` uniqueidentifier NULL (account that completed the visit).
 2. In a later batch: `fk_vc_clinical_visits_completed_by` -> `vc_users` (`WITH CHECK`, no cascade), `ck_vc_clinical_visits_voided_dates` (`voided_at IS NULL OR voided_at >= started_at`, `WITH CHECK`), `ix_vc_clinical_visits_completed_by`, and the filtered unique index `uq_vc_clinical_visits_animal_in_progress` on `(animal_id) WHERE status = N'IN_PROGRESS'` (at most one visit in progress per animal).
-3. Setting `VETERINARIAN_JOB_TITLE_ID` (fixed id `...0006`, same method as the `*_ROLE_ID` seeds): value = lowercase id of the active job title with code `VETERINARIAN` (seeded by `UserRolesAndEmployees`, `30000000-...-0001`), read with `UPDLOCK, HOLDLOCK`; NULL when no such active job title exists, which the application treats as "no veterinarian configured" (only administrators approve animal data) until an administrator sets it through `/api/system-settings`.
+3. Setting `VETERINARIAN_JOB_TITLE_ID` (fixed id `...0006`, same method as the `*_ROLE_ID` seeds): value = lowercase id of the active job title with code `VETERINARIAN` (seeded by `UserRolesAndEmployees`, `30000000-...-0001`), read with `UPDLOCK, HOLDLOCK`; NULL when no such active job title exists, which the application treats as "no veterinarian configured" (only administrators approve animal data) until an administrator sets it through `/api/vetcare/system-settings`.
 4. Final verification (51059): column, nullability, trusted non-cascading FK, trusted CHECK, both indexes (the unique one filtered) and the setting row.
 
 `completed_by` is filled by the application on every completion from this release on. There is deliberately no CHECK "`status = COMPLETED` ⇒ `completed_by IS NOT NULL`": visits completed before this migration have no known author, a trusted CHECK would fail on them and a `WITH NOCHECK` one would be untrusted and hide them. Inferring the author (e.g. from the responsible employee) would invent audit data. The rule is enforced by the application only; consider adding the CHECK once no legacy COMPLETED row without author remains.

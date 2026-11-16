@@ -9,9 +9,11 @@ import { Reflector } from "@nestjs/core";
 import { setupSwagger } from "./swagger";
 import { NestExpressApplication } from "@nestjs/platform-express";
 import { parseTrustProxy } from "./trust-proxy";
+import { configureApiRouting } from "./api-routing";
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  configureApiRouting(app);
   // Client IP (req.ip) used by the password recovery rate limits; off unless TRUST_PROXY is set.
   // TODO(deploy): when the API runs behind a proxy/load balancer/cloud (nginx, IIS ARR, Azure App Service,
   // Cloudflare...), set TRUST_PROXY (usually 1, matching the number of proxies in front). Without it every user

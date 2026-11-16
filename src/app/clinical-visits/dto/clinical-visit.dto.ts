@@ -26,13 +26,13 @@ export class CreateClinicalVisitDto {
   @IsUUID()
   employeeId?: string;
 
-  @ApiPropertyOptional({ nullable: true, maxLength: CLINICAL_NOTES_MAX_LENGTH, description: "Professional notes; never shown to clients." })
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: CLINICAL_NOTES_MAX_LENGTH, description: "Professional notes; never shown to clients." })
   @IsOptional()
   @IsString()
   @MaxLength(CLINICAL_NOTES_MAX_LENGTH)
   clinicalNotes?: string | null;
 
-  @ApiPropertyOptional({ nullable: true, maxLength: 240 })
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 240 })
   @IsOptional()
   @IsString()
   @MaxLength(240)
@@ -41,13 +41,13 @@ export class CreateClinicalVisitDto {
 
 /** Edit an IN_PROGRESS visit; completed and voided visits are immutable. */
 export class UpdateClinicalVisitDto {
-  @ApiPropertyOptional({ nullable: true, maxLength: CLINICAL_NOTES_MAX_LENGTH })
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: CLINICAL_NOTES_MAX_LENGTH })
   @IsOptional()
   @IsString()
   @MaxLength(CLINICAL_NOTES_MAX_LENGTH)
   clinicalNotes?: string | null;
 
-  @ApiPropertyOptional({ nullable: true, maxLength: 240 })
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 240 })
   @IsOptional()
   @IsString()
   @MaxLength(240)
@@ -56,7 +56,7 @@ export class UpdateClinicalVisitDto {
 
 /** IN_PROGRESS -> COMPLETED (endedAt = now); optional final notes. */
 export class CompleteClinicalVisitDto {
-  @ApiPropertyOptional({ nullable: true, maxLength: CLINICAL_NOTES_MAX_LENGTH })
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: CLINICAL_NOTES_MAX_LENGTH })
   @IsOptional()
   @IsString()
   @MaxLength(CLINICAL_NOTES_MAX_LENGTH)

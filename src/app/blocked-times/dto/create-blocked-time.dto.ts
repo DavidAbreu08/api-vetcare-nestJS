@@ -7,17 +7,17 @@ import { IsDateString, IsOptional, IsString } from "class-validator";
 export class CreateBlockedTimeDto extends NamedMetadataDto {
   @IsDateString()
   @Matches(/^\d{4}-\d{2}-\d{2}$/)
-  @ApiProperty({ description: "Clinic calendar date in YYYY-MM-DD format.", required: true })
+  @ApiProperty({ type: String, format: "date", example: "2030-01-07", description: "Clinic calendar date in YYYY-MM-DD format.", required: true })
   date: Date; // YYYY-MM-DD
 
   @IsString()
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
-  @ApiProperty({ description: "Interval start in HH:mm format, clinic local time.", required: true })
+  @ApiProperty({ type: String, example: "10:00", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$", description: "Interval start in HH:mm format, clinic local time.", required: true })
   timeStart: string; // HH:mm
 
   @IsString()
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
-  @ApiProperty({ description: "Interval end in HH:mm format, clinic local time.", required: true })
+  @ApiProperty({ type: String, example: "10:30", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$", description: "Interval end in HH:mm format, clinic local time.", required: true })
   timeEnd: string; // HH:mm
 
   @IsString()

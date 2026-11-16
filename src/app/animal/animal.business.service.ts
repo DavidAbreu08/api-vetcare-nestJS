@@ -245,14 +245,14 @@ export class AnimalBusinessService {
    * Staff and the active primary tutor edit the animal (secondary tutors: 403). The primary tutor (and any staff)
    * may change species and breed; sending the current values is not a change. A change by an administrator or a
    * veterinarian is approved at once (isVerified=true); a change by anyone else (client, non-veterinarian employee)
-   * leaves the animal unverified until an administrator or a veterinarian approves it through PUT /api/animal/confirm/:id.
+   * leaves the animal unverified until an administrator or a veterinarian approves it through PUT /api/vetcare/animal/confirm/:id.
    *
    * ownerId no longer overwrites owner_id: sending the current primary tutor is accepted as a no-op (clients that
    * send the whole object keep working); a different ownerId is a primary-tutor transfer, allowed only to
    * administrators (403 otherwise) and done in this transaction by AnimalOwnersBusinessService.transferLocked (history
    * kept, owner_id synchronized). Here it never moves reservations: when the previous primary tutor is the client of
    * open reservations of the animal the update fails with 409 TUTOR_HAS_OPEN_RESERVATIONS; use
-   * POST /api/animal/:id/transfer with transferFutureReservations.
+   * POST /api/vetcare/animal/:id/transfer with transferFutureReservations.
    */
   async update(id: string, dto: UpdateAnimalDto, actor: Actor) {
     const attributes = this.mapWritableAttributes(dto);
