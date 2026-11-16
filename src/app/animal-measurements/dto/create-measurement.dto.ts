@@ -13,10 +13,13 @@ export class CreateMeasurementDto {
   @IsOptional() @IsDateString({ strict: true }) @Matches(/T.*(?:Z|[+-]\d{2}:\d{2})$/) measuredAt?: string;
   @ApiPropertyOptional({ nullable: true, maxLength: 240 }) @IsOptional() @IsString() @MaxLength(240) description?: string | null;
   @ApiPropertyOptional({ nullable: true, maxLength: 500 }) @IsOptional() @IsString() @MaxLength(500) notes?: string | null;
+  @ApiPropertyOptional({ format: "uuid", description: "IN_PROGRESS clinical visit of the same animal (staff with clinical access). Immutable after creation." })
+  @IsOptional() @IsUUID() clinicalVisitId?: string;
 }
-/** PATCH semantics: omitted fields retain their values; animal and original author cannot change. */
-export class UpdateMeasurementDto extends PartialType(OmitType(CreateMeasurementDto, ["animalId"] as const)) {}
+/** PATCH semantics: omitted fields retain their values; animal, clinical visit and original author cannot change. */
+export class UpdateMeasurementDto extends PartialType(OmitType(CreateMeasurementDto, ["animalId", "clinicalVisitId"] as const)) {}
 export class ListMeasurementsQueryDto extends ListQueryDto {
   @ApiPropertyOptional({ format: "uuid" }) @IsOptional() @IsUUID() animalId?: string;
   @ApiPropertyOptional({ format: "uuid" }) @IsOptional() @IsUUID() measurementTypeId?: string;
+  @ApiPropertyOptional({ format: "uuid" }) @IsOptional() @IsUUID() clinicalVisitId?: string;
 }

@@ -25,3 +25,11 @@ describe("PersistenceService error 547", () => {
     }
   });
 });
+
+describe("PersistenceService deadlocks", () => {
+  it("maps SQL error 1205 (deadlock victim) to 409", async () => {
+    const error = sqlError(1205, "Transaction (Process ID 52) was deadlocked on lock resources with another process.");
+    await expect(new PersistenceService().execute(() => Promise.reject(error))).rejects.toThrow(PersistenceMessage.Deadlock);
+    await expect(new PersistenceService().execute(() => Promise.reject(error))).rejects.toBeInstanceOf(ConflictException);
+  });
+});

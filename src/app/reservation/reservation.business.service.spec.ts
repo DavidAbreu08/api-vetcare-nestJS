@@ -1,69 +1,296 @@
-import { BadRequestException } from "@nestjs/common";
-import { Actor } from "../core/authorization";
-import { PersistenceService } from "../core/persistence/persistence.service";
+import { BadRequestException, ConflictException, ForbiddenException } from "@nestjs/common";
+import { ClinicalVisitStatus } from "../clinical-visits/enums/clinical-visit-status.enum";
+import { Actor, sameId } from "../core/authorization";
 import { ReservationStatus } from "../core/enums/reservation-status.enum";
+import { PersistenceService } from "../core/persistence/persistence.service";
+import { toDbUtc } from "../core/persistence/utc-datetime";
+import { EmployeeEntity } from "../employees/entities/employee.entity";
+import { SystemSettingCode } from "../system-settings/enums/system-setting-code.enum";
+import { ReservationEntity } from "./entities/reservation.entity";
+import { ReservationHistoryAction } from "../reservation-history/enums/reservation-history-action.enum";
+import { serializeHistoryEvent } from "../reservation-history/reservation-history.service";
+import { assertTransition } from "./reservation-policy";
 import { ReservationBusinessService } from "./reservation.business.service";
 
+// Monday 2030-01-07, 10:00-10:30 in Lisbon (UTC in winter).
+const START = "2030-01-07T10:00:00Z";
+const END = "2030-01-07T10:30:00Z";
+const startAt = new Date(START);
+const endAt = new Date(END);
+const MINUTE = 60_000;
+
+const actor = (flags: Partial<Actor>): Actor => ({ id: "X", roleIds: [], isAdmin: false, isEmployee: false, isClient: false, employeeId: null, ...flags });
 // Ana: veterinarian (active employee profile) and client with her own cat.
-const ana: Actor = { id: "ANA", roleIds: ["employee", "client"], isAdmin: false, isEmployee: true, isClient: true, employeeId: "E-ANA" };
-const dto = { animalId: "CAT", date: "2030-01-07", timeStart: "10:00", timeEnd: "10:30", reason: "check-up" } as any;
+const ana = actor({ id: "ANA", isEmployee: true, isClient: true, employeeId: "E-ANA" });
+const admin = actor({ id: "ADM", isAdmin: true });
+const bob = actor({ id: "BOB", isClient: true });
+const bookable = (id: string) => ({ id, userId: `U-${id}`, isAvailableForBookings: true, terminationDate: null, user: { id: `U-${id}`, isActive: true, deletedAt: null } });
 
-describe("Reservations for an account that is both client and employee", () => {
-  let users: any, animals: any, reservations: any, membership: any, employees: any, business: ReservationBusinessService;
+function setup() {
+  const accounts: Record<string, any> = {
+    ANA: { id: "ANA", name: "Ana", email: "ana@x.pt", isActive: true },
+    BOB: { id: "BOB", name: "Bob", email: "bob@x.pt", isActive: true },
+    ADM: { id: "ADM", name: "Admin", email: "adm@x.pt", isActive: true },
+  };
+  const pets: Record<string, any> = { CAT: { id: "CAT", owner: { id: "ana" } }, DOG: { id: "DOG", owner: { id: "BOB" } } };
+  const reservations = new Map<string, any>();
+  const employees = new Map<string, any>([["E-1", bookable("E-1")], ["E-2", bookable("E-2")]]);
+  const visits: any[] = [];
+  const queryBuilders: any[] = [];
+  const state = { overlaps: 0 };
 
-  beforeEach(() => {
-    const accounts: Record<string, any> = {
-      ANA: { id: "ANA", name: "Ana", email: "ana@x.pt", isActive: true },
-      BOB: { id: "BOB", name: "Bob", email: "bob@x.pt", isActive: true },
-    };
-    const pets: Record<string, any> = { CAT: { id: "CAT", owner: { id: "ana" } }, DOG: { id: "DOG", owner: { id: "BOB" } } };
-    users = { findOne: jest.fn(async ({ where }: any) => accounts[where.id] ?? null) };
-    animals = { findOne: jest.fn(async ({ where }: any) => pets[where.id] ?? null) };
-    reservations = {
-      create: jest.fn((row: unknown) => row), save: jest.fn(async (row: any) => ({ id: "R-1", ...row })),
-      createQueryBuilder: jest.fn(() => {
-        const qb: any = { where: () => qb, andWhere: () => qb, getCount: async () => 0 };
-        return qb;
-      }),
-    };
-    membership = { hasSystemRole: jest.fn(async () => true) };
-    employees = { findBookableUser: jest.fn(async (id: string) => accounts[id] ?? null) };
-    const timeUtils = { combineDateAndTime: jest.fn(() => new Date(0)) };
-    const email = { sendReservationCreatedEmail: jest.fn(async () => undefined) };
-    business = new ReservationBusinessService(new PersistenceService(), timeUtils as any, email as any, reservations,
-      users, animals, { find: jest.fn(async () => []) } as any, membership, employees);
-  });
+  const manager: any = {
+    queryRunner: { isTransactionActive: true },
+    query: jest.fn(async () => [{ result: 0 }]),
+    findOne: jest.fn(async (entity: unknown, { where }: any) => {
+      if (entity === ReservationEntity) return reservations.has(where.id) ? { ...reservations.get(where.id) } : null;
+      if (entity === EmployeeEntity) return employees.get(where.id) ?? null;
+      return null;
+    }),
+    find: jest.fn(async () => []),
+    create: jest.fn((_entity: unknown, row: any) => ({ ...row })),
+    save: jest.fn(async (row: any) => {
+      const saved = { id: "R-NEW", ...row };
+      reservations.set(saved.id, saved);
+      return saved;
+    }),
+    update: jest.fn(async (_entity: unknown, { id }: any, changes: any) => Object.assign(reservations.get(id), changes)),
+    count: jest.fn(async (_entity: unknown, { where }: any) => visits.filter(visit => sameId(visit.reservationId, where.reservationId)
+      && (!where.status || where.status.value.includes(visit.status))).length),
+    createQueryBuilder: jest.fn(() => {
+      const qb: any = { params: {} };
+      qb.where = jest.fn((_sql: string, params?: object) => (Object.assign(qb.params, params), qb));
+      qb.andWhere = qb.where;
+      qb.getCount = jest.fn(async () => state.overlaps);
+      queryBuilders.push(qb);
+      return qb;
+    }),
+  };
+  const dataSource = { transaction: jest.fn((work: (m: unknown) => unknown) => work(manager)) };
+  const email = {
+    sendReservationCreatedEmail: jest.fn(async () => undefined), sendReservationConfirmedEmail: jest.fn(async () => undefined),
+    sendReservationRescheduledEmail: jest.fn(async () => undefined), sendReservationCancelledEmail: jest.fn(async () => undefined),
+  };
+  const settings = { getNonNegativeInteger: jest.fn(async (_code: SystemSettingCode) => 15) };
+  const membership = { hasSystemRole: jest.fn(async () => true) };
+  const history = { record: jest.fn(async () => undefined), list: jest.fn() };
+  const reservationRepository = { findOne: jest.fn(async ({ where }: any) => (reservations.has(where.id) ? { ...reservations.get(where.id), client: accounts.ANA } : null)) };
+  const usersRepository = { findOne: jest.fn(async ({ where }: any) => accounts[where.id] ?? null) };
+  const animalRepository = { findOne: jest.fn(async ({ where }: any) => pets[where.id] ?? null) };
 
-  it("books her own animal as a client: pending, not self-assigned, client is herself", async () => {
-    await business.createReservation(dto, ana);
-    expect(reservations.create).toHaveBeenCalledWith(expect.objectContaining({
-      client: expect.objectContaining({ id: "ANA" }), employee: null, status: ReservationStatus.PENDING,
+  const business = new ReservationBusinessService(new PersistenceService(), dataSource as any, email as any, settings as any,
+    membership as any, history as any, reservationRepository as any, usersRepository as any, animalRepository as any);
+  const addReservation = (row: Partial<ReservationEntity> & { id: string }) => {
+    reservations.set(row.id, {
+      animalId: "CAT", clientId: "ANA", employeeId: null, startAt, endAt, status: ReservationStatus.PENDING,
+      confirmedAt: null, cancelledAt: null, ...row,
+    });
+  };
+  const actions = () => history.record.mock.calls.map((call: any[]) => call[1].action);
+  return { business, manager, history, settings, membership, reservations, visits, queryBuilders, state, addReservation, actions };
+}
+
+afterEach(() => jest.restoreAllMocks());
+
+describe("ReservationBusinessService.create", () => {
+  const dto = { animalId: "CAT", startAt: START, endAt: END, reason: "check-up" } as any;
+
+  it("creates a PENDING reservation with a CREATED event", async () => {
+    const t = setup();
+    await t.business.create(dto, ana);
+    expect(t.manager.create).toHaveBeenCalledWith(ReservationEntity, expect.objectContaining({
+      clientId: "ANA", employeeId: null, status: ReservationStatus.PENDING, startAt, endAt, confirmedAt: null,
     }));
-    expect(employees.findBookableUser).not.toHaveBeenCalled();
+    expect(t.actions()).toEqual([ReservationHistoryAction.CREATED]);
   });
 
-  it("treats an ownerId equal to herself as a personal booking", async () => {
-    await business.createReservation({ ...dto, ownerId: "ana" }, ana);
-    expect(reservations.create).toHaveBeenCalledWith(expect.objectContaining({ employee: null, status: ReservationStatus.PENDING }));
-    expect(membership.hasSystemRole).not.toHaveBeenCalled();
+  it("books an employee's own animal through the client path, even with ownerId equal to herself", async () => {
+    const t = setup();
+    await t.business.create({ ...dto, ownerId: "ana" }, ana);
+    expect(t.manager.create).toHaveBeenCalledWith(ReservationEntity, expect.objectContaining({ clientId: "ANA", employeeId: null }));
+    expect(t.membership.hasSystemRole).not.toHaveBeenCalled();
   });
 
-  it("books for another client through the professional path: self-assigned and confirmed", async () => {
-    await business.createReservation({ ...dto, animalId: "DOG", ownerId: "BOB" }, ana);
-    expect(reservations.create).toHaveBeenCalledWith(expect.objectContaining({
-      client: expect.objectContaining({ id: "BOB" }), employee: expect.objectContaining({ id: "ANA" }), status: ReservationStatus.CONFIRMED,
+  it("lets an employee book for another client, still PENDING and without assignment", async () => {
+    const t = setup();
+    await t.business.create({ ...dto, animalId: "DOG", ownerId: "BOB" }, ana);
+    expect(t.manager.create).toHaveBeenCalledWith(ReservationEntity, expect.objectContaining({
+      clientId: "BOB", employeeId: null, status: ReservationStatus.PENDING,
     }));
   });
 
-  it("gives the CLIENT role nothing extra: a client-only account cannot book for another client", async () => {
-    const client: Actor = { ...ana, isEmployee: false, employeeId: null, roleIds: ["client"] };
-    await expect(business.createReservation({ ...dto, animalId: "DOG", ownerId: "BOB" }, client)).rejects.toBeInstanceOf(BadRequestException);
-    expect(reservations.save).not.toHaveBeenCalled();
+  it("gives the CLIENT role nothing extra and requires it for a personal booking", async () => {
+    const t = setup();
+    await expect(t.business.create({ ...dto, animalId: "DOG", ownerId: "BOB" }, actor({ id: "ANA", isClient: true }))).rejects.toBeInstanceOf(BadRequestException);
+    await expect(t.business.create(dto, { ...ana, isClient: false })).rejects.toBeInstanceOf(BadRequestException);
+    expect(t.manager.save).not.toHaveBeenCalled();
   });
 
-  it("requires the CLIENT role for a personal booking", async () => {
-    const employeeOnly: Actor = { ...ana, isClient: false, roleIds: ["employee"] };
-    await expect(business.createReservation(dto, employeeOnly)).rejects.toBeInstanceOf(BadRequestException);
-    expect(reservations.save).not.toHaveBeenCalled();
+  it("rejects pre-assignment of an employee by a non-admin (403)", async () => {
+    const t = setup();
+    await expect(t.business.create({ ...dto, animalId: "DOG", ownerId: "BOB", employeeId: "E-1" }, ana)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(t.business.create({ ...dto, employeeId: "E-1" }, ana)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(t.manager.save).not.toHaveBeenCalled();
+  });
+
+  it("lets an admin pre-assign: still PENDING, CREATED + EMPLOYEE_ASSIGNED, under the applock", async () => {
+    const t = setup();
+    await t.business.create({ ...dto, animalId: "DOG", ownerId: "BOB", employeeId: "E-1" }, admin);
+    expect(t.manager.create).toHaveBeenCalledWith(ReservationEntity, expect.objectContaining({ employeeId: "E-1", status: ReservationStatus.PENDING }));
+    expect(t.actions()).toEqual([ReservationHistoryAction.CREATED, ReservationHistoryAction.EMPLOYEE_ASSIGNED]);
+    expect(t.manager.query).toHaveBeenCalledWith(expect.stringContaining("sp_getapplock"), ["vc_reservations:employee:e-1", 5000]);
+  });
+
+  it("rejects instants without offset (400)", async () => {
+    const t = setup();
+    await expect(t.business.create({ ...dto, startAt: "2030-01-07T10:00:00" }, ana)).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe("ReservationBusinessService.assignEmployee", () => {
+  it("assigns on PENDING (EMPLOYEE_ASSIGNED) and records a change as EMPLOYEE_CHANGED", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    await t.business.assignEmployee("R-1", { employeeId: "E-1" }, admin);
+    await t.business.assignEmployee("R-1", { employeeId: "E-2" }, admin);
+    expect(t.actions()).toEqual([ReservationHistoryAction.EMPLOYEE_ASSIGNED, ReservationHistoryAction.EMPLOYEE_CHANGED]);
+    expect(t.reservations.get("R-1")).toMatchObject({ employeeId: "E-2", status: ReservationStatus.PENDING });
+  });
+
+  it("refuses assignment outside PENDING (409)", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1", status: ReservationStatus.CONFIRMED, employeeId: "E-1", confirmedAt: new Date() });
+    await expect(t.business.assignEmployee("R-1", { employeeId: "E-2" }, admin)).rejects.toBeInstanceOf(ConflictException);
+    expect(t.history.record).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReservationBusinessService.confirm", () => {
+  it("requires an assigned employee (409 EMPLOYEE_REQUIRED)", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    await expect(t.business.confirm("R-1", {}, admin)).rejects.toMatchObject({ response: { code: "EMPLOYEE_REQUIRED" } });
+  });
+
+  it("takes the applock with the transaction manager before counting overlaps, widened by the buffer", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1", employeeId: "E-1" });
+    await t.business.confirm("R-1", {}, admin);
+    const qb = t.queryBuilders[0];
+    expect(t.manager.query.mock.invocationCallOrder[0]).toBeLessThan(qb.getCount.mock.invocationCallOrder[0]);
+    expect(t.settings.getNonNegativeInteger).toHaveBeenCalledWith(SystemSettingCode.RESERVATION_BUFFER_MINUTES);
+    expect(qb.params).toMatchObject({
+      employeeId: "E-1", confirmed: ReservationStatus.CONFIRMED, excludeId: "R-1",
+      latestStart: toDbUtc(new Date(endAt.getTime() + 15 * MINUTE)), earliestEnd: toDbUtc(new Date(startAt.getTime() - 15 * MINUTE)),
+    });
+    expect(t.reservations.get("R-1")).toMatchObject({ status: ReservationStatus.CONFIRMED, confirmedAt: expect.any(Date) });
+    expect(t.actions()).toEqual([ReservationHistoryAction.CONFIRMED]);
+  });
+
+  it("rejects an overlap with another confirmed reservation (409) without writing", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1", employeeId: "E-1" });
+    t.state.overlaps = 1;
+    await expect(t.business.confirm("R-1", {}, admin)).rejects.toMatchObject({ response: { code: "EMPLOYEE_UNAVAILABLE" } });
+    expect(t.manager.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReservationBusinessService.reschedule", () => {
+  const dto = { startAt: "2030-01-08T10:00:00Z", endAt: "2030-01-08T10:30:00Z", reason: "client asked" };
+
+  it("returns a CONFIRMED reservation to PENDING, clears confirmedAt and records RESCHEDULED", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1", status: ReservationStatus.CONFIRMED, employeeId: "E-1", confirmedAt: new Date() });
+    await t.business.reschedule("R-1", dto, admin);
+    expect(t.reservations.get("R-1")).toMatchObject({ status: ReservationStatus.PENDING, confirmedAt: null, startAt: new Date(dto.startAt) });
+    const [, event] = t.history.record.mock.calls[0] as any[];
+    expect(event).toMatchObject({ action: ReservationHistoryAction.RESCHEDULED, reason: "client asked", oldData: { status: "CONFIRMED", startAt: startAt.toISOString() } });
+  });
+
+  it("is blocked by an active visit but not by a VOIDED one", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1", status: ReservationStatus.CONFIRMED, employeeId: "E-1", confirmedAt: new Date() });
+    t.visits.push({ reservationId: "R-1", status: ClinicalVisitStatus.IN_PROGRESS });
+    await expect(t.business.reschedule("R-1", dto, admin)).rejects.toBeInstanceOf(ConflictException);
+    t.visits[0].status = ClinicalVisitStatus.VOIDED;
+    await expect(t.business.reschedule("R-1", dto, admin)).resolves.toBeDefined();
+  });
+});
+
+describe("ReservationBusinessService.cancel", () => {
+  it("cancels for the client before the start (cancelledAt + CANCELLED)", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    await t.business.cancel("R-1", {}, ana);
+    expect(t.reservations.get("R-1")).toMatchObject({ status: ReservationStatus.CANCELLED, cancelledAt: expect.any(Date) });
+    expect(t.actions()).toEqual([ReservationHistoryAction.CANCELLED]);
+  });
+
+  it("is blocked by an IN_PROGRESS or COMPLETED visit", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1", status: ReservationStatus.CONFIRMED, employeeId: "E-1", confirmedAt: new Date() });
+    t.visits.push({ reservationId: "R-1", status: ClinicalVisitStatus.COMPLETED });
+    await expect(t.business.cancel("R-1", {}, admin)).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it("refuses a non-admin after the start (409) but lets an admin cancel", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    jest.spyOn(Date, "now").mockReturnValue(startAt.getTime() + MINUTE);
+    await expect(t.business.cancel("R-1", {}, ana)).rejects.toMatchObject({ response: { code: "CANCEL_AFTER_START" } });
+    await t.business.cancel("R-1", {}, admin);
+    expect(t.reservations.get("R-1").status).toBe(ReservationStatus.CANCELLED);
+  });
+
+  it("refuses third parties (403)", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    await expect(t.business.cancel("R-1", {}, bob)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+describe("ReservationBusinessService.markNoShow", () => {
+  const confirmed = { id: "R-1", status: ReservationStatus.CONFIRMED, employeeId: "E-1", confirmedAt: new Date() };
+
+  it("is rejected before start + tolerance and accepted after it", async () => {
+    const t = setup();
+    t.addReservation(confirmed);
+    jest.spyOn(Date, "now").mockReturnValue(startAt.getTime() + 14 * MINUTE);
+    await expect(t.business.markNoShow("R-1", {}, admin)).rejects.toMatchObject({ response: { code: "NO_SHOW_TOO_EARLY" } });
+    expect(t.settings.getNonNegativeInteger).toHaveBeenCalledWith(SystemSettingCode.RESERVATION_NO_SHOW_TOLERANCE_MINUTES);
+    jest.spyOn(Date, "now").mockReturnValue(startAt.getTime() + 16 * MINUTE);
+    await t.business.markNoShow("R-1", {}, admin);
+    expect(t.reservations.get("R-1").status).toBe(ReservationStatus.NO_SHOW);
+    expect(t.actions()).toEqual([ReservationHistoryAction.NO_SHOW]);
+  });
+
+  it("ignores a VOIDED visit", async () => {
+    const t = setup();
+    t.addReservation(confirmed);
+    t.visits.push({ reservationId: "R-1", status: ClinicalVisitStatus.VOIDED });
+    jest.spyOn(Date, "now").mockReturnValue(startAt.getTime() + 16 * MINUTE);
+    await t.business.markNoShow("R-1", {}, admin);
+    expect(t.reservations.get("R-1").status).toBe(ReservationStatus.NO_SHOW);
+  });
+});
+
+describe("Reservation state machine and history projection", () => {
+  it("allows only the documented transitions", () => {
+    expect(() => assertTransition(ReservationStatus.PENDING, ReservationStatus.CONFIRMED)).not.toThrow();
+    expect(() => assertTransition(ReservationStatus.CONFIRMED, ReservationStatus.NO_SHOW)).not.toThrow();
+    for (const [from, to] of [
+      [ReservationStatus.PENDING, ReservationStatus.COMPLETED], [ReservationStatus.PENDING, ReservationStatus.NO_SHOW],
+      [ReservationStatus.CANCELLED, ReservationStatus.CONFIRMED], [ReservationStatus.COMPLETED, ReservationStatus.CANCELLED],
+    ]) {
+      expect(() => assertTransition(from, to)).toThrow(ConflictException);
+    }
+  });
+
+  it("hides changedBy of other users from non-admins", () => {
+    const row = { id: "H-1", reservationId: "R-1", action: "CONFIRMED", changedBy: "ADM", oldData: null, newData: '{"status":"CONFIRMED"}', reason: null, createdAt: new Date(0) } as any;
+    expect(serializeHistoryEvent(row, ana)).toMatchObject({ changedBy: null, changedBySelf: false, newData: { status: "CONFIRMED" } });
+    expect(serializeHistoryEvent(row, admin)).toMatchObject({ changedBy: "ADM", changedBySelf: true });
+    expect(serializeHistoryEvent({ ...row, changedBy: "ana" }, ana)).toMatchObject({ changedBy: "ana", changedBySelf: true });
   });
 });

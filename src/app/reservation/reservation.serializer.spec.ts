@@ -10,14 +10,14 @@ const account = (id: string, name: string) => ({
 const actor = (flags: Partial<Actor>): Actor => ({ id: "x", roleIds: [], isAdmin: false, isEmployee: false, isClient: false, employeeId: null, ...flags });
 const reservation = () => ({
   id: "R-1", status: "confirmed", notificationStatus: "sent",
-  client: account("client", "Cliente"), employee: account("vet", "Vet"),
+  client: account("client", "Cliente"), employee: { id: "E-1", userId: "vet", user: account("vet", "Vet") },
   animal: { id: "A-1", name: "Rex", owner: account("client", "Cliente") },
 }) as unknown as ReservationEntity;
 
 describe("Reservation projection", () => {
   it("shows a client only the employee's id, name and picture, and no repeated owner", () => {
     const view: any = serializeReservation(reservation(), actor({ id: "client", isClient: true }));
-    expect(view.employee).toEqual({ id: "vet", name: "Vet", profilePictureUrl: "https://img/vet.png" });
+    expect(view.employee).toEqual({ id: "E-1", name: "Vet", profilePictureUrl: "https://img/vet.png" });
     expect(view.client).toEqual({ id: "client", name: "Cliente", email: "client@x.pt", phone: "912345678" });
     expect(view.animal).toEqual({ id: "A-1", name: "Rex" });
     expect(view).toMatchObject({ id: "R-1", status: "confirmed", notificationStatus: "sent" });
@@ -26,13 +26,14 @@ describe("Reservation projection", () => {
   it("shows staff (non-admin) only the client's contact data and the reduced employee", () => {
     const [view]: any[] = serializeReservations([reservation()], actor({ id: "vet", isEmployee: true }));
     expect(view.client).toEqual({ id: "client", name: "Cliente", email: "client@x.pt", phone: "912345678" });
-    expect(view.employee).toEqual({ id: "vet", name: "Vet", profilePictureUrl: "https://img/vet.png" });
+    expect(view.employee).toEqual({ id: "E-1", name: "Vet", profilePictureUrl: "https://img/vet.png" });
     expect(JSON.stringify(view)).not.toMatch(/nif|birthDate|private notes|passwordHash/);
   });
 
   it("shows administrators full accounts without password hashes", () => {
     const view: any = serializeReservation(reservation(), actor({ isAdmin: true }));
-    for (const user of [view.client, view.employee, view.animal.owner]) {
+    expect(view.employee).toMatchObject({ id: "E-1", userId: "vet", name: "Vet" });
+    for (const user of [view.client, view.employee.user, view.animal.owner]) {
       expect(user).toMatchObject({ nif: "123456789", birthDate: "1990-01-01", notes: "private notes" });
       expect(user).not.toHaveProperty("passwordHash");
     }

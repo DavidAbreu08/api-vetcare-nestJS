@@ -1,3 +1,5 @@
+// Must stay the first import: forces process.env.TZ = "UTC" before anything creates dates or loads TypeORM.
+import "../force-utc";
 import * as bcrypt from "bcrypt";
 import { Logger } from "@nestjs/common";
 import { isUUID } from "class-validator";

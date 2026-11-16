@@ -8,7 +8,7 @@ import { PersistenceService } from "../core/persistence/persistence.service";
 import { EmailService } from "src/email/email.service";
 import { JobTitleEntity } from "../job-titles/entities/job-title.entity";
 import { dateKey } from "../reservation/reservation-policy";
-import { clinicToday, isEmploymentActive } from "./employee-status";
+import { clinicToday, isBookableEmployee, isEmploymentActive } from "./employee-status";
 import { UserRoleEntity } from "../roles/entities/user-role.entity";
 import { SystemSettingsService } from "../system-settings/system-settings.service";
 import { UsersEntity } from "../users/entities/users.entity";
@@ -189,18 +189,7 @@ export class EmployeesBusinessService {
 
   /** Bookable on a date: available profile, active account, not terminated on or before today/the date. */
   isBookable(employee: EmployeeEntity | null | undefined, date?: string): employee is EmployeeEntity & { user: UsersEntity } {
-    if (!employee?.user || !employee.isAvailableForBookings || !employee.user.isActive) return false;
-    return isEmploymentActive(employee.terminationDate) && (!date || !employee.terminationDate || employee.terminationDate > date);
-  }
-
-  /** User assigned to reservations, regardless of roles; null when not bookable. */
-  async findBookableUser(userId: string, date?: Date | string): Promise<UsersEntity | null> {
-    const employee = await this.persistence.execute(() => this.employees.findOne({ where: { userId }, relations: { user: true } }));
-    return this.isBookable(employee, date === undefined ? undefined : dateKey(date)) ? employee.user : null;
-  }
-
-  async hasProfile(userId: string): Promise<boolean> {
-    return (await this.persistence.execute(() => this.employees.count({ where: { userId } }))) > 0;
+    return isBookableEmployee(employee, date);
   }
 
   /** Bookable employees for a clinic date. TODO: also consider existing reservations or shifts. */

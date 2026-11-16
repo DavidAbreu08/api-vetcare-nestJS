@@ -1,6 +1,6 @@
 import { TimeUtilsMessages } from "./time-utils.messages";
 import { Injectable } from "@nestjs/common";
-import { clinicDateTime, CLINIC_POLICY } from "./reservation-policy";
+import { clinicDateTime, CLINIC_POLICY } from "../reservation/reservation-policy";
 
 @Injectable()
 export class TimeUtilsService {

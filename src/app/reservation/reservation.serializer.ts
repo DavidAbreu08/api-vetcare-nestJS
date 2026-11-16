@@ -1,17 +1,31 @@
 import { Actor } from "../core/authorization";
-import { contactSummary, projectRelatedUser, publicEmployeeSummary } from "../users/user.projection";
+import { AccountSummary, serializeAccount } from "../employees/employee.serializer";
+import { EmployeeEntity } from "../employees/entities/employee.entity";
+import { contactSummary, projectRelatedUser, PublicEmployeeSummary } from "../users/user.projection";
 import { ReservationEntity } from "./entities/reservation.entity";
 
+export type AdminEmployeeSummary = PublicEmployeeSummary & { userId: string; user: AccountSummary | null };
+
 /**
- * Reservation response for the actor. Non-administrators see the assigned employee as
- * { id, name, profilePictureUrl } and the client as { id, name, email, phone }; the animal's owner is
- * the client and is only repeated (full) for administrators. Administrators see full accounts,
- * never password hashes.
+ * Employee profile attached to a record (reservation, clinical visit). Non-administrators see
+ * { id, name, profilePictureUrl } (id = vc_employees.id, name/picture from the account); administrators
+ * also get userId and the full account (never the password hash).
+ */
+export function projectEmployee(employee: EmployeeEntity | null | undefined, actor: Actor): PublicEmployeeSummary | AdminEmployeeSummary | null | undefined {
+  if (!employee) return employee;
+  const summary: PublicEmployeeSummary = { id: employee.id, name: employee.user?.name ?? "", profilePictureUrl: employee.user?.profilePictureUrl ?? null };
+  return actor.isAdmin ? { ...summary, userId: employee.userId, user: employee.user ? serializeAccount(employee.user) : null } : summary;
+}
+
+/**
+ * Reservation response for the actor. Non-administrators see the employee as { id, name, profilePictureUrl }
+ * and the client as { id, name, email, phone }; the animal's owner is the client and is only repeated (full)
+ * for administrators. Administrators see full accounts, never password hashes.
  */
 export function serializeReservation<R extends ReservationEntity>(reservation: R, actor: Actor) {
   const view = { ...reservation } as unknown as Record<string, unknown>;
   if ("client" in reservation) view.client = projectRelatedUser(reservation.client, actor, contactSummary);
-  if ("employee" in reservation) view.employee = projectRelatedUser(reservation.employee, actor, publicEmployeeSummary);
+  if ("employee" in reservation) view.employee = projectEmployee(reservation.employee, actor);
   if (reservation.animal) {
     const { owner, ...animal } = reservation.animal;
     view.animal = actor.isAdmin && owner !== undefined ? { ...animal, owner: projectRelatedUser(owner, actor, contactSummary) } : animal;

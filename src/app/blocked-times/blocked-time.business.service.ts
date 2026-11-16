@@ -5,7 +5,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { BlockedTimeEntity } from "./entities/bloked-times.entity";
 import { TimeUtilsService } from "./time-utils.service";
-import { overlaps, minutes, dateKey, policyError } from "./reservation-policy";
+import { overlaps, minutes, dateKey, policyError } from "../reservation/reservation-policy";
 import { CreateBlockedTimeDto } from "./dto/create-blocked-time.dto";
 import { UpdateBlockedTimeDto } from "./dto/update-blocked-time.dto";
 import { ListBlockedTimesQueryDto } from "./dto/list-blocked-times-query.dto";

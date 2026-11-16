@@ -12,6 +12,8 @@ enum SqlServerError {
   TruncatedValue = 2628,
   TruncatedValueLegacy = 8152,
   NumericOverflow = 8115,
+  /** Transaction chosen as deadlock victim; the client may retry. */
+  Deadlock = 1205,
 }
 
 type DriverError = {
@@ -52,6 +54,8 @@ export class PersistenceService {
         case SqlServerError.TruncatedValueLegacy:
         case SqlServerError.NumericOverflow:
           throw new BadRequestException(PersistenceMessage.InvalidValue);
+        case SqlServerError.Deadlock:
+          throw new ConflictException(PersistenceMessage.Deadlock);
         default:
           if (error instanceof QueryFailedError) {
             throw new InternalServerErrorException(PersistenceMessage.Unavailable);

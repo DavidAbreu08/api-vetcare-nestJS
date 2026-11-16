@@ -10,7 +10,7 @@ import { EmployeeEntity } from "../employees/entities/employee.entity";
 import { clinicToday } from "../employees/employee-status";
 import { UpdateSystemSettingDto } from "./dto/update-system-setting.dto";
 import { SystemSettingEntity } from "./entities/system-setting.entity";
-import { ROLE_ID_SETTING_SUFFIX, SystemSettingCode } from "./enums/system-setting-code.enum";
+import { NON_NEGATIVE_INTEGER_SETTINGS, ROLE_ID_SETTING_SUFFIX, SystemSettingCode } from "./enums/system-setting-code.enum";
 import { SystemSettingMessage } from "./system-settings.messages";
 
 const LOCK = { mode: "pessimistic_write" } as const;
@@ -18,6 +18,16 @@ const ROLE_SETTING_CODES: string[] = Object.values(SystemSettingCode).filter(cod
 
 const normalizedRoleId = (value: string | null | undefined) =>
   typeof value === "string" && isUUID(value.trim()) ? value.trim().toLowerCase() : null;
+
+/** Largest value accepted by SQL Server int (minutes used in date arithmetic). */
+const MAX_SETTING_INTEGER = 2147483647;
+
+/** Canonical decimal text of a non-negative integer setting, or null when invalid. */
+export function normalizedNonNegativeInteger(value: string | null | undefined): string | null {
+  if (typeof value !== "string" || !/^\d+$/.test(value.trim())) return null;
+  const parsed = Number(value.trim());
+  return Number.isSafeInteger(parsed) && parsed <= MAX_SETTING_INTEGER ? String(parsed) : null;
+}
 
 /** Reads and validates settings; caching and role resolution live in SystemSettingsService. */
 @Injectable()
@@ -93,7 +103,12 @@ export class SystemSettingsBusinessService {
       });
       const row = locked.find(candidate => candidate.id.toLowerCase() === current.id.toLowerCase()) ?? current;
       if (dto.value !== undefined) {
-        row.value = isRoleSetting ? await this.validateRoleReference(manager, row, dto.value, locked) : dto.value;
+        if (isRoleSetting) row.value = await this.validateRoleReference(manager, row, dto.value, locked);
+        else if (NON_NEGATIVE_INTEGER_SETTINGS.includes(row.code)) {
+          const minutes = normalizedNonNegativeInteger(dto.value);
+          if (minutes === null) throw new BadRequestException(SystemSettingMessage.InvalidNonNegativeInteger);
+          row.value = minutes;
+        } else row.value = dto.value;
       }
       if (dto.description !== undefined) row.description = dto.description;
       if (dto.notes !== undefined) row.notes = dto.notes;

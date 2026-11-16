@@ -6,5 +6,6 @@ export enum MeasurementMessage {
   InvalidValue = "Value must be a finite signed decimal with at most six places and magnitude at most 999999999.999999",
   InvalidTime = "measuredAt must be a valid past or present timestamp with timezone",
   Deleted = "Measurement deleted",
+  ClinicalMeasurementNotDeletable = "Measurements recorded in a clinical visit cannot be deleted",
 }
 export enum MeasurementRelation { Animal = "animal", Owner = "owner", Type = "measurementType", Recorder = "recorder" }

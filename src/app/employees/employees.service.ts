@@ -14,6 +14,4 @@ export class EmployeesService {
   update(id: string, dto: UpdateEmployeeDto, actor: Actor) { return this.business.update(id, dto, actor); }
   delete(id: string) { return this.business.delete(id); }
   getAvailableByDate(date: string) { return this.business.getAvailableByDate(date); }
-  findBookableUser(userId: string, date?: Date | string) { return this.business.findBookableUser(userId, date); }
-  hasProfile(userId: string) { return this.business.hasProfile(userId); }
 }

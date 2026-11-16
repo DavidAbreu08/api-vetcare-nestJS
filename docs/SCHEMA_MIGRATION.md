@@ -80,3 +80,34 @@ Filtered indexes require `SET ANSI_NULLS ON` and `SET QUOTED_IDENTIFIER ON` in t
 | `40000000-0000-4000-8000-000000000003` | vc_system_settings | CLIENT_ROLE_ID | `20000000-...-000000000003` |
 
 Job titles replace the former `Function` enum. After migrating, run `npm run db:seed:admin`: it reads `ADMIN_ROLE_ID` and `EMPLOYEE_ROLE_ID`, creates the account (bcrypt hash), both role assignments and an employee profile in one transaction, never promotes an existing account and never changes an existing administrator's password.
+
+# SQL Server schema: reservations and clinical visits
+
+`ReservationsAndClinicalVisits1795089600000` follows `UserRolesAndEmployees1795003200000`. It was not executed against any database during this work. It requires an active transaction and `down` rejects rollback. ISJSON checks require database compatibility level 130 or later.
+
+Order of operations:
+
+1. Verify prerequisite tables, absent new objects and absent `clinical_visit_id`; under `TABLOCKX, HOLDLOCK` THROW 51020 when `vc_reservations` has rows, 51021 when another table references it, 51022 when the new setting codes or seed ids exist. Data is not converted: the previous migration already removed every reservation.
+2. `DROP TABLE vc_reservations` (legacy `PK_reservation`, `DF_/CK_reservation_*`, `FK_reservation_animal`, `fk_vc_reservations_*` go with it) and recreate it.
+3. Create `vc_clinical_visits`, then `vc_reservation_history` and its trigger `tr_vc_reservation_history_append_only` (INSTEAD OF UPDATE, DELETE: THROW 51023).
+4. Add `vc_animal_measurements.clinical_visit_id`, `fk_vc_animal_measurements_clinical_visit` (`clinical_visit_id`, `animal_id`) -> `vc_clinical_visits` (`id`, `animal_id`) and `ix_vc_animal_measurements_clinical_visit_id`. `recorded_by` still references `vc_users`.
+5. Seed the settings below.
+
+`vc_reservations`: `animal_id`, `client_id` (`vc_users`), `employee_id` NULL (`vc_employees`), `start_at`/`end_at` datetime2(3), `status` nvarchar(30) default PENDING, `reason` nvarchar(500), `description` nvarchar(240), `notes` nvarchar(max), `confirmed_at`/`cancelled_at` datetime2(3), audit timestamps and `row_version` rowversion. Constraints: `uq_vc_reservations_id_animal`, `ck_vc_reservations_interval` (end > start), `ck_vc_reservations_status` (BIN2: PENDING, CONFIRMED, COMPLETED, CANCELLED, NO_SHOW), `ck_vc_reservations_confirmed` (CONFIRMED/COMPLETED/NO_SHOW need employee and confirmed_at), `ck_vc_reservations_pending` (PENDING has no confirmed_at), `ck_vc_reservations_cancelled` (cancelled_at iff CANCELLED). Indexes `ix_vc_reservations_{client,animal,employee,status}_start`. `row_version` is not mapped: the API serializes changes with UPDLOCK and re-validates state inside the transaction; it remains available to external tools.
+
+`vc_clinical_visits`: `reservation_id` NULL, `animal_id`, `employee_id` (`vc_employees`), `status` (IN_PROGRESS, COMPLETED, VOIDED), `started_at`, `ended_at`, `clinical_notes` nvarchar(max), `description`, `void_reason` nvarchar(500), `voided_at`, `voided_by` (`vc_users`), audit timestamps. `fk_vc_clinical_visits_reservation_animal` (`reservation_id`, `animal_id`) -> `vc_reservations` (`id`, `animal_id`) keeps the animal of the reservation; filtered `uq_vc_clinical_visits_reservation_id` allows one visit per reservation; `uq_vc_clinical_visits_id_animal` supports the measurement FK. Checks: `ended_at >= started_at`, IN_PROGRESS without ended_at, COMPLETED with ended_at, VOIDED iff non-blank void_reason, voided_at and voided_by. Indexes on (animal_id, started_at), (employee_id, started_at) and voided_by.
+
+`vc_reservation_history`: `reservation_id`, `changed_by` NULL (`vc_users`), `action` (CREATED, CONFIRMED, RESCHEDULED, EMPLOYEE_ASSIGNED, EMPLOYEE_CHANGED, CANCELLED, COMPLETED, NO_SHOW), `old_data`/`new_data` nvarchar(max) with ISJSON checks, `reason` nvarchar(500), `created_at`; index (reservation_id, created_at) and changed_by. No description, notes or updated_at.
+
+| UUID | code | value |
+|---|---|---|
+| `40000000-0000-4000-8000-000000000004` | RESERVATION_NO_SHOW_TOLERANCE_MINUTES | 15 |
+| `40000000-0000-4000-8000-000000000005` | RESERVATION_BUFFER_MINUTES | 15 |
+
+UTC columns: with `useUTC:false` the driver uses the process-local wall clock, so the entities use a transformer that sends and reads the UTC wall clock. **Running the Node process in UTC is mandatory**: `src/force-utc.ts` sets `process.env.TZ = "UTC"` and must remain the first import of `src/main.ts`, `src/database/data-source.ts` and `src/database/seed-admin.ts` (any new entry point must import it first). The transformer then is the identity; if the process ever ran in another timezone, a UTC wall clock inside its spring-forward gap would be rejected (400) instead of shifted. Columns written by the application from a `Date` (outside SQL defaults) are therefore UTC wall clock; `created_at`/`updated_at` keep `SYSDATETIME()` of the SQL Server. Reports must read the UTC columns as UTC.
+
+Rules kept in the backend (not expressible as row checks): COMPLETED only through visit completion, no-show tolerance, overlap with buffer (applock), cancellation/reschedule/no-show blocked by an IN_PROGRESS or COMPLETED visit, the visit's employee being active, notes immutability after completion.
+
+A VOIDED visit does not hold its reservation (it can still be rescheduled, cancelled or marked as no-show), but `uq_vc_clinical_visits_reservation_id` also covers VOIDED rows, so no new visit can be started for that reservation; a new attendance needs a new reservation or a visit without reservation.
+
+Pending (not implemented): audit trail of `clinical_notes` changes on IN_PROGRESS visits (only the final state and void metadata are kept).

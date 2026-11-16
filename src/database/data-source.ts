@@ -1,3 +1,5 @@
+// Must stay the first import: forces process.env.TZ = "UTC" before anything creates dates or loads TypeORM.
+import "../force-utc";
 import "reflect-metadata";
 import "./environment";
 import { DataSource } from "typeorm";

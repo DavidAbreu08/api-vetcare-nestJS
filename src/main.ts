@@ -1,3 +1,5 @@
+// Must stay the first import: forces process.env.TZ = "UTC" before anything creates dates or loads TypeORM.
+import "./force-utc";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
 import * as express from "express";

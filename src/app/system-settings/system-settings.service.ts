@@ -4,7 +4,7 @@ import { ListQueryDto } from "../core/dto/list-query.dto";
 import { SystemRole } from "../core/enums/system-role.enum";
 import { UpdateSystemSettingDto } from "./dto/update-system-setting.dto";
 import { ROLE_ID_SETTING_SUFFIX, SystemSettingCode } from "./enums/system-setting-code.enum";
-import { SystemSettingsBusinessService } from "./system-settings.business.service";
+import { normalizedNonNegativeInteger, SystemSettingsBusinessService } from "./system-settings.business.service";
 import { SystemSettingMessage } from "./system-settings.messages";
 
 export type SystemRoleFlags = { isAdmin: boolean; isEmployee: boolean; isClient: boolean };
@@ -64,6 +64,13 @@ export class SystemSettingsService {
     const owned = new Set(roleIds.map(id => id.toLowerCase()));
     const [admin, employee, client] = await this.resolveRoleIds([SystemRole.ADMIN, SystemRole.EMPLOYEE, SystemRole.CLIENT]);
     return { isAdmin: owned.has(admin), isEmployee: owned.has(employee), isClient: owned.has(client) };
+  }
+
+  /** Non-negative integer setting (tolerances in minutes); fails closed (500) when missing or invalid. */
+  async getNonNegativeInteger(code: SystemSettingCode): Promise<number> {
+    const value = normalizedNonNegativeInteger(await this.getValue(code));
+    if (value === null) throw new InternalServerErrorException(SystemSettingMessage.Misconfigured);
+    return Number(value);
   }
 
   /** True when any *_ROLE_ID setting references the role. */

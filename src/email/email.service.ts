@@ -1,6 +1,14 @@
 import { EmailMessages } from "./email.messages";
 import { Injectable, Logger } from "@nestjs/common";
 import * as nodemailer from "nodemailer";
+
+const HTML_ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+
+/** Every user-provided or variable value interpolated into an HTML email goes through this (names, reasons, links). */
+export function escapeHtml(value: unknown): string {
+  return String(value ?? "").replace(/[&<>"']/g, char => HTML_ESCAPES[char]);
+}
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -22,7 +30,7 @@ export class EmailService {
         <p>
           Please click the button below to create your password. This link will expire in 1 hour.
         </p>
-        <a href="${link}" style="
+        <a href="${escapeHtml(link)}" style="
           display: inline-block;
           padding: 10px 20px;
           background-color: #4CAF50;
@@ -32,7 +40,7 @@ export class EmailService {
           margin: 10px 0;
         ">Create Password</a>
         <p>If the button doesn't work, copy and paste this link into your browser:</p>
-        <p><a href="${link}">${link}</a></p>
+        <p><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p>
         <br>
         <p>Thank you,<br>VetCare Team</p>
       </div>
@@ -48,9 +56,9 @@ export class EmailService {
     return `
       <div style="font-family: Arial, sans-serif; color: #333;">
         <h2>Reserva Recebida!</h2>
-        <p>Olá ${userName},</p>
+        <p>Olá ${escapeHtml(userName)},</p>
         <p>
-          A sua reserva para o dia <strong>${reservationDate}</strong> das <strong>${timeStart}</strong> às <strong>${timeEnd}</strong> foi criada com sucesso e será analisada pelo veterinário.
+          A sua reserva para o dia <strong>${escapeHtml(reservationDate)}</strong> das <strong>${escapeHtml(timeStart)}</strong> às <strong>${escapeHtml(timeEnd)}</strong> foi criada com sucesso e será analisada pelo veterinário.
         </p>
         <p>Em breve receberá uma confirmação ou pedido de alteração.</p>
         <br>
@@ -69,11 +77,11 @@ export class EmailService {
     return `
       <div style="font-family: Arial, sans-serif; color: #333;">
         <h2>Reserva Confirmada!</h2>
-        <p>Olá ${userName},</p>
+        <p>Olá ${escapeHtml(userName)},</p>
         <p>
-          A sua reserva para o dia <strong>${reservationDate}</strong> das <strong>${timeStart}</strong> às <strong>${timeEnd}</strong> foi confirmada pelo veterinário.
+          A sua reserva para o dia <strong>${escapeHtml(reservationDate)}</strong> das <strong>${escapeHtml(timeStart)}</strong> às <strong>${escapeHtml(timeEnd)}</strong> foi confirmada pelo veterinário.
         </p>
-        ${note ? `<p><strong>O veterinário deixou uma nota para si:</strong> ${note}</p>` : ""}
+        ${note ? `<p><strong>O veterinário deixou uma nota para si:</strong> ${escapeHtml(note)}</p>` : ""}
         <p>Aguardamos por si na data marcada.</p>
         <br>
         <p>Obrigado,<br>VetCare Team</p>
@@ -94,15 +102,15 @@ export class EmailService {
     return `
       <div style="font-family: Arial, sans-serif; color: #333;">
         <h2>Reserva Reagendada</h2>
-        <p>Olá ${userName},</p>
+        <p>Olá ${escapeHtml(userName)},</p>
         <p>A sua reserva foi <strong>reagendada</strong>.</p>
         <p>
-          <strong>Data e hora anterior:</strong> ${oldDate} das ${oldTimeStart} às ${oldTimeEnd}<br>
-          <strong>Nova data e hora:</strong> ${newDate} das ${newTimeStart} às ${newTimeEnd}
+          <strong>Data e hora anterior:</strong> ${escapeHtml(oldDate)} das ${escapeHtml(oldTimeStart)} às ${escapeHtml(oldTimeEnd)}<br>
+          <strong>Nova data e hora:</strong> ${escapeHtml(newDate)} das ${escapeHtml(newTimeStart)} às ${escapeHtml(newTimeEnd)}
         </p>
-        ${note ? `<p><strong>Nota:</strong> ${note}</p>` : ""}
+        ${note ? `<p><strong>Nota:</strong> ${escapeHtml(note)}</p>` : ""}
         <br>
-        <p>Por favor, confirme a sua disponibilidade.</p>
+        <p>A nova data aguarda confirmação da clínica; receberá um email quando for confirmada.</p>
         <p>Obrigado,<br>VetCare Team</p>
       </div>
     `;
@@ -116,9 +124,9 @@ export class EmailService {
     return `
       <div style="font-family: Arial, sans-serif; color: #333;">
         <h2>Reserva Cancelada</h2>
-        <p>Olá ${userName},</p>
-        <p>Lamentamos informar que a sua reserva para o dia <strong>${reservationDate}</strong> foi <strong>cancelada</strong>.</p>
-        ${note ? `<p><strong>Motivo:</strong> ${note}</p>` : ""}
+        <p>Olá ${escapeHtml(userName)},</p>
+        <p>Lamentamos informar que a sua reserva para o dia <strong>${escapeHtml(reservationDate)}</strong> foi <strong>cancelada</strong>.</p>
+        ${note ? `<p><strong>Motivo:</strong> ${escapeHtml(note)}</p>` : ""}
         <br>
         <p>Se tiver dúvidas, por favor contacte-nos.</p>
         <p>Obrigado,<br>VetCare Team</p>

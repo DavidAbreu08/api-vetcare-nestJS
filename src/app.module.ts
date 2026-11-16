@@ -8,12 +8,13 @@ import { AuthModule } from "./auth/auth.module";
 import { EmailModule } from "./email/email.module";
 import { AnimalModule } from "./app/animal/animal.module";
 import { ReservationModule } from "./app/reservation/reservation.module";
-import { BlockedTimeModule } from "./app/reservation/blocked-time.module";
+import { BlockedTimeModule } from "./app/blocked-times/blocked-time.module";
 import { PersistenceModule } from "./app/core/persistence/persistence.module";
 import { SystemSettingsModule } from "./app/system-settings/system-settings.module";
 import { RolesModule } from "./app/roles/roles.module";
 import { JobTitlesModule } from "./app/job-titles/job-titles.module";
 import { EmployeesModule } from "./app/employees/employees.module";
+import { ClinicalVisitModule } from "./app/clinical-visits/clinical-visit.module";
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { EmployeesModule } from "./app/employees/employees.module";
     AnimalModule,
     ReservationModule,
     BlockedTimeModule,
+    ClinicalVisitModule,
   ],
   controllers: [],
   providers: [],

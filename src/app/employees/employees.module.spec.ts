@@ -14,9 +14,11 @@ import { UsersModule } from "../users/users.module";
 import { UsersEntity } from "../users/entities/users.entity";
 import { ReservationModule } from "../reservation/reservation.module";
 import { ReservationEntity } from "../reservation/entities/reservation.entity";
-import { BlockedTimeEntity } from "../reservation/entities/bloked-times.entity";
+import { BlockedTimeEntity } from "../blocked-times/entities/bloked-times.entity";
 import { ReservationService } from "../reservation/reservation.service";
 import { AnimalEntity } from "../animal/entities/animal.entity";
+import { ReservationHistoryEntity } from "../reservation-history/entities/reservation-history.entity";
+import { ClinicalVisitEntity } from "../clinical-visits/entities/clinical-visit.entity";
 import { EmployeesModule } from "./employees.module";
 import { EmployeesService } from "./employees.service";
 import { EmployeeEntity } from "./entities/employee.entity";
@@ -30,7 +32,7 @@ it("resolves the users/roles/employees/reservation dependency graph without a da
   const builder = Test.createTestingModule({
     imports: [FakeDataSourceModule, PersistenceModule, SystemSettingsModule, RolesModule, JobTitlesModule, UsersModule, EmployeesModule, ReservationModule],
   });
-  for (const entity of [SystemSettingEntity, RoleEntity, UserRoleEntity, JobTitleEntity, UsersEntity, EmployeeEntity, EmployeeJobTitleEntity, ReservationEntity, BlockedTimeEntity, AnimalEntity]) {
+  for (const entity of [SystemSettingEntity, RoleEntity, UserRoleEntity, JobTitleEntity, UsersEntity, EmployeeEntity, EmployeeJobTitleEntity, ReservationEntity, BlockedTimeEntity, AnimalEntity, ReservationHistoryEntity, ClinicalVisitEntity]) {
     builder.overrideProvider(getRepositoryToken(entity)).useValue({});
   }
   const module = await builder.compile();

@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { AnimalEntity } from "../animal/entities/animal.entity";
@@ -9,6 +9,7 @@ import { PersistenceService } from "../core/persistence/persistence.service";
 import { AnimalMeasurementEntity } from "./entities/animal-measurement.entity";
 import { CreateMeasurementDto, ListMeasurementsQueryDto, UpdateMeasurementDto } from "./dto/create-measurement.dto";
 import { MeasurementMessage, MeasurementRelation } from "./measurement.messages";
+import { ClinicalVisitService } from "../clinical-visits/clinical-visit.service";
 
 /** Owns observation validation, active-animal access and deterministic independent latest values. */
 @Injectable()
@@ -18,6 +19,7 @@ export class MeasurementBusinessService {
     @InjectRepository(AnimalEntity) private readonly animals: Repository<AnimalEntity>,
     private readonly persistence: PersistenceService,
     private readonly types: MeasurementTypeService,
+    private readonly visits: ClinicalVisitService,
   ) {}
 
   private async animal(id: string, actor: Actor) {
@@ -48,6 +50,7 @@ export class MeasurementBusinessService {
     if (!isStaff(actor)) builder.innerJoin("animal.owner", "owner").andWhere("owner.id = :ownerId", { ownerId: actor.id });
     if (query.animalId) builder.andWhere("measurement.animalId = :animalId", { animalId: query.animalId });
     if (query.measurementTypeId) builder.andWhere("measurement.measurementTypeId = :typeId", { typeId: query.measurementTypeId });
+    if (query.clinicalVisitId) builder.andWhere("measurement.clinicalVisitId = :visitId", { visitId: query.clinicalVisitId });
     return this.persistence.execute(() => builder.orderBy("measurement.createdAt", "DESC").addOrderBy("measurement.id", "DESC").skip(query.skip).take(query.take).getMany());
   }
 
@@ -61,7 +64,9 @@ export class MeasurementBusinessService {
   async create(dto: CreateMeasurementDto, actor: Actor) {
     await this.animal(dto.animalId, actor);
     const type = await this.types.requireActive(dto.measurementTypeId);
-    const row = this.measurements.create({ animalId: dto.animalId, measurementTypeId: dto.measurementTypeId, value: this.value(dto.value, type.code), name: dto.name, description: dto.description, notes: dto.notes, measuredAt: this.time(dto.measuredAt), recordedBy: actor.id });
+    const row = this.measurements.create({ animalId: dto.animalId, measurementTypeId: dto.measurementTypeId, value: this.value(dto.value, type.code), name: dto.name, description: dto.description, notes: dto.notes, measuredAt: this.time(dto.measuredAt), recordedBy: actor.id, clinicalVisitId: dto.clinicalVisitId ?? null });
+    // Clinical context: same animal, IN_PROGRESS visit, clinical access; saved while holding the visit lock.
+    if (dto.clinicalVisitId) return this.visits.withWritableVisit(dto.clinicalVisitId, dto.animalId, actor, manager => manager.save(row));
     return this.persistence.execute(() => this.measurements.save(row));
   }
 
@@ -78,11 +83,14 @@ export class MeasurementBusinessService {
     if (dto.name !== undefined) row.name = dto.name;
     if (dto.description !== undefined) row.description = dto.description;
     if (dto.notes !== undefined) row.notes = dto.notes;
+    // Measurements of a visit change only while it is IN_PROGRESS, by staff with clinical access to it.
+    if (row.clinicalVisitId) return this.visits.withWritableVisit(row.clinicalVisitId, row.animalId, actor, manager => manager.save(row));
     return this.persistence.execute(() => this.measurements.save(row));
   }
 
   async delete(id: string, actor: Actor) {
     const row = await this.get(id, actor);
+    if (row.clinicalVisitId) throw new ConflictException(MeasurementMessage.ClinicalMeasurementNotDeletable);
     await this.persistence.execute(() => this.measurements.remove(row));
     return { message: MeasurementMessage.Deleted };
   }

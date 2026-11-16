@@ -21,6 +21,8 @@ export class AnimalMeasurementEntity {
   @Column({ name: "recorded_by", type: "uniqueidentifier", nullable: true }) recordedBy: string | null;
   @ManyToOne(() => UsersEntity, { nullable: true })
   @JoinColumn({ name: "recorded_by" }) recorder: UsersEntity | null;
+  /** Clinical context (same animal, composite FK); immutable after creation. recordedBy remains the author. */
+  @Column({ name: "clinical_visit_id", type: "uniqueidentifier", nullable: true }) clinicalVisitId: string | null;
   @CreateDateColumn({ name: "created_at", type: "datetime2" }) createdAt: Date;
   @UpdateDateColumn({ name: "updated_at", type: "datetime2" }) updatedAt: Date;
 }
