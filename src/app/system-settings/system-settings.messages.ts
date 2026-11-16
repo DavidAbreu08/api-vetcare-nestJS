@@ -6,5 +6,6 @@ export enum SystemSettingMessage {
   AdminRoleWithoutUsers = "The administrator role setting must reference a role held by at least one active user",
   EmployeeRoleNotHeld = "Every active employee must already hold the role referenced by EMPLOYEE_ROLE_ID",
   Misconfigured = "A required system setting is missing or invalid",
+  InvalidJobTitleReference = "Job-title settings must reference an existing, active job title",
   InvalidNonNegativeInteger = "This setting must be a non-negative integer (at most 2147483647)",
 }

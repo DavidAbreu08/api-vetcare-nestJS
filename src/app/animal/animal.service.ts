@@ -3,6 +3,7 @@ import { Actor } from "../core/authorization";
 import { AnimalBusinessService } from "./animal.business.service";
 import { CreateAnimalDto } from "./dto/create-animal.dto";
 import { UpdateAnimalDto } from "./dto/update-animal.dto";
+import { ConfirmAnimalDto } from "./dto/confirm-animal.dto";
 import { ListAnimalsQueryDto } from "./dto/list-animals-query.dto";
 
 /**
@@ -25,7 +26,7 @@ export class AnimalService {
   /** Keeps historical reservation references by soft-deleting the animal. */
   delete(id: string) { return this.business.delete(id); }
   /** Administrative verification action retained for existing clients. */
-  confirm(id: string, actor: Actor) { return this.business.confirm(id, actor); }
+  confirm(id: string, actor: Actor, dto?: ConfirmAnimalDto) { return this.business.confirm(id, actor, dto); }
   /** Compatibility route; the canonical collection endpoint provides pagination. */
   findAll(actor: Actor) { return this.business.findAll(actor); }
   /** Compatibility route scoped to an existing owner. */

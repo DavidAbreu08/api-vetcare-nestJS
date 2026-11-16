@@ -17,5 +17,7 @@ export const ReservationMessages = {
   NO_SHOW_TOO_EARLY: "A reservation can only be marked as no-show after its start plus the configured tolerance",
   SCHEDULE_BUSY: "The employee's schedule is being changed by another request; retry",
   SCHEDULE_LOCK_UNAVAILABLE: "The schedule lock could not be acquired",
+  ANIMAL_UNAVAILABLE: "The reservation's animal no longer exists or was deleted",
+  CLIENT_INACTIVE: "The reservation's client account is inactive or deleted",
   INVALID_INSTANT: "startAt and endAt must be ISO-8601 timestamps with an explicit offset or Z",
 } as const;

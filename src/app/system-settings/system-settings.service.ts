@@ -4,7 +4,7 @@ import { ListQueryDto } from "../core/dto/list-query.dto";
 import { SystemRole } from "../core/enums/system-role.enum";
 import { UpdateSystemSettingDto } from "./dto/update-system-setting.dto";
 import { ROLE_ID_SETTING_SUFFIX, SystemSettingCode } from "./enums/system-setting-code.enum";
-import { normalizedNonNegativeInteger, SystemSettingsBusinessService } from "./system-settings.business.service";
+import { normalizedJobTitleId, normalizedNonNegativeInteger, SystemSettingsBusinessService } from "./system-settings.business.service";
 import { SystemSettingMessage } from "./system-settings.messages";
 
 export type SystemRoleFlags = { isAdmin: boolean; isEmployee: boolean; isClient: boolean };
@@ -71,6 +71,14 @@ export class SystemSettingsService {
     const value = normalizedNonNegativeInteger(await this.getValue(code));
     if (value === null) throw new InternalServerErrorException(SystemSettingMessage.Misconfigured);
     return Number(value);
+  }
+
+  /**
+   * Job title referenced by a *_JOB_TITLE_ID setting (lowercase id), or null when the setting is missing, empty or
+   * malformed: an optional qualification is then simply not configured (fails closed: nobody holds it).
+   */
+  async getJobTitleId(code: SystemSettingCode): Promise<string | null> {
+    return normalizedJobTitleId(await this.getValue(code));
   }
 
   /** True when any *_ROLE_ID setting references the role. */

@@ -8,6 +8,7 @@ import { SystemRole } from "../core/enums/system-role.enum";
 import { AnimalService } from "./animal.service";
 import { CreateAnimalDto } from "./dto/create-animal.dto";
 import { UpdateAnimalDto } from "./dto/update-animal.dto";
+import { ConfirmAnimalDto } from "./dto/confirm-animal.dto";
 import { ListAnimalsQueryDto } from "./dto/list-animals-query.dto";
 
 @Controller("api/animal")
@@ -34,9 +35,15 @@ export class AnimalController {
     return this.service.findByOwner(ownerId, actor);
   }
 
+  /**
+   * ADMIN or a veterinarian (active employee with the VETERINARIAN job title, checked in the business service). The
+   * body is optional: expectedSpeciesId/expectedBreedId make the approval conditional on the reviewed values (409).
+   */
   @Put("confirm/:id")
-  @Roles(SystemRole.ADMIN)
-  confirm(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() actor: Actor) { return this.service.confirm(id, actor); }
+  @Roles(SystemRole.ADMIN, SystemRole.EMPLOYEE)
+  confirm(@Param("id", ParseUUIDPipe) id: string, @Body() dto: ConfirmAnimalDto, @CurrentUser() actor: Actor) {
+    return this.service.confirm(id, actor, dto);
+  }
 
   @Patch("update/:id")
   updateLegacy(@Param("id", ParseUUIDPipe) id: string, @Body() dto: UpdateAnimalDto, @CurrentUser() actor: Actor) {

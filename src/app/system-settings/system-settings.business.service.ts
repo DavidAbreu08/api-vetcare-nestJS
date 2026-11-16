@@ -5,12 +5,13 @@ import { DataSource, EntityManager, In, Repository } from "typeorm";
 import { ListQueryDto } from "../core/dto/list-query.dto";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { RoleEntity } from "../roles/entities/role.entity";
+import { JobTitleEntity } from "../job-titles/entities/job-title.entity";
 import { UserRoleEntity } from "../roles/entities/user-role.entity";
 import { EmployeeEntity } from "../employees/entities/employee.entity";
 import { clinicToday } from "../employees/employee-status";
 import { UpdateSystemSettingDto } from "./dto/update-system-setting.dto";
 import { SystemSettingEntity } from "./entities/system-setting.entity";
-import { NON_NEGATIVE_INTEGER_SETTINGS, ROLE_ID_SETTING_SUFFIX, SystemSettingCode } from "./enums/system-setting-code.enum";
+import { JOB_TITLE_ID_SETTING_SUFFIX, NON_NEGATIVE_INTEGER_SETTINGS, ROLE_ID_SETTING_SUFFIX, SystemSettingCode } from "./enums/system-setting-code.enum";
 import { SystemSettingMessage } from "./system-settings.messages";
 
 const LOCK = { mode: "pessimistic_write" } as const;
@@ -18,6 +19,9 @@ const ROLE_SETTING_CODES: string[] = Object.values(SystemSettingCode).filter(cod
 
 const normalizedRoleId = (value: string | null | undefined) =>
   typeof value === "string" && isUUID(value.trim()) ? value.trim().toLowerCase() : null;
+
+/** Lowercase UUID of a *_JOB_TITLE_ID setting value, or null when absent or malformed. */
+export const normalizedJobTitleId = normalizedRoleId;
 
 /** Largest value accepted by SQL Server int (minutes used in date arithmetic). */
 const MAX_SETTING_INTEGER = 2147483647;
@@ -89,6 +93,23 @@ export class SystemSettingsBusinessService {
     return roleId;
   }
 
+  /**
+   * *_JOB_TITLE_ID settings are optional qualifications: null, "" or blank clears the setting (stored as NULL: not
+   * configured, nobody holds it; for VETERINARIAN_JOB_TITLE_ID only administrators approve animal data). Otherwise
+   * the value must be the UUID of an existing, active job title (400). Lock order setting -> job title: this
+   * transaction already holds the setting row and now locks the job-title row (UPDLOCK). Job-title deactivation and
+   * deletion lock that same row first and then read vc_system_settings from the database inside their transaction
+   * (never the settings cache), so whichever commits first is seen by the other; neither locks in the opposite order.
+   */
+  private async validateJobTitleReference(manager: EntityManager, value: string | null | undefined): Promise<string | null> {
+    if (value === null || (typeof value === "string" && !value.trim())) return null;
+    const jobTitleId = normalizedJobTitleId(value);
+    if (!jobTitleId) throw new BadRequestException(SystemSettingMessage.InvalidJobTitleReference);
+    const jobTitle = await manager.findOne(JobTitleEntity, { where: { id: jobTitleId }, lock: LOCK });
+    if (!jobTitle || !jobTitle.isActive) throw new BadRequestException(SystemSettingMessage.InvalidJobTitleReference);
+    return jobTitleId;
+  }
+
   /** Validation and save share one transaction; the caller invalidates its cache after it ends. */
   async update(id: string, dto: UpdateSystemSettingDto) {
     this.assertId(id);
@@ -104,6 +125,7 @@ export class SystemSettingsBusinessService {
       const row = locked.find(candidate => candidate.id.toLowerCase() === current.id.toLowerCase()) ?? current;
       if (dto.value !== undefined) {
         if (isRoleSetting) row.value = await this.validateRoleReference(manager, row, dto.value, locked);
+        else if (row.code.endsWith(JOB_TITLE_ID_SETTING_SUFFIX)) row.value = await this.validateJobTitleReference(manager, dto.value);
         else if (NON_NEGATIVE_INTEGER_SETTINGS.includes(row.code)) {
           const minutes = normalizedNonNegativeInteger(dto.value);
           if (minutes === null) throw new BadRequestException(SystemSettingMessage.InvalidNonNegativeInteger);

@@ -16,4 +16,5 @@ export enum ClinicalVisitMessage {
   MeasurementAnimalMismatch = "A measurement must belong to the visit's animal",
   MeasurementVisitClosed = "Measurements can only be added to or changed in an IN_PROGRESS visit",
   ClinicalAccessDenied = "Clinical access to this visit is not allowed",
+  AnimalVisitInProgress = "The animal already has a clinical visit in progress; complete or void it first",
 }

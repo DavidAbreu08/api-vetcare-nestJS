@@ -1,4 +1,7 @@
-import { BadRequestException, Logger } from "@nestjs/common";
+import { BadRequestException, ConflictException, Logger } from "@nestjs/common";
+import { ReservationStatus } from "../core/enums/reservation-status.enum";
+import { ReservationEntity } from "../reservation/entities/reservation.entity";
+import { ClinicalVisitEntity } from "../clinical-visits/entities/clinical-visit.entity";
 import { IsNull, MoreThan } from "typeorm";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { Actor } from "../core/authorization";
@@ -19,16 +22,29 @@ const admin: Actor = { id: "u-admin", roleIds: [], isAdmin: true, isEmployee: fa
 
 describe("Employee profile rules", () => {
   let manager: any, employees: any, users: any, email: any, business: EmployeesBusinessService, stored: any, hasRole: boolean;
+  let account: any, open: any[], counts: { reservations: number; visits: number }, openParams: any;
 
   afterEach(() => jest.restoreAllMocks());
 
   beforeEach(() => {
     hasRole = false;
+    open = [];
+    openParams = {};
+    counts = { reservations: 0, visits: 0 };
     stored = { id: "E-1", userId: "U-1", terminationDate: null, hireDate: null, isAvailableForBookings: true };
+    account = { id: "U-1", email: "e@x.pt", isActive: true, deletedAt: null };
     manager = {
-      findOne: jest.fn(async (entity: unknown) => entity === EmployeeEntity ? stored : entity === UsersEntity ? { id: "U-1", email: "e@x.pt" } : null),
+      findOne: jest.fn(async (entity: unknown) => entity === EmployeeEntity ? { ...stored } : entity === UsersEntity ? account : null),
       find: jest.fn(async () => []),
-      count: jest.fn(async (entity: unknown) => entity === UserRoleEntity ? Number(hasRole) : 0),
+      count: jest.fn(async (entity: unknown) => entity === UserRoleEntity ? Number(hasRole)
+        : entity === ReservationEntity ? counts.reservations : entity === ClinicalVisitEntity ? counts.visits : 0),
+      createQueryBuilder: jest.fn(() => {
+        const qb: any = {};
+        qb.select = qb.orderBy = qb.addOrderBy = () => qb;
+        qb.where = qb.andWhere = (_sql: string, params?: object) => (Object.assign(openParams, params), qb);
+        qb.getMany = async () => open;
+        return qb;
+      }),
       create: jest.fn((_entity: unknown, row: unknown) => row),
       save: jest.fn(async (row: any) => ({ id: "E-1", ...row })),
       insert: jest.fn(), delete: jest.fn(),
@@ -133,6 +149,79 @@ describe("Employee profile rules", () => {
     expect(manager.delete).toHaveBeenCalledWith(EmployeeEntity, { id: "E-1" });
     expect(manager.delete).toHaveBeenCalledWith(UserRoleEntity, { userId: "U-1", roleId: EMPLOYEE_ROLE });
     expect(manager.delete).toHaveBeenCalledTimes(3);
+  });
+
+  describe("open reservations assigned to the employee (A1)", () => {
+    const reservation = (id: string, startAt: string, status = ReservationStatus.CONFIRMED) => ({ id, status, startAt: new Date(startAt), endAt: new Date(startAt), employeeId: "E-1" });
+
+    it("refuses a termination that strands PENDING/CONFIRMED reservations on or after the date (409 with their ids)", async () => {
+      open = [
+        reservation("R-BEFORE", "2999-05-31T10:00:00Z"),
+        reservation("R-CONF", "2999-06-01T10:00:00Z"),
+        reservation("R-PEND", "2999-06-02T10:00:00Z", ReservationStatus.PENDING),
+      ];
+      const error = await business.update("E-1", { terminationDate: "2999-06-01" }, admin).catch(e => e);
+      expect(error).toBeInstanceOf(ConflictException);
+      expect(error.getResponse()).toMatchObject({ code: "EMPLOYEE_HAS_OPEN_RESERVATIONS", reservationIds: ["R-CONF", "R-PEND"] });
+      expect(openParams).toMatchObject({ value: "E-1", openStatuses: [ReservationStatus.PENDING, ReservationStatus.CONFIRMED] });
+      expect(manager.save).not.toHaveBeenCalled();
+      // The profile row is locked before the reservations are read.
+      expect(manager.findOne).toHaveBeenCalledWith(EmployeeEntity, { where: { id: "E-1" }, lock: { mode: "pessimistic_write" } });
+      expect(manager.findOne.mock.invocationCallOrder[0]).toBeLessThan(manager.createQueryBuilder.mock.invocationCallOrder[0]);
+    });
+
+    it("accepts a termination after every open reservation", async () => {
+      open = [reservation("R-1", "2999-05-31T10:00:00Z")];
+      await expect(business.update("E-1", { terminationDate: "2999-06-01" }, admin)).resolves.toBeDefined();
+      expect(manager.save).toHaveBeenCalled();
+    });
+
+    it("refuses isAvailableForBookings=false with open reservations, and an immediate termination", async () => {
+      open = [reservation("R-1", "2999-01-01T10:00:00Z")];
+      await expect(business.update("E-1", { isAvailableForBookings: false }, admin)).rejects.toMatchObject({ response: { reservationIds: ["R-1"] } });
+      await expect(business.update("E-1", { terminationDate: PAST }, admin)).rejects.toMatchObject({ response: { reservationIds: ["R-1"] } });
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it("does not block edits of a profile that was already unavailable, nor edits that keep it bookable", async () => {
+      open = [reservation("R-1", "2999-01-01T10:00:00Z")];
+      await expect(business.update("E-1", { notes: "x", isAvailableForBookings: true }, admin)).resolves.toBeDefined();
+      stored.isAvailableForBookings = false;
+      await expect(business.update("E-1", { notes: "y" }, admin)).resolves.toBeDefined();
+    });
+  });
+
+  describe("inactive accounts (A4)", () => {
+    it("refuses a profile for an inactive account (409), locking the account", async () => {
+      account.isActive = false;
+      await expect(business.create({ userId: "U-1" }, admin)).rejects.toBeInstanceOf(ConflictException);
+      expect(manager.findOne).toHaveBeenCalledWith(UsersEntity, { where: { id: "U-1" }, lock: { mode: "pessimistic_write" } });
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it("refuses to reactivate (grant EMPLOYEE to) the profile of an inactive account", async () => {
+      stored.terminationDate = PAST;
+      stored.isAvailableForBookings = false;
+      account.isActive = false;
+      await expect(business.update("E-1", { terminationDate: null }, admin)).rejects.toBeInstanceOf(ConflictException);
+      expect(manager.insert).not.toHaveBeenCalled();
+      account.isActive = true;
+      await expect(business.update("E-1", { terminationDate: null }, admin)).resolves.toBeDefined();
+    });
+  });
+
+  describe("physical deletion (A5)", () => {
+    it("refuses to delete a profile referenced by reservations or visits (409 with the counts), locking it", async () => {
+      counts.reservations = 2;
+      const error = await business.delete("E-1").catch(e => e);
+      expect(error).toBeInstanceOf(ConflictException);
+      expect(error.getResponse()).toMatchObject({ code: "EMPLOYEE_HAS_HISTORY", reservationCount: 2, clinicalVisitCount: 0 });
+      counts.reservations = 0;
+      counts.visits = 1;
+      await expect(business.delete("E-1")).rejects.toMatchObject({ response: { clinicalVisitCount: 1 } });
+      expect(manager.delete).not.toHaveBeenCalled();
+      expect(manager.findOne).toHaveBeenCalledWith(EmployeeEntity, { where: { id: "E-1" }, lock: { mode: "pessimistic_write" } });
+    });
   });
 
   it("never treats a terminated profile as bookable", () => {

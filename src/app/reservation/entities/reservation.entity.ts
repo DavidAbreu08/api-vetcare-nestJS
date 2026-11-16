@@ -21,16 +21,16 @@ export class ReservationEntity {
 
   @Column({ name: "animal_id", type: "uniqueidentifier" }) animalId: string;
   @ManyToOne(() => AnimalEntity, { nullable: false })
-  @JoinColumn({ name: "animal_id" }) animal: AnimalEntity;
+  @JoinColumn({ name: "animal_id", foreignKeyConstraintName: "fk_vc_reservations_animal" }) animal: AnimalEntity;
 
   @Column({ name: "client_id", type: "uniqueidentifier" }) clientId: string;
   @ManyToOne(() => UsersEntity, { nullable: false })
-  @JoinColumn({ name: "client_id" }) client: UsersEntity;
+  @JoinColumn({ name: "client_id", foreignKeyConstraintName: "fk_vc_reservations_client" }) client: UsersEntity;
 
   /** vc_employees.id (employee profile), not the account. */
   @Column({ name: "employee_id", type: "uniqueidentifier", nullable: true }) employeeId: string | null;
   @ManyToOne(() => EmployeeEntity, { nullable: true })
-  @JoinColumn({ name: "employee_id" }) employee: EmployeeEntity | null;
+  @JoinColumn({ name: "employee_id", foreignKeyConstraintName: "fk_vc_reservations_employee" }) employee: EmployeeEntity | null;
 
   /** UTC instant. */
   @Column({ name: "start_at", type: "datetime2", precision: 3, transformer: utcDateTimeTransformer }) startAt: Date;

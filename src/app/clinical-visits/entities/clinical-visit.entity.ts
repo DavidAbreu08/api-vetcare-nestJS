@@ -1,10 +1,13 @@
-import { Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn, Unique, UpdateDateColumn } from "typeorm";
+import { Check, Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn, Unique, UpdateDateColumn } from "typeorm";
 import { AnimalEntity } from "../../animal/entities/animal.entity";
 import { utcDateTimeTransformer } from "../../core/persistence/utc-datetime";
 import { EmployeeEntity } from "../../employees/entities/employee.entity";
 import { ReservationEntity } from "../../reservation/entities/reservation.entity";
 import { UsersEntity } from "../../users/entities/users.entity";
 import { ClinicalVisitStatus } from "../enums/clinical-visit-status.enum";
+
+/** Filtered unique index: one IN_PROGRESS visit per animal. */
+export const CLINICAL_VISIT_ANIMAL_IN_PROGRESS_INDEX = "uq_vc_clinical_visits_animal_in_progress";
 
 /**
  * Clinical attendance of an animal, optionally originated by a reservation of the same animal
@@ -16,6 +19,10 @@ import { ClinicalVisitStatus } from "../enums/clinical-visit-status.enum";
 @Index("ix_vc_clinical_visits_animal_started", ["animalId", "startedAt"])
 @Index("ix_vc_clinical_visits_employee_started", ["employeeId", "startedAt"])
 @Index("ix_vc_clinical_visits_voided_by", ["voidedBy"])
+/** At most one IN_PROGRESS visit per animal (migration 1795348800000). */
+@Index(CLINICAL_VISIT_ANIMAL_IN_PROGRESS_INDEX, ["animalId"], { unique: true, where: "[status] = N'IN_PROGRESS'" })
+@Index("ix_vc_clinical_visits_completed_by", ["completedBy"])
+@Check("ck_vc_clinical_visits_voided_dates", "[voided_at] IS NULL OR [voided_at] >= [started_at]")
 export class ClinicalVisitEntity {
   @PrimaryGeneratedColumn("uuid") id: string;
 
@@ -32,12 +39,12 @@ export class ClinicalVisitEntity {
 
   @Column({ name: "animal_id", type: "uniqueidentifier" }) animalId: string;
   @ManyToOne(() => AnimalEntity, { nullable: false })
-  @JoinColumn({ name: "animal_id" }) animal: AnimalEntity;
+  @JoinColumn({ name: "animal_id", foreignKeyConstraintName: "fk_vc_clinical_visits_animal" }) animal: AnimalEntity;
 
   /** Responsible employee (vc_employees.id); may differ from the reservation's employee. */
   @Column({ name: "employee_id", type: "uniqueidentifier" }) employeeId: string;
   @ManyToOne(() => EmployeeEntity, { nullable: false })
-  @JoinColumn({ name: "employee_id" }) employee: EmployeeEntity;
+  @JoinColumn({ name: "employee_id", foreignKeyConstraintName: "fk_vc_clinical_visits_employee" }) employee: EmployeeEntity;
 
   @Column({ type: "nvarchar", length: 30, default: ClinicalVisitStatus.IN_PROGRESS }) status: ClinicalVisitStatus;
   /** UTC instant. */
@@ -53,7 +60,15 @@ export class ClinicalVisitEntity {
   /** vc_users.id of the administrator who voided the visit. */
   @Column({ name: "voided_by", type: "uniqueidentifier", nullable: true }) voidedBy: string | null;
   @ManyToOne(() => UsersEntity, { nullable: true })
-  @JoinColumn({ name: "voided_by" }) voidedByUser: UsersEntity | null;
+  @JoinColumn({ name: "voided_by", foreignKeyConstraintName: "fk_vc_clinical_visits_voided_by" }) voidedByUser: UsersEntity | null;
+
+  /**
+   * vc_users.id of who completed the visit (set by POST /complete). NULL for IN_PROGRESS/VOIDED visits and for
+   * visits completed before migration 1795348800000 (no CHECK enforces it in SQL, see docs/SCHEMA_MIGRATION.md).
+   */
+  @Column({ name: "completed_by", type: "uniqueidentifier", nullable: true }) completedBy: string | null;
+  @ManyToOne(() => UsersEntity, { nullable: true })
+  @JoinColumn({ name: "completed_by", foreignKeyConstraintName: "fk_vc_clinical_visits_completed_by" }) completedByUser: UsersEntity | null;
 
   @CreateDateColumn({ name: "created_at", type: "datetime2", default: () => "SYSDATETIME()" }) createdAt: Date;
   @UpdateDateColumn({ name: "updated_at", type: "datetime2", default: () => "SYSDATETIME()" }) updatedAt: Date;

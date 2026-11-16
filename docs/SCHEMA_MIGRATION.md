@@ -158,3 +158,28 @@ Steps:
 7. Final verification (51048: every row has a 32-byte `token_hash`; 51049: final columns, nullability, key, indexes and trusted non-cascading FK are as expected).
 
 Resulting `vc_reset_tokens`: `id` (PK), `token_hash` binary(32) unique, `user_id` NOT NULL, `expires_at` NOT NULL, `used_at` NULL, `created_at` NOT NULL, plus `name`/`description`/`notes`. Only the SHA-256 of a token is stored; the plain token exists only in the email link. Pending tokens are rows with `used_at` NULL and `expires_at` in the future; a token is consumed or invalidated by setting `used_at`. The hourly cleanup deletes expired rows and rows used more than 24 hours ago. The entities declare the same key, index and foreign-key names; instants use the UTC transformer.
+
+# SQL Server schema: integrity and lifecycle
+
+`IntegrityAndLifecycle1795348800000` follows `HashedResetTokens1795262400000`. It is additive and was not executed against any database during this work. It requires an active transaction (default `--transaction all`); `down` rejects rollback (it would discard `completed_by` and the new setting; restore a backup).
+
+The migration sets `ANSI_NULLS` and `QUOTED_IDENTIFIER` ON for its session and verifies them (51050) before creating the filtered unique index (see the note on filtered indexes above).
+
+Preconditions (exclusive lock on `vc_clinical_visits` held until commit; THROW codes 51050–51059). No data is normalized automatically: duplicates and inconsistent dates need a clinical decision.
+
+- 51050: `ANSI_NULLS` and `QUOTED_IDENTIFIER` are ON.
+- 51051: `fk_vc_clinical_visits_completed_by`, `ck_vc_clinical_visits_voided_dates`, `uq_vc_clinical_visits_animal_in_progress` and `ix_vc_clinical_visits_completed_by` do not exist yet (`completed_by` is also checked before any DDL).
+- 51052: no animal has more than one `IN_PROGRESS` visit (complete or void the extra visits first).
+- 51053: no visit has `voided_at < started_at`.
+- 51054: the setting `VETERINARIAN_JOB_TITLE_ID` and its seed id `40000000-0000-4000-8000-000000000006` do not exist yet (`vc_system_settings` read with `UPDLOCK, HOLDLOCK`).
+
+Steps:
+
+1. `vc_clinical_visits.completed_by` uniqueidentifier NULL (account that completed the visit).
+2. In a later batch: `fk_vc_clinical_visits_completed_by` -> `vc_users` (`WITH CHECK`, no cascade), `ck_vc_clinical_visits_voided_dates` (`voided_at IS NULL OR voided_at >= started_at`, `WITH CHECK`), `ix_vc_clinical_visits_completed_by`, and the filtered unique index `uq_vc_clinical_visits_animal_in_progress` on `(animal_id) WHERE status = N'IN_PROGRESS'` (at most one visit in progress per animal).
+3. Setting `VETERINARIAN_JOB_TITLE_ID` (fixed id `...0006`, same method as the `*_ROLE_ID` seeds): value = lowercase id of the active job title with code `VETERINARIAN` (seeded by `UserRolesAndEmployees`, `30000000-...-0001`), read with `UPDLOCK, HOLDLOCK`; NULL when no such active job title exists, which the application treats as "no veterinarian configured" (only administrators approve animal data) until an administrator sets it through `/api/system-settings`.
+4. Final verification (51059): column, nullability, trusted non-cascading FK, trusted CHECK, both indexes (the unique one filtered) and the setting row.
+
+`completed_by` is filled by the application on every completion from this release on. There is deliberately no CHECK "`status = COMPLETED` ⇒ `completed_by IS NOT NULL`": visits completed before this migration have no known author, a trusted CHECK would fail on them and a `WITH NOCHECK` one would be untrusted and hide them. Inferring the author (e.g. from the responsible employee) would invent audit data. The rule is enforced by the application only; consider adding the CHECK once no legacy COMPLETED row without author remains.
+
+The entities declare the same names (`@Index` with the filter, `@Check`, `foreignKeyConstraintName`). Metadata-only alignment, no migration: `BreedEntity` names `uq_vc_breeds_species_name`, `uq_vc_breeds_id_species` and `fk_vc_breeds_species`; `SpeciesEntity` names `uq_vc_species_name` (instead of `unique: true`); `AnimalEntity` declares `ix_vc_animals_species`, `ix_vc_animals_breed_species`, `fk_vc_animals_owner` and `fk_vc_animals_species`; `ReservationEntity` names its three FKs; `MeasurementTypeEntity` already matched. `AnimalEntity.breed` is now mapped on `breed_id` only with `createForeignKeyConstraints: false`: the composite join (`breed_id`, `species_id`) shared `species_id` with `species`, so TypeORM 0.3 generated an invalid species join (`ON species.speciesId = ...`). The composite FK `fk_vc_animals_breed_species` remains in the database (as `fk_vc_clinical_visits_reservation_animal`); `measurement.sql.spec.ts` checks the generated SQL and the declared names.

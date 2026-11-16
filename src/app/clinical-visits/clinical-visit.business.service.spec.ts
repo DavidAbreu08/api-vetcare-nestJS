@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException } from "@nestjs/common";
+import { QueryFailedError } from "typeorm";
 import { Actor, sameId } from "../core/authorization";
 import { ReservationStatus } from "../core/enums/reservation-status.enum";
 import { PersistenceService } from "../core/persistence/persistence.service";
@@ -44,6 +45,8 @@ function setup() {
       return null;
     }),
     count: jest.fn(async (_entity: unknown, { where }: any) => [...visits.values()].filter(v => sameId(v.reservationId, where.reservationId)).length),
+    find: jest.fn(async (_entity: unknown, { where }: any) => [...visits.values()]
+      .filter(v => sameId(v.animalId, where.animalId) && v.status === where.status).map(v => ({ id: v.id }))),
     create: jest.fn((_entity: unknown, row: any) => ({ ...row })),
     save: jest.fn(async (row: any) => {
       const saved = { id: "V-NEW", ...row };
@@ -121,7 +124,62 @@ describe("ClinicalVisitBusinessService.start", () => {
   });
 });
 
+describe("One IN_PROGRESS visit per animal (decision 27)", () => {
+  it("locks the animal and refuses a second IN_PROGRESS visit (409 with the visit id)", async () => {
+    const t = setup();
+    t.addVisit({ id: "V-1", animalId: "CAT" });
+    const error = await t.business.start({ animalId: "CAT" }, vet1).catch(e => e);
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getResponse()).toMatchObject({ code: "ANIMAL_VISIT_IN_PROGRESS", clinicalVisitIds: ["V-1"] });
+    expect(t.manager.findOne).toHaveBeenCalledWith(AnimalEntity, { where: { id: "CAT" }, lock: { mode: "pessimistic_write" } });
+    expect(t.manager.save).not.toHaveBeenCalled();
+  });
+
+  it("allows a new visit once the previous one is COMPLETED or VOIDED, and for another animal", async () => {
+    const t = setup();
+    t.addVisit({ id: "V-1", animalId: "CAT", status: ClinicalVisitStatus.COMPLETED });
+    t.addVisit({ id: "V-2", animalId: "DOG" });
+    await expect(t.business.start({ animalId: "CAT" }, vet1)).resolves.toBeDefined();
+  });
+
+  it("maps a 2601 violation of uq_vc_clinical_visits_animal_in_progress (concurrent start) to the same 409", async () => {
+    const t = setup();
+    const duplicate = Object.assign(new QueryFailedError("INSERT", [], new Error("dup")), {
+      driverError: { number: 2601, message: "Cannot insert duplicate key row in object 'dbo.vc_clinical_visits' with unique index 'uq_vc_clinical_visits_animal_in_progress'. The duplicate key value is (CAT)." },
+    });
+    t.manager.save.mockRejectedValueOnce(duplicate);
+    await expect(t.business.start({ animalId: "CAT" }, vet1)).rejects.toMatchObject({ status: 409, response: { code: "ANIMAL_VISIT_IN_PROGRESS" } });
+  });
+
+  it("keeps the generic duplicate message for other unique indexes", async () => {
+    const t = setup();
+    t.manager.save.mockRejectedValueOnce(Object.assign(new QueryFailedError("INSERT", [], new Error("dup")), {
+      driverError: { number: 2601, message: "Cannot insert duplicate key row in object 'dbo.vc_clinical_visits' with unique index 'uq_vc_clinical_visits_reservation_id'." },
+    }));
+    const error = await t.business.start({ animalId: "CAT" }, vet1).catch(e => e);
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getResponse()).not.toMatchObject({ code: "ANIMAL_VISIT_IN_PROGRESS" });
+  });
+});
+
 describe("ClinicalVisitBusinessService.complete and void", () => {
+  it("records the caller as completedBy (E2) and shows it only to administrators", async () => {
+    const t = setup();
+    t.addVisit({ id: "V-1" });
+    const view: any = await t.business.complete("V-1", {}, vet1);
+    expect(t.visits.get("V-1")).toMatchObject({ status: ClinicalVisitStatus.COMPLETED, completedBy: "U-E-1" });
+    expect(view).not.toHaveProperty("completedBy");
+    expect(await t.business.get("V-1", admin)).toMatchObject({ completedBy: "U-E-1" });
+  });
+
+  it("never voids before startedAt (ck_vc_clinical_visits_voided_dates), even with a clock behind", async () => {
+    const t = setup();
+    const startedAt = new Date(Date.now() + 60_000);
+    t.addVisit({ id: "V-1", startedAt });
+    await t.business.voidVisit("V-1", { reason: "clock skew" }, admin);
+    expect(t.visits.get("V-1").voidedAt.getTime()).toBe(startedAt.getTime());
+  });
+
   it("completes the visit and its reservation with a COMPLETED event", async () => {
     const t = setup();
     t.addReservation({ id: "R-1" });

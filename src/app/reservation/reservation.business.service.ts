@@ -48,6 +48,14 @@ const ACTIVE_VISIT_STATUSES = [ClinicalVisitStatus.IN_PROGRESS, ClinicalVisitSta
  * history event; operations that can make an employee's time occupied take the employee schedule applock
  * (sp_getapplock) before checking overlaps. Notifications are sent after commit.
  *
+ * Lock order (UPDLOCK rows, then the applock), never inverted by any flow:
+ *   vc_reservations -> vc_animals -> vc_users (client) -> vc_employees -> employee schedule applock.
+ * Creation, confirmation and reschedule lock the animal and the client account and re-check them (not deleted,
+ * active), serializing with animal deletion and account deactivation/deletion, which lock those rows and then
+ * read open reservations. Every flow that assigns or confirms an employee locks the employee profile, serializing
+ * with termination/unavailability (PUT /api/employees/:id) and account deactivation, which lock it and then read
+ * the employee's open reservations. Those readers never lock reservations, so no cycle can form.
+ *
  * Access: administrators see and manage everything; an active employee sees the reservations assigned to them;
  * a client sees and may cancel their own reservations. Responses are projected per actor (serializeReservation).
  */
@@ -148,6 +156,7 @@ export class ReservationBusinessService {
     if (dto.employeeId && !actor.isAdmin) throw new ForbiddenException(ReservationMessages.EMPLOYEE_ASSIGNMENT_FORBIDDEN);
 
     const saved = await this.transaction(async manager => {
+      await this.requireBookingParties(manager, animal.id, client.id, { requireOwnership: true });
       await this.assertNotBlocked(manager, startAt, endAt);
       const employee = dto.employeeId ? await this.requireBookableEmployee(manager, dto.employeeId, startAt) : null;
       if (employee) await this.reserveEmployeeSlot(manager, employee.id, startAt, endAt);
@@ -202,6 +211,7 @@ export class ReservationBusinessService {
       assertTransition(reservation.status, ReservationStatus.CONFIRMED);
       if (!reservation.employeeId) throw new ConflictException({ statusCode: 409, code: "EMPLOYEE_REQUIRED", message: ReservationMessages.EMPLOYEE_REQUIRED });
       validateReservationWindow(reservation.startAt, reservation.endAt);
+      await this.requireBookingParties(manager, reservation.animalId, reservation.clientId);
       const employee = await this.requireBookableEmployee(manager, reservation.employeeId, reservation.startAt);
       await this.assertNotBlocked(manager, reservation.startAt, reservation.endAt);
       await this.reserveEmployeeSlot(manager, employee.id, reservation.startAt, reservation.endAt, reservation.id);
@@ -235,6 +245,7 @@ export class ReservationBusinessService {
       if (reservation.startAt.getTime() === startAt.getTime() && reservation.endAt.getTime() === endAt.getTime()) {
         policyError("RESCHEDULE_UNCHANGED", ReservationMessages.RESCHEDULE_UNCHANGED);
       }
+      await this.requireBookingParties(manager, reservation.animalId, reservation.clientId);
       await this.assertNotBlocked(manager, startAt, endAt);
       if (reservation.employeeId) {
         const employee = await this.requireBookableEmployee(manager, reservation.employeeId, startAt);
@@ -319,11 +330,36 @@ export class ReservationBusinessService {
     return reservation;
   }
 
-  /** Bookable profile (available, active account, not terminated by the reservation's clinic date). */
+  /**
+   * Bookable profile (available, active account, not terminated by the reservation's clinic date). The profile row
+   * is locked (UPDLOCK) until commit, serializing with termination/unavailability and account deactivation; the
+   * account is read in a separate statement after the lock is granted, so it reflects any change committed by the
+   * transaction that held the lock.
+   */
   private async requireBookableEmployee(manager: EntityManager, employeeId: string, startAt: Date) {
-    const employee = await manager.findOne(EmployeeEntity, { where: { id: employeeId }, relations: { user: true } });
-    if (!isBookableEmployee(employee, clinicParts(startAt).date)) throw new BadRequestException(ReservationMessages.INVALID_EMPLOYEE);
-    return employee;
+    const employee = await manager.findOne(EmployeeEntity, { where: { id: employeeId }, lock: WRITE_LOCK });
+    const user = employee ? await manager.findOne(UsersEntity, { where: { id: employee.userId } }) : null;
+    const candidate = employee && user ? Object.assign(employee, { user }) : null;
+    if (!isBookableEmployee(candidate, clinicParts(startAt).date)) throw new BadRequestException(ReservationMessages.INVALID_EMPLOYEE);
+    return candidate;
+  }
+
+  /**
+   * Locks (UPDLOCK) and re-checks, inside the transaction, the animal (exists, not soft-deleted) and the client
+   * account (active, not soft-deleted): 409 ANIMAL_UNAVAILABLE / CLIENT_INACTIVE otherwise. Soft-deleted rows are
+   * excluded by findOne.
+   */
+  private async requireBookingParties(manager: EntityManager, animalId: string, clientId: string, options: { requireOwnership?: boolean } = {}) {
+    const animal = await manager.findOne(AnimalEntity, { where: { id: animalId }, lock: WRITE_LOCK });
+    if (!animal) throw new ConflictException({ statusCode: 409, code: "ANIMAL_UNAVAILABLE", message: ReservationMessages.ANIMAL_UNAVAILABLE });
+    const client = await manager.findOne(UsersEntity, { where: { id: clientId }, lock: WRITE_LOCK });
+    if (!client?.isActive) throw new ConflictException({ statusCode: 409, code: "CLIENT_INACTIVE", message: ReservationMessages.CLIENT_INACTIVE });
+    if (options.requireOwnership) {
+      // Creation: the ownership pre-check ran before the transaction. With the animal row locked (owner changes
+      // lock it too), re-read owner_id; a plain read after the existing locks keeps the lock order unchanged.
+      const owned = await manager.findOne(AnimalEntity, { select: { id: true }, where: { id: animalId, owner: { id: clientId } } });
+      if (!owned) throw new ConflictException({ statusCode: 409, code: "ANIMAL_OWNER_MISMATCH", message: ReservationMessages.ANIMAL_OWNER_MISMATCH });
+    }
   }
 
   /** Global clinic blocks (vc_blocked_times, clinic-local date and HH:mm) overlapping the interval. */

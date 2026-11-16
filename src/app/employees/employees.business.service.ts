@@ -7,7 +7,10 @@ import { SystemRole } from "../core/enums/system-role.enum";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { EmailService } from "src/email/email.service";
 import { JobTitleEntity } from "../job-titles/entities/job-title.entity";
-import { dateKey } from "../reservation/reservation-policy";
+import { ClinicalVisitEntity } from "../clinical-visits/entities/clinical-visit.entity";
+import { findOpenReservations, openReservationsConflict } from "../reservation/open-reservations";
+import { ReservationEntity } from "../reservation/entities/reservation.entity";
+import { clinicParts, dateKey } from "../reservation/reservation-policy";
 import { clinicToday, isBookableEmployee, isEmploymentActive } from "./employee-status";
 import { UserRoleEntity } from "../roles/entities/user-role.entity";
 import { SystemSettingsService } from "../system-settings/system-settings.service";
@@ -95,12 +98,36 @@ export class EmployeesBusinessService {
     if (ids.length) await manager.insert(EmployeeJobTitleEntity, ids.map(jobTitleId => ({ employeeId, jobTitleId })));
   }
 
-  /** EMPLOYEE accompanies the active profile; assigned in the caller's transaction and audited with the actor. */
+  /**
+   * EMPLOYEE accompanies the active profile; assigned in the caller's transaction and audited with the actor.
+   * A role is never granted to an inactive account (409): reactivate the account first.
+   */
   private async ensureEmployeeRole(manager: EntityManager, userId: string, assignedBy: string) {
     const roleId = await this.settings.resolveRoleId(SystemRole.EMPLOYEE);
     if (!(await manager.count(UserRoleEntity, { where: { userId, roleId } }))) {
+      const account = await manager.findOne(UsersEntity, { where: { id: userId } });
+      if (!account?.isActive) throw new ConflictException(EmployeeMessage.InactiveAccount);
       await manager.insert(UserRoleEntity, { userId, roleId, assignedBy });
     }
+  }
+
+  /**
+   * Rejects (409 with the reservation ids) a profile change that makes the employee unable to attend PENDING or
+   * CONFIRMED reservations assigned to them and not yet finished: termination on or before their clinic date or
+   * isAvailableForBookings=false. Nothing is cancelled automatically. Only reservations attendable before the
+   * change count, so editing an already unavailable profile is not blocked by them. Called with the profile row
+   * locked (UPDLOCK): every flow that assigns or confirms a reservation locks the same row (lock order
+   * reservation -> employee profile), so no reservation can be assigned or confirmed between this read and commit.
+   */
+  private async assertNoStrandedReservations(manager: EntityManager, before: EmployeeEntity, after: EmployeeEntity) {
+    const user = await manager.findOne(UsersEntity, { where: { id: before.userId } });
+    if (!user) return;
+    const open = await findOpenReservations(manager, { employeeId: before.id });
+    const stranded = open.filter(reservation => {
+      const date = clinicParts(reservation.startAt).date;
+      return this.isBookable({ ...before, user }, date) && !this.isBookable({ ...after, user }, date);
+    });
+    if (stranded.length) throw openReservationsConflict("EMPLOYEE_HAS_OPEN_RESERVATIONS", EmployeeMessage.OpenReservations, stranded);
   }
 
   /** A terminated profile loses EMPLOYEE in the caller's transaction; returns whether a row was removed. */
@@ -135,8 +162,9 @@ export class EmployeesBusinessService {
       if (dto.user) {
         ({ user, resetToken } = await this.users.createAccount(manager, dto.user, active ? [SystemRole.EMPLOYEE] : [], actor.id));
       } else {
-        user = await manager.findOne(UsersEntity, { where: { id: dto.userId } });
+        user = await manager.findOne(UsersEntity, { where: { id: dto.userId }, lock: { mode: "pessimistic_write" } });
         if (!user) throw new BadRequestException(EmployeeMessage.InvalidUser);
+        if (!user.isActive) throw new ConflictException(EmployeeMessage.InactiveAccount);
         if (await manager.count(EmployeeEntity, { where: { userId: user.id } })) throw new ConflictException(EmployeeMessage.AlreadyEmployee);
         if (active) await this.ensureEmployeeRole(manager, user.id, actor.id);
       }
@@ -151,16 +179,19 @@ export class EmployeesBusinessService {
   /**
    * EMPLOYEE follows the profile in the same transaction: an active profile (termination absent or in the
    * future) gets it (again) and a terminated one loses it. The profile row is locked (UPDLOCK) so this
-   * serializes with PUT /api/users/:id/roles without relying on blocking reads.
+   * serializes with PUT /api/users/:id/roles and with reservation assignment/confirmation without relying on
+   * blocking reads. Termination or unavailability with open reservations assigned returns 409 (their ids).
    */
   async update(id: string, dto: UpdateEmployeeDto, actor: Actor) {
     const attributes = this.fields(dto);
     const revokedFrom = await this.transaction(async manager => {
       const employee = await manager.findOne(EmployeeEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
       if (!employee) throw new NotFoundException(EmployeeMessage.NotFound);
+      const before = { ...employee };
       Object.assign(employee, attributes);
       this.assertDates(employee.hireDate, employee.terminationDate);
       this.applyAvailabilityRule(employee, dto.isAvailableForBookings);
+      await this.assertNoStrandedReservations(manager, before, employee);
       await manager.save(employee);
       let revoked = false;
       if (isEmploymentActive(employee.terminationDate)) await this.ensureEmployeeRole(manager, employee.userId, actor.id);
@@ -175,11 +206,21 @@ export class EmployeesBusinessService {
     return serializeEmployee(await this.load(id));
   }
 
-  /** Removes the profile, its job titles and the EMPLOYEE role together; the account and reservation history remain. */
+  /**
+   * Removes the profile, its job titles and the EMPLOYEE role together; the account remains. A profile referenced
+   * by any reservation or clinical visit (any state) is never deleted (409 with the counts): terminate it instead.
+   * The row is locked (UPDLOCK) first, so no assignment or visit (which lock or read it) appears meanwhile; the
+   * foreign keys remain the final arbiter.
+   */
   async delete(id: string) {
     await this.transaction(async manager => {
-      const employee = await manager.findOne(EmployeeEntity, { where: { id } });
+      const employee = await manager.findOne(EmployeeEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
       if (!employee) throw new NotFoundException(EmployeeMessage.NotFound);
+      const reservationCount = await manager.count(ReservationEntity, { where: { employeeId: employee.id } });
+      const clinicalVisitCount = await manager.count(ClinicalVisitEntity, { where: { employeeId: employee.id } });
+      if (reservationCount || clinicalVisitCount) {
+        throw new ConflictException({ statusCode: 409, code: "EMPLOYEE_HAS_HISTORY", message: EmployeeMessage.HasHistory, reservationCount, clinicalVisitCount });
+      }
       const employeeRoleId = await this.settings.resolveRoleId(SystemRole.EMPLOYEE);
       await manager.delete(EmployeeJobTitleEntity, { employeeId: employee.id });
       await manager.delete(EmployeeEntity, { id: employee.id });

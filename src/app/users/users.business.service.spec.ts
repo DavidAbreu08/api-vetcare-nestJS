@@ -11,6 +11,7 @@ import { UsersEntity } from "./entities/users.entity";
 import { ResetTokenEntity } from "src/auth/entities/reset-token.entity";
 import { isIssuedAfterPasswordChange, UsersBusinessService } from "./users.business.service";
 import { createHash } from "crypto";
+import { ReservationStatus } from "../core/enums/reservation-status.enum";
 
 const ADMIN_ID = "20000000-0000-4000-8000-000000000001";
 const EMPLOYEE_ID = "20000000-0000-4000-8000-000000000002";
@@ -23,20 +24,32 @@ const ROLES = [
 const admin: Actor = { id: "u-admin", roleIds: [ADMIN_ID], isAdmin: true, isEmployee: false, isClient: false, employeeId: null };
 
 describe("User role management", () => {
-  let manager: any, business: UsersBusinessService, otherAdmins: number, currentRows: any[], profile: { terminationDate: string | null } | null;
+  let manager: any, business: UsersBusinessService, otherAdmins: number, currentRows: any[], profile: { id?: string; terminationDate: string | null } | null;
+  /** Open reservations returned by findOpenReservations, per filter column (clientId / employeeId). */
+  let open: Record<string, any[]>, account: any;
 
   beforeEach(() => {
     otherAdmins = 0;
     profile = null;
+    open = {};
+    account = { id: "U-1", isActive: true, email: "a@b.pt", nif: null };
     currentRows = [{ userId: "U-1", roleId: ADMIN_ID.toUpperCase(), assignedBy: "original-admin", createdAt: new Date(2020, 0, 1) }];
     manager = {
-      findOne: jest.fn(async (entity: unknown) => entity === UsersEntity ? { id: "U-1", isActive: true, email: "a@b.pt", nif: null }
+      findOne: jest.fn(async (entity: unknown) => entity === UsersEntity ? { ...account }
         : entity === EmployeeEntity ? profile : { id: ADMIN_ID, isActive: true }),
       find: jest.fn(async (entity: unknown, options: any) => entity === UserRoleEntity ? currentRows
         : ROLES.filter(role => (options.where.id as FindOperator<string[]>).value.includes(role.id))),
       count: jest.fn(async (_entity: unknown, options: any) => options.where.userId instanceof FindOperator
         ? otherAdmins : Number(currentRows.some(row => row.roleId.toLowerCase() === ADMIN_ID))),
       delete: jest.fn(), insert: jest.fn(), softDelete: jest.fn(), save: jest.fn(async (row: unknown) => row),
+      createQueryBuilder: jest.fn(() => {
+        let column = "";
+        const qb: any = {};
+        qb.select = qb.orderBy = qb.addOrderBy = qb.andWhere = () => qb;
+        qb.where = (sql: string) => ((column = sql.replace(/^r\.(\w+) = :value$/, "$1")), qb);
+        qb.getMany = async () => open[column] ?? [];
+        return qb;
+      }),
     };
     const dataSource = { transaction: jest.fn(async (work: (m: unknown) => unknown) => work(manager)) };
     const settings = new SystemSettingsService({ loadAll: async () => [
@@ -163,6 +176,61 @@ describe("User role management", () => {
     profile = { terminationDate: "2000-01-01" };
     await business.delete("U-1");
     expect(manager.softDelete).toHaveBeenCalledWith(UsersEntity, { id: "U-1" });
+  });
+
+  describe("open reservations block deactivation and deletion (A1, A2)", () => {
+    const row = (id: string, status = ReservationStatus.PENDING) => ({ id, status, startAt: new Date("2999-01-01T10:00:00Z") });
+    beforeEach(() => { currentRows = []; });
+
+    it("refuses to deactivate or delete a client with open reservations (409 with their ids)", async () => {
+      open.clientId = [row("R-1"), row("R-2", ReservationStatus.CONFIRMED)];
+      for (const run of [() => business.update("U-1", { isActive: false }, admin), () => business.delete("U-1")]) {
+        const error = await run().catch(e => e);
+        expect(error).toBeInstanceOf(ConflictException);
+        expect(error.getResponse()).toMatchObject({
+          code: "CLIENT_HAS_OPEN_RESERVATIONS", reservationIds: ["R-1", "R-2"],
+          reservations: [{ id: "R-1", status: "PENDING", startAt: "2999-01-01T10:00:00.000Z" }, expect.objectContaining({ id: "R-2" })],
+        });
+      }
+      expect(manager.save).not.toHaveBeenCalled();
+      expect(manager.softDelete).not.toHaveBeenCalled();
+      // Account locked before the reservations are read.
+      expect(manager.findOne).toHaveBeenCalledWith(UsersEntity, { where: { id: "U-1" }, lock: { mode: "pessimistic_write" } });
+      expect(manager.findOne.mock.invocationCallOrder[0]).toBeLessThan(manager.createQueryBuilder.mock.invocationCallOrder[0]);
+    });
+
+    it("refuses to deactivate an account whose employee profile has open reservations assigned, locking the profile", async () => {
+      profile = { id: "E-1", terminationDate: null };
+      open.employeeId = [row("R-9", ReservationStatus.CONFIRMED)];
+      await expect(business.update("U-1", { isActive: false }, admin)).rejects.toMatchObject({
+        response: { code: "EMPLOYEE_HAS_OPEN_RESERVATIONS", reservationIds: ["R-9"] },
+      });
+      expect(manager.findOne).toHaveBeenCalledWith(EmployeeEntity, { where: { userId: "U-1" }, lock: { mode: "pessimistic_write" } });
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it("deactivates and deletes when nothing is open, and ignores reservations on other updates", async () => {
+      await expect(business.update("U-1", { isActive: false }, admin)).resolves.toBeDefined();
+      expect(manager.save).toHaveBeenCalledWith(expect.objectContaining({ isActive: false }));
+      open.clientId = [row("R-1")];
+      manager.createQueryBuilder.mockClear();
+      await expect(business.update("U-1", { name: "Novo" }, admin)).resolves.toBeDefined();
+      expect(manager.createQueryBuilder).not.toHaveBeenCalled();
+      open.clientId = [];
+      await business.delete("U-1");
+      expect(manager.softDelete).toHaveBeenCalledWith(UsersEntity, { id: "U-1" });
+    });
+  });
+
+  it("refuses new role assignments to an inactive account (409) but still allows removals (A4)", async () => {
+    currentRows = [{ userId: "U-1", roleId: CLIENT_ID }];
+    account.isActive = false;
+    await expect(business.replaceRoles("U-1", [CLIENT_ID, ADMIN_ID], admin)).rejects.toMatchObject({ status: 409 });
+    expect(manager.insert).not.toHaveBeenCalled();
+    await expect(business.replaceRoles("U-1", [], admin)).resolves.toBeDefined();
+    expect(manager.findOne).toHaveBeenCalledWith(UsersEntity, { where: { id: "U-1" }, lock: { mode: "pessimistic_write" } });
+    account.isActive = true;
+    await expect(business.replaceRoles("U-1", [CLIENT_ID], admin)).resolves.toBeDefined();
   });
 
   it("registers public accounts with CLIENT only and a null assigned_by", async () => {

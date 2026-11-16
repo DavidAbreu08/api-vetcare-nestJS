@@ -5,6 +5,8 @@ import { ReservationStatus } from "../core/enums/reservation-status.enum";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { toDbUtc } from "../core/persistence/utc-datetime";
 import { EmployeeEntity } from "../employees/entities/employee.entity";
+import { AnimalEntity } from "../animal/entities/animal.entity";
+import { UsersEntity } from "../users/entities/users.entity";
 import { SystemSettingCode } from "../system-settings/enums/system-setting-code.enum";
 import { ReservationEntity } from "./entities/reservation.entity";
 import { ReservationHistoryAction } from "../reservation-history/enums/reservation-history-action.enum";
@@ -44,7 +46,20 @@ function setup() {
     query: jest.fn(async () => [{ result: 0 }]),
     findOne: jest.fn(async (entity: unknown, { where }: any) => {
       if (entity === ReservationEntity) return reservations.has(where.id) ? { ...reservations.get(where.id) } : null;
-      if (entity === EmployeeEntity) return employees.get(where.id) ?? null;
+      if (entity === EmployeeEntity) {
+        const employee = employees.get(where.id);
+        return employee ? { ...employee, user: undefined } : null;
+      }
+      // findOne excludes soft-deleted rows.
+      if (entity === AnimalEntity) {
+        const pet = pets[where.id];
+        if (!pet || pet.deletedAt || (where.owner && !sameId(pet.owner?.id, where.owner.id))) return null;
+        return { ...pet };
+      }
+      if (entity === UsersEntity) {
+        const account = accounts[where.id] ?? [...employees.values()].find(employee => employee.userId === where.id)?.user;
+        return account && !account.deletedAt ? { ...account } : null;
+      }
       return null;
     }),
     find: jest.fn(async () => []),
@@ -87,7 +102,7 @@ function setup() {
     });
   };
   const actions = () => history.record.mock.calls.map((call: any[]) => call[1].action);
-  return { business, manager, history, settings, membership, reservations, visits, queryBuilders, state, addReservation, actions };
+  return { business, manager, history, settings, membership, reservations, visits, queryBuilders, state, addReservation, actions, accounts, pets, employees };
 }
 
 afterEach(() => jest.restoreAllMocks());
@@ -215,6 +230,88 @@ describe("ReservationBusinessService.reschedule", () => {
     await expect(t.business.reschedule("R-1", dto, admin)).rejects.toBeInstanceOf(ConflictException);
     t.visits[0].status = ClinicalVisitStatus.VOIDED;
     await expect(t.business.reschedule("R-1", dto, admin)).resolves.toBeDefined();
+  });
+});
+
+describe("Reservation parties re-checked inside the transaction (B1, A3)", () => {
+  const confirmable = { id: "R-1", employeeId: "E-1" };
+  const dto = { startAt: "2030-01-08T10:00:00Z", endAt: "2030-01-08T10:30:00Z" };
+  const lockCall = (t: ReturnType<typeof setup>, entity: unknown) =>
+    t.manager.findOne.mock.calls.findIndex(([target, options]: any[]) => target === entity && options.lock?.mode === "pessimistic_write");
+
+  it("confirms with the locks in the documented order: reservation -> animal -> client -> employee profile -> applock", async () => {
+    const t = setup();
+    t.addReservation(confirmable);
+    await t.business.confirm("R-1", {}, admin);
+    const order = [ReservationEntity, AnimalEntity, UsersEntity, EmployeeEntity]
+      .map(entity => t.manager.findOne.mock.invocationCallOrder[lockCall(t, entity)]);
+    expect(order.every(value => value !== undefined)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(order[3]).toBeLessThan(t.manager.query.mock.invocationCallOrder[0]);
+    expect(t.manager.findOne).toHaveBeenCalledWith(AnimalEntity, { where: { id: "CAT" }, lock: { mode: "pessimistic_write" } });
+    expect(t.manager.findOne).toHaveBeenCalledWith(UsersEntity, { where: { id: "ANA" }, lock: { mode: "pessimistic_write" } });
+    // The employee profile is locked without relations; its account is read in a later statement.
+    expect(t.manager.findOne).toHaveBeenCalledWith(EmployeeEntity, { where: { id: "E-1" }, lock: { mode: "pessimistic_write" } });
+    expect(t.manager.findOne).toHaveBeenCalledWith(UsersEntity, { where: { id: "U-E-1" } });
+  });
+
+  it("refuses to confirm when the animal was soft-deleted (409 ANIMAL_UNAVAILABLE) without writing", async () => {
+    const t = setup();
+    t.addReservation(confirmable);
+    t.pets.CAT.deletedAt = new Date();
+    await expect(t.business.confirm("R-1", {}, admin)).rejects.toMatchObject({ status: 409, response: { code: "ANIMAL_UNAVAILABLE" } });
+    expect(t.manager.update).not.toHaveBeenCalled();
+    expect(t.manager.query).not.toHaveBeenCalled();
+  });
+
+  it("refuses to confirm or reschedule for an inactive or deleted client (409 CLIENT_INACTIVE)", async () => {
+    const t = setup();
+    t.addReservation(confirmable);
+    t.accounts.ANA.isActive = false;
+    await expect(t.business.confirm("R-1", {}, admin)).rejects.toMatchObject({ response: { code: "CLIENT_INACTIVE" } });
+    await expect(t.business.reschedule("R-1", dto, admin)).rejects.toMatchObject({ response: { code: "CLIENT_INACTIVE" } });
+    t.accounts.ANA.isActive = true;
+    t.accounts.ANA.deletedAt = new Date();
+    await expect(t.business.reschedule("R-1", dto, admin)).rejects.toMatchObject({ response: { code: "CLIENT_INACTIVE" } });
+    expect(t.manager.update).not.toHaveBeenCalled();
+  });
+
+  it("refuses to reschedule when the animal was soft-deleted, and creation re-checks both parties", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1", status: ReservationStatus.CONFIRMED, employeeId: "E-1", confirmedAt: new Date() });
+    t.pets.CAT.deletedAt = new Date();
+    await expect(t.business.reschedule("R-1", dto, admin)).rejects.toMatchObject({ response: { code: "ANIMAL_UNAVAILABLE" } });
+    // Deactivated between the pre-check and the transaction.
+    t.pets.CAT.deletedAt = null;
+    const create = t.business.create({ animalId: "CAT", startAt: START, endAt: END } as any, ana);
+    t.accounts.ANA.isActive = false;
+    await expect(create).rejects.toMatchObject({ response: { code: "CLIENT_INACTIVE" } });
+    expect(t.manager.save).not.toHaveBeenCalled();
+  });
+
+  it("re-checks on creation, after locking animal and client, that the client still owns the animal (409)", async () => {
+    const t = setup();
+    // Ownership passes the pre-check; the animal is transferred (committed) just before the transaction locks it.
+    const findOne = t.manager.findOne.getMockImplementation();
+    t.manager.findOne.mockImplementation(async (entity: unknown, options: any) => {
+      if (entity === AnimalEntity && options.lock) t.pets.CAT.owner = { id: "BOB" };
+      return findOne(entity, options);
+    });
+    await expect(t.business.create({ animalId: "CAT", startAt: START, endAt: END } as any, ana)).rejects.toMatchObject({ status: 409, response: { code: "ANIMAL_OWNER_MISMATCH" } });
+    expect(t.manager.save).not.toHaveBeenCalled();
+    const ownershipRead = t.manager.findOne.mock.calls.findIndex(([target, options]: any[]) => target === AnimalEntity && options.where.owner);
+    expect(t.manager.findOne.mock.calls[ownershipRead][1]).toEqual({ select: { id: true }, where: { id: "CAT", owner: { id: "ANA" } } });
+    const lockOrder = (entity: unknown) => t.manager.findOne.mock.invocationCallOrder[lockCall(t, entity)];
+    expect(lockOrder(AnimalEntity)).toBeLessThan(lockOrder(UsersEntity));
+    expect(lockOrder(UsersEntity)).toBeLessThan(t.manager.findOne.mock.invocationCallOrder[ownershipRead]);
+  });
+
+  it("sees an employee account deactivated by the transaction that held the profile lock (400)", async () => {
+    const t = setup();
+    t.addReservation(confirmable);
+    t.employees.get("E-1").user.isActive = false;
+    await expect(t.business.confirm("R-1", {}, admin)).rejects.toBeInstanceOf(BadRequestException);
+    expect(t.manager.update).not.toHaveBeenCalled();
   });
 });
 

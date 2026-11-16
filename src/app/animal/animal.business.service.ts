@@ -1,8 +1,12 @@
 import { MeasurementService } from "../animal-measurements/measurement.service";
 import { projectMeasurements } from "../animal-measurements/measurement.projection";
-import { BadRequestException, ForbiddenException, HttpStatus, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, HttpStatus, Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { FindOptionsWhere, Repository } from "typeorm";
+import { DataSource, EntityManager, FindOptionsWhere, Repository } from "typeorm";
+import { ClinicalVisitEntity } from "../clinical-visits/entities/clinical-visit.entity";
+import { ClinicalVisitStatus } from "../clinical-visits/enums/clinical-visit-status.enum";
+import { findOpenReservations } from "../reservation/open-reservations";
+import { EmployeeQualificationService } from "../employees/employee-qualification.service";
 import { Actor, isStaff, requireAnimalAccess, sameId } from "../core/authorization";
 import { SystemRole } from "../core/enums/system-role.enum";
 import { RoleMembershipService } from "../roles/role-membership.service";
@@ -17,6 +21,7 @@ import { AnimalRelation } from "./enums/animal-relation.enum";
 import { AnimalMessage } from "./animal.messages";
 import { CreateAnimalDto } from "./dto/create-animal.dto";
 import { UpdateAnimalDto } from "./dto/update-animal.dto";
+import { ConfirmAnimalDto } from "./dto/confirm-animal.dto";
 import { ListAnimalsQueryDto } from "./dto/list-animals-query.dto";
 import { contactSummary, projectRelatedUser } from "../users/user.projection";
 
@@ -31,6 +36,8 @@ export class AnimalBusinessService {
     private readonly persistence: PersistenceService,
     private readonly measurements: MeasurementService,
     private readonly membership: RoleMembershipService,
+    private readonly dataSource: DataSource,
+    private readonly qualifications: EmployeeQualificationService,
   ) {}
 
   private async requireClientOwner(ownerId: string): Promise<UsersEntity> {
@@ -43,6 +50,21 @@ export class AnimalBusinessService {
     const animal = await this.persistence.execute(() => this.animalRepository.findOne({
       where: { id }, relations: [AnimalRelation.Owner, AnimalRelation.Species, AnimalRelation.Breed],
     }));
+    if (!animal) throw new NotFoundException(AnimalMessage.NotFound);
+    return animal;
+  }
+
+  /**
+   * Locks the animal row (UPDLOCK, no joins) and then reads it with its relations in the same transaction. update
+   * and confirm lock only this row, so they serialize with each other and with reservations, visits and deletion
+   * (lock order reservation -> animal -> ...) without forming a cycle.
+   */
+  private async lockAnimal(manager: EntityManager, id: string): Promise<AnimalEntity> {
+    const locked = await manager.findOne(AnimalEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
+    if (!locked) throw new NotFoundException(AnimalMessage.NotFound);
+    const animal = await manager.findOne(AnimalEntity, {
+      where: { id }, relations: [AnimalRelation.Owner, AnimalRelation.Species, AnimalRelation.Breed],
+    });
     if (!animal) throw new NotFoundException(AnimalMessage.NotFound);
     return animal;
   }
@@ -163,33 +185,75 @@ export class AnimalBusinessService {
     const taxonomy = await this.resolveAnimalTaxonomy(dto.speciesId, dto.breedId, dto.type, dto.breed);
     const animal = this.animalRepository.create({
       ...attributes, ...taxonomy, owner,
-      // Staff registering a client's animal verify it; their own animals (as clients) follow the client path.
-      isVerified: actor.isAdmin || (isStaff(actor) && !sameId(actor.id, owner.id)),
+      // Same approval rule as update/confirm: only an administrator or a veterinarian (not for their own animal)
+      // registers it verified; anyone else (client, receptionist) leaves it pending approval.
+      isVerified: await this.canApprove(actor, owner.id),
     });
     return this.serializeAnimal(await this.persistence.execute(() => this.animalRepository.save(animal)), actor);
   }
 
-  async update(id: string, dto: UpdateAnimalDto, actor: Actor) {
-    const attributes = this.mapWritableAttributes(dto);
-    const animal = await this.loadAnimal(id);
-    this.requireReadOrWriteAccess(animal, actor);
-    if (dto.ownerId !== undefined) {
-      requireAnimalAccess(actor, dto.ownerId);
-      animal.owner = await this.requireClientOwner(dto.ownerId);
-    }
-    if (dto.speciesId !== undefined || dto.type !== undefined || dto.breedId !== undefined || dto.breed !== undefined) {
-      const speciesId = dto.speciesId ?? (dto.type !== undefined ? undefined : animal.speciesId);
-      const breedId = dto.breedId !== undefined ? dto.breedId : dto.breed !== undefined ? undefined : animal.breedId;
-      Object.assign(animal, await this.resolveAnimalTaxonomy(speciesId, breedId, dto.type, dto.breed));
-    }
-    Object.assign(animal, attributes);
-    return this.serializeAnimal(await this.persistence.execute(() => this.animalRepository.save(animal)), actor);
+  /**
+   * Whether the actor may approve an animal's data (verification) or change its species/breed with immediate
+   * effect: an administrator, or a veterinarian (active employee holding the job title of the
+   * VETERINARIAN_JOB_TITLE_ID setting; none when unset) acting on another client's animal. Staff acting on their own animal follow the client path, as on creation.
+   */
+  private async canApprove(actor: Actor, ownerId: string | null | undefined, manager?: EntityManager): Promise<boolean> {
+    if (actor.isAdmin) return true;
+    if (ownerId && sameId(ownerId, actor.id)) return false;
+    return this.qualifications.isVeterinarian(actor, manager);
   }
 
-  async confirm(id: string, actor: Actor) {
-    const animal = await this.loadAnimal(id);
-    animal.isVerified = true;
-    return this.serializeAnimal(await this.persistence.execute(() => this.animalRepository.save(animal)), actor);
+  /**
+   * The owner (and any staff with write access) may change species and breed; sending the current values is not a
+   * change. A change by an administrator or a veterinarian is approved at once (isVerified=true); a change by
+   * anyone else (client, non-veterinarian employee) leaves the animal unverified until an administrator or a
+   * veterinarian approves it through PUT /api/animal/confirm/:id.
+   */
+  async update(id: string, dto: UpdateAnimalDto, actor: Actor) {
+    const attributes = this.mapWritableAttributes(dto);
+    const saved = await this.persistence.execute(() => this.dataSource.transaction(async manager => {
+      const animal = await this.lockAnimal(manager, id);
+      this.requireReadOrWriteAccess(animal, actor);
+      const previous = { speciesId: animal.speciesId, breedId: animal.breedId };
+      if (dto.ownerId !== undefined) {
+        requireAnimalAccess(actor, dto.ownerId);
+        animal.owner = await this.requireClientOwner(dto.ownerId);
+      }
+      if (dto.speciesId !== undefined || dto.type !== undefined || dto.breedId !== undefined || dto.breed !== undefined) {
+        const speciesId = dto.speciesId ?? (dto.type !== undefined ? undefined : animal.speciesId);
+        const breedId = dto.breedId !== undefined ? dto.breedId : dto.breed !== undefined ? undefined : animal.breedId;
+        Object.assign(animal, await this.resolveAnimalTaxonomy(speciesId, breedId, dto.type, dto.breed));
+      }
+      if (!sameOptionalId(previous.speciesId, animal.speciesId) || !sameOptionalId(previous.breedId, animal.breedId)) {
+        animal.isVerified = await this.canApprove(actor, animal.owner?.id, manager);
+      }
+      Object.assign(animal, attributes);
+      return manager.save(animal);
+    }));
+    return this.serializeAnimal(saved, actor);
+  }
+
+  /**
+   * Approval (isVerified=true) by an administrator or a veterinarian (not of their own animal); 403 otherwise. The
+   * animal row is locked, so a concurrent species/breed change either commits first (and is what gets approved) or
+   * waits and then leaves the animal unverified again. Optional expectedSpeciesId/expectedBreedId (the values the
+   * approver reviewed) make the approval conditional: 409 ANIMAL_DATA_CHANGED when the stored values differ.
+   */
+  async confirm(id: string, actor: Actor, dto: ConfirmAnimalDto = {}) {
+    const saved = await this.persistence.execute(() => this.dataSource.transaction(async manager => {
+      const animal = await this.lockAnimal(manager, id);
+      if (!(await this.canApprove(actor, animal.owner?.id, manager))) throw new ForbiddenException(AnimalMessage.VerificationForbidden);
+      if ((dto.expectedSpeciesId !== undefined && !sameId(dto.expectedSpeciesId, animal.speciesId))
+        || (dto.expectedBreedId !== undefined && !sameOptionalId(dto.expectedBreedId, animal.breedId))) {
+        throw new ConflictException({
+          statusCode: 409, code: "ANIMAL_DATA_CHANGED", message: AnimalMessage.DataChanged,
+          speciesId: animal.speciesId, breedId: animal.breedId,
+        });
+      }
+      animal.isVerified = true;
+      return manager.save(animal);
+    }));
+    return this.serializeAnimal(saved, actor);
   }
 
   async findAll(actor: Actor) {
@@ -209,9 +273,33 @@ export class AnimalBusinessService {
     return this.serializeAnimals(animals, actor);
   }
 
+  /**
+   * Soft delete, refused (409 with the ids) while the animal has PENDING/CONFIRMED reservations not yet finished
+   * or an IN_PROGRESS clinical visit. The animal row is locked (UPDLOCK) before those reads; reservation creation,
+   * confirmation, reschedule and visit start lock the same row (lock order reservation -> animal -> visit), so
+   * none of them can slip in before the deletion commits.
+   */
   async delete(id: string) {
-    const animal = await this.loadAnimal(id);
-    await this.persistence.execute(() => this.animalRepository.softRemove(animal));
+    await this.persistence.execute(() => this.dataSource.transaction(async manager => {
+      const animal = await manager.findOne(AnimalEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
+      if (!animal) throw new NotFoundException(AnimalMessage.NotFound);
+      const reservations = await findOpenReservations(manager, { animalId: animal.id });
+      const visits = await manager.find(ClinicalVisitEntity, {
+        select: { id: true }, where: { animalId: animal.id, status: ClinicalVisitStatus.IN_PROGRESS }, order: { startedAt: "ASC" },
+      });
+      if (reservations.length || visits.length) {
+        throw new ConflictException({
+          statusCode: 409, code: "ANIMAL_HAS_OPEN_ACTIVITY", message: AnimalMessage.OpenActivity,
+          reservationIds: reservations.map(reservation => reservation.id), clinicalVisitIds: visits.map(visit => visit.id),
+        });
+      }
+      await manager.softDelete(AnimalEntity, { id: animal.id });
+    }));
     return { statusCode: HttpStatus.OK, message: AnimalMessage.Deleted };
   }
+}
+
+/** Case-insensitive id equality where two nulls are equal (optional breed). */
+function sameOptionalId(a: string | null | undefined, b: string | null | undefined): boolean {
+  return (a ?? null) === (b ?? null) || sameId(a, b);
 }

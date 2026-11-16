@@ -34,6 +34,7 @@ import { serializeAccount, serializeEmployee } from "../employees/employee.seria
 import { CLINIC_POLICY } from "../reservation/reservation-policy";
 import { isEmploymentActive } from "../employees/employee-status";
 import { utcInstantParam, uuidParam } from "../core/persistence/sql-params";
+import { findOpenReservations, openReservationsConflict } from "../reservation/open-reservations";
 
 /**
  * JWT iat is in whole seconds: a token is valid when issued in the same second as the password change or later,
@@ -205,11 +206,15 @@ export class UsersBusinessService {
     if (data.name === null || data.email === null || data.isActive === null) throw new BadRequestException(UsersMessages.NULL_REQUIRED_FIELD);
     this.assertBirthDate(data.birthDate);
     await this.transaction(async manager => {
-      const user = await manager.findOne(UsersEntity, { where: { id } });
+      // Account row locked first (UPDLOCK): lock order account -> employee profile, as in delete.
+      const user = await manager.findOne(UsersEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
       if (!user) throw new NotFoundException(UsersMessages.USER_NOT_FOUND);
       const email = data.email !== undefined ? normalizeEmail(data.email) as string : undefined;
       await this.assertUniqueIdentity(manager, email !== user.email ? email : undefined, data.nif !== user.nif ? data.nif : undefined, user.id);
-      if (data.isActive === false && user.isActive) await this.assertAnotherAdminRemains(manager, user.id);
+      if (data.isActive === false && user.isActive) {
+        await this.assertNoOpenReservations(manager, user.id);
+        await this.assertAnotherAdminRemains(manager, user.id);
+      }
       if (data.name !== undefined) user.name = data.name.trim();
       if (email !== undefined) user.email = email;
       for (const key of ["nif", "phone", "birthDate", "profilePictureUrl", "description", "notes"] as const) {
@@ -257,10 +262,29 @@ export class UsersBusinessService {
       if (!user) throw new NotFoundException(UsersMessages.USER_NOT_FOUND);
       const profile = await manager.findOne(EmployeeEntity, { where: { userId: user.id }, lock: { mode: "pessimistic_write" } });
       if (profile && isEmploymentActive(profile.terminationDate)) throw new ConflictException(UsersMessages.ACTIVE_EMPLOYEE_PROFILE);
+      await this.assertNoOpenReservations(manager, user.id, profile);
       await this.assertAnotherAdminRemains(manager, user.id);
       await manager.delete(ResetTokenEntity, { user: { id: user.id } });
       await manager.softDelete(UsersEntity, { id: user.id });
     });
+  }
+
+  /**
+   * 409 with the reservation ids while the account is the client of, or (through its employee profile) assigned to,
+   * PENDING/CONFIRMED reservations not yet finished; nothing is cancelled automatically. Requires the account row
+   * locked by the caller; the employee profile is locked here (account -> employee profile). Reservation creation
+   * locks the client account and assignment/confirmation lock the profile, so no open reservation can appear
+   * between this check and the commit of the deactivation or deletion.
+   */
+  private async assertNoOpenReservations(manager: EntityManager, userId: string, lockedProfile?: EmployeeEntity | null) {
+    const asClient = await findOpenReservations(manager, { clientId: userId });
+    if (asClient.length) throw openReservationsConflict("CLIENT_HAS_OPEN_RESERVATIONS", UsersMessages.CLIENT_OPEN_RESERVATIONS, asClient);
+    const profile = lockedProfile !== undefined
+      ? lockedProfile
+      : await manager.findOne(EmployeeEntity, { where: { userId }, lock: { mode: "pessimistic_write" } });
+    if (!profile) return;
+    const assigned = await findOpenReservations(manager, { employeeId: profile.id });
+    if (assigned.length) throw openReservationsConflict("EMPLOYEE_HAS_OPEN_RESERVATIONS", UsersMessages.EMPLOYEE_OPEN_RESERVATIONS, assigned);
   }
 
   async getRoles(id: string) {
@@ -276,7 +300,8 @@ export class UsersBusinessService {
   async replaceRoles(id: string, roleIds: string[], actor: Actor) {
     const ids = [...new Set(roleIds.map(normalizeId))];
     const result = await this.transaction(async manager => {
-      const user = await manager.findOne(UsersEntity, { where: { id } });
+      // Account row locked (UPDLOCK) so a concurrent deactivation cannot slip between the check and the insert.
+      const user = await manager.findOne(UsersEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
       if (!user) throw new NotFoundException(UsersMessages.USER_NOT_FOUND);
       const currentRows = await manager.find(UserRoleEntity, { where: { userId: user.id } });
       const current = new Set(currentRows.map(row => normalizeId(row.roleId)));
@@ -290,6 +315,7 @@ export class UsersBusinessService {
       await this.assertEmployeeRoleMatchesProfile(manager, user.id, current.has(employeeRoleId), ids.includes(employeeRoleId));
       const removed = currentRows.filter(row => !ids.includes(normalizeId(row.roleId))).map(row => row.roleId);
       const added = ids.filter(roleId => !current.has(roleId));
+      if (added.length && !user.isActive) throw new ConflictException(UsersMessages.INACTIVE_ACCOUNT_ROLES);
       if (removed.length) await manager.delete(UserRoleEntity, { userId: user.id, roleId: In(removed) });
       if (added.length) await manager.insert(UserRoleEntity, added.map(roleId => ({ userId: user.id, roleId, assignedBy: actor.id })));
       return {

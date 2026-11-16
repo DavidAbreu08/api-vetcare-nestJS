@@ -14,4 +14,7 @@ export enum AnimalMessage {
   BreedAliasConflict = "breed conflicts with breedId",
   NullTaxonomyLabel = "Taxonomy identifiers and legacy labels cannot be null; use breedId:null to clear a breed",
   Deleted = "Animal deleted successfully",
+  VerificationForbidden = "Only an administrator or a veterinarian can verify this animal",
+  DataChanged = "The animal's species or breed changed since it was reviewed; review it again before approving",
+  OpenActivity = "The animal has pending or confirmed reservations not yet finished or a clinical visit in progress; cancel or finish them first",
 }

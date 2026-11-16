@@ -25,11 +25,32 @@ type DriverError = {
 
 /** SQL Server: "The INSERT statement conflicted with the CHECK constraint ..." (vs "... FOREIGN KEY/REFERENCE constraint"). */
 function isCheckViolation(driver: DriverError | null): boolean {
-  const messages = [
+  return driverMessages(driver).some(message => /\bCHECK constraint\b/i.test(message));
+}
+
+function driverMessages(driver: DriverError | null): string[] {
+  return [
     driver?.message, driver?.driverError?.message, driver?.originalError?.message, driver?.originalError?.info?.message,
     driver?.driverError?.originalError?.message, driver?.driverError?.originalError?.info?.message,
-  ];
-  return messages.some(message => typeof message === "string" && /\bCHECK constraint\b/i.test(message));
+  ].filter((message): message is string => typeof message === "string");
+}
+
+function driverErrorNumber(driver: DriverError | null): number | undefined {
+  return driver?.driverError?.number ?? driver?.number ??
+    driver?.driverError?.originalError?.info?.number ?? driver?.originalError?.info?.number;
+}
+
+/**
+ * True when the error is a duplicate-key violation (2601 unique index, 2627 unique constraint) of the named index
+ * or constraint, so a resource can map one specific uniqueness rule to its own message without handling SQL Server
+ * error numbers itself. The driver message quotes the name ("... with unique index 'uq_...'").
+ */
+export function isUniqueViolationOf(error: unknown, name: string): boolean {
+  const driver = error as DriverError | null;
+  const number = driverErrorNumber(driver);
+  if (number !== SqlServerError.DuplicateIndex && number !== SqlServerError.DuplicateConstraint) return false;
+  const quoted = `'${name.toLowerCase()}'`;
+  return driverMessages(driver).some(message => message.toLowerCase().includes(quoted));
 }
 
 /** Executes repository work and translates persistence failures into safe HTTP errors. */
@@ -40,8 +61,7 @@ export class PersistenceService {
       return await operation();
     } catch (error: unknown) {
       const driver = error as DriverError | null;
-      const number = driver?.driverError?.number ?? driver?.number ??
-        driver?.driverError?.originalError?.info?.number ?? driver?.originalError?.info?.number;
+      const number = driverErrorNumber(driver);
       switch (number) {
         case SqlServerError.DuplicateIndex:
         case SqlServerError.DuplicateConstraint:

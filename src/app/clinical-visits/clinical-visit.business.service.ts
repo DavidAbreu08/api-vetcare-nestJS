@@ -4,7 +4,7 @@ import { DataSource, EntityManager, Repository } from "typeorm";
 import { AnimalEntity } from "../animal/entities/animal.entity";
 import { Actor, sameId } from "../core/authorization";
 import { ReservationStatus } from "../core/enums/reservation-status.enum";
-import { PersistenceService } from "../core/persistence/persistence.service";
+import { isUniqueViolationOf, PersistenceService } from "../core/persistence/persistence.service";
 import { isActiveEmployee } from "../employees/employee-status";
 import { EmployeeEntity } from "../employees/entities/employee.entity";
 import { ReservationEntity } from "../reservation/entities/reservation.entity";
@@ -12,7 +12,7 @@ import { ReservationHistoryAction } from "../reservation-history/enums/reservati
 import { ReservationHistoryService, reservationSnapshot } from "../reservation-history/reservation-history.service";
 import { assertTransition } from "../reservation/reservation-policy";
 import { CompleteClinicalVisitDto, CreateClinicalVisitDto, ListClinicalVisitsQueryDto, UpdateClinicalVisitDto, VoidClinicalVisitDto } from "./dto/clinical-visit.dto";
-import { ClinicalVisitEntity } from "./entities/clinical-visit.entity";
+import { CLINICAL_VISIT_ANIMAL_IN_PROGRESS_INDEX, ClinicalVisitEntity } from "./entities/clinical-visit.entity";
 import { ClinicalVisitStatus } from "./enums/clinical-visit-status.enum";
 import { ClinicalVisitMessage } from "./clinical-visit.messages";
 import { serializeClinicalVisit } from "./clinical-visit.serializer";
@@ -27,7 +27,7 @@ export const CLINICAL_ACCESS_RESERVATION_STATUSES = [ReservationStatus.CONFIRMED
  * visits they are responsible for and those of animals with reservations assigned to them in CONFIRMED,
  * COMPLETED or NO_SHOW (a PENDING assignment is not yet accepted and grants nothing);
  * the animal's owner sees the visits of their animals without clinical notes. Lock order is always
- * reservation -> visit, matching reservation cancellation and visit start.
+ * reservation -> animal -> visit -> measurement, matching reservation flows, animal deletion and visit start.
  */
 @Injectable()
 export class ClinicalVisitBusinessService {
@@ -142,6 +142,9 @@ export class ClinicalVisitBusinessService {
    * and gives the animal (a different animalId is rejected; the composite FK enforces it in SQL too). Only the
    * employee assigned to the reservation or an administrator (who may name another responsible) can start it.
    * Any existing visit, VOIDED included, blocks a new one (filtered unique index on reservation_id).
+   * The animal row is then locked (UPDLOCK; not soft-deleted) and an animal may have only one IN_PROGRESS visit:
+   * 409 ANIMAL_VISIT_IN_PROGRESS with the visit id, also when the filtered unique index
+   * uq_vc_clinical_visits_animal_in_progress rejects the insert (concurrent start).
    */
   async start(dto: CreateClinicalVisitDto, actor: Actor) {
     if (!dto.reservationId && !dto.animalId) throw new BadRequestException(ClinicalVisitMessage.AnimalOrReservationRequired);
@@ -164,16 +167,27 @@ export class ClinicalVisitBusinessService {
         reservationId = reservation.id;
         reservationEmployeeId = reservation.employeeId;
       }
-      const animal = await manager.findOne(AnimalEntity, { where: { id: animalId } });
+      const animal = await manager.findOne(AnimalEntity, { where: { id: animalId }, lock: WRITE_LOCK });
       if (!animal) throw new NotFoundException(ClinicalVisitMessage.AnimalNotFound);
+      const inProgress = await manager.find(ClinicalVisitEntity, { select: { id: true }, where: { animalId: animal.id, status: ClinicalVisitStatus.IN_PROGRESS } });
+      if (inProgress.length) throw this.visitInProgressConflict(inProgress.map(visit => visit.id));
       const employee = await this.resolveEmployee(manager, dto.employeeId, actor, reservationEmployeeId);
-      return manager.save(manager.create(ClinicalVisitEntity, {
-        reservationId, animalId: animal.id, employeeId: employee.id, status: ClinicalVisitStatus.IN_PROGRESS,
-        startedAt: new Date(), endedAt: null, clinicalNotes: dto.clinicalNotes ?? null, description: dto.description ?? null,
-        voidReason: null, voidedAt: null, voidedBy: null,
-      }));
+      try {
+        return await manager.save(manager.create(ClinicalVisitEntity, {
+          reservationId, animalId: animal.id, employeeId: employee.id, status: ClinicalVisitStatus.IN_PROGRESS,
+          startedAt: new Date(), endedAt: null, clinicalNotes: dto.clinicalNotes ?? null, description: dto.description ?? null,
+          voidReason: null, voidedAt: null, voidedBy: null, completedBy: null,
+        }));
+      } catch (error) {
+        if (isUniqueViolationOf(error, CLINICAL_VISIT_ANIMAL_IN_PROGRESS_INDEX)) throw this.visitInProgressConflict([]);
+        throw error;
+      }
     });
     return this.get(saved.id, actor);
+  }
+
+  private visitInProgressConflict(clinicalVisitIds: string[]): ConflictException {
+    return new ConflictException({ statusCode: 409, code: "ANIMAL_VISIT_IN_PROGRESS", message: ClinicalVisitMessage.AnimalVisitInProgress, clinicalVisitIds });
   }
 
   /** Locks the reservation (if any) and then the visit, re-reading the visit under its lock. */
@@ -207,8 +221,9 @@ export class ClinicalVisitBusinessService {
   }
 
   /**
-   * IN_PROGRESS -> COMPLETED (endedAt = now, never before startedAt). A visit from a reservation completes the
-   * reservation (CONFIRMED -> COMPLETED) and records COMPLETED in its history, all in the same transaction.
+   * IN_PROGRESS -> COMPLETED (endedAt = now, never before startedAt; completedBy = the caller's account). A visit
+   * from a reservation completes the reservation (CONFIRMED -> COMPLETED) and records COMPLETED in its history, all
+   * in the same transaction.
    */
   async complete(id: string, dto: CompleteClinicalVisitDto, actor: Actor) {
     await this.transaction(async manager => {
@@ -221,7 +236,7 @@ export class ClinicalVisitBusinessService {
       }
       const endedAt = new Date(Math.max(Date.now(), visit.startedAt.getTime()));
       await manager.update(ClinicalVisitEntity, { id: visit.id }, {
-        status: ClinicalVisitStatus.COMPLETED, endedAt,
+        status: ClinicalVisitStatus.COMPLETED, endedAt, completedBy: actor.id,
         ...(dto.clinicalNotes !== undefined ? { clinicalNotes: dto.clinicalNotes } : {}),
       });
       if (visit.reservationId && reservation) {
@@ -236,15 +251,19 @@ export class ClinicalVisitBusinessService {
     return this.get(id, actor);
   }
 
-  /** IN_PROGRESS -> VOIDED by an administrator with a justification; the reservation is left unchanged. */
+  /**
+   * IN_PROGRESS -> VOIDED by an administrator with a justification; the reservation is left unchanged. voidedAt is
+   * never before startedAt (ck_vc_clinical_visits_voided_dates), as endedAt on completion.
+   */
   async voidVisit(id: string, dto: VoidClinicalVisitDto, actor: Actor) {
     if (!actor.isAdmin) throw new ForbiddenException(ClinicalVisitMessage.NotResponsible);
     const reason = typeof dto.reason === "string" ? dto.reason.trim() : "";
     if (!reason) throw new BadRequestException(ClinicalVisitMessage.ReasonRequired);
-    const voidedAt = new Date();
+    let voidedAt = new Date();
     await this.transaction(async manager => {
       const { visit } = await this.lockVisit(manager, id);
       this.requireInProgress(visit);
+      voidedAt = new Date(Math.max(voidedAt.getTime(), visit.startedAt.getTime()));
       await manager.update(ClinicalVisitEntity, { id: visit.id }, { status: ClinicalVisitStatus.VOIDED, voidReason: reason, voidedAt, voidedBy: actor.id });
     });
     this.logger.warn(`Clinical visit ${id} voided by ${actor.id} at ${voidedAt.toISOString()}`);
