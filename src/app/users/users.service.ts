@@ -1,234 +1,30 @@
-import {
-  HttpStatus,
-  Injectable,
-  NotFoundException,
-  UnauthorizedException,
-} from "@nestjs/common";
-import { FindOptionsWhere, Repository } from "typeorm";
+import { Injectable } from "@nestjs/common";
+import { EntityManager, FindOptionsWhere } from "typeorm";
 import { UsersEntity } from "./entities/users.entity";
-import { InjectRepository } from "@nestjs/typeorm";
-import { UpdateUserDto } from "./dto/update-user.dto";
+import { AccountSystemRole, NewAccount, UsersBusinessService } from "./users.business.service";
 import { CreateUserDto } from "./dto/create-user.dto";
-import { HttpResponse } from "../core/interface/http-response.interface";
-import { Role } from "../core/enums/role.enum";
-import { CreateEmployeesDto } from "./dto/create-employees.dto";
-import { generateRandomPassword } from "../core/generated/genarate-random.password";
-import * as bcrypt from "bcrypt";
-import { EmailService } from "src/email/email.service";
-import { generateResetToken } from "../core/generated/generate-reset-token";
-import { ResetTokenEntityRepository } from "src/auth/repository/reset-token.repository";
 import { CreateClientDto } from "./dto/create-client.dto";
-import { UpdateFuncionarioDto } from "./dto/update-funcionario.dto";
+import { UpdateUserDto } from "./dto/update-user.dto";
+import { ListUsersQueryDto } from "./dto/list-users-query.dto";
+import { Actor } from "../core/authorization";
 
 @Injectable()
 export class UsersService {
-  constructor(
-    @InjectRepository(UsersEntity)
-    private readonly usersRepository: Repository<UsersEntity>,
-    private readonly emailService: EmailService,
-    private readonly resetTokenRepo: ResetTokenEntityRepository
-  ) {}
-
-  async findAll() {
-    return await this.usersRepository.find({
-      select: ["name", "email"],
-    });
-  }
-
-  async findAllClients(): Promise<UsersEntity[]> {
-    return this.usersRepository.find({
-      where: { role: Role.CLIENTE },
-      select: [
-        "id",
-        "name",
-        "email",
-        "createdAt",
-        "phone",
-        "nif",
-        "dateBirth",
-      ],
-    });
-  }
-
-  async findEmployees() {
-    return await this.usersRepository.find({
-      select: [
-        "id",
-        "name",
-        "email",
-        "createdAt",
-        "phone",
-        "function",
-        "isActive",
-        "nif",
-      ],
-      where: { role: Role.FUNCIONARIO },
-    });
-  }
-
-  async getAvailableEmployeesByDate(date: Date): Promise<UsersEntity[]> {
-    //TODO: Add logic to check availability by checking reservations or shifts
-    return this.usersRepository.find({
-      where: { role: Role.FUNCIONARIO },
-    }); // For now, return all as available
-  }
-
-  async checkEmailExists(email: string): Promise<boolean> {
-    const user = await this.usersRepository.findOne({ where: { email } });
-    return !!user;
-  }
-
-  async findOneOrFail(
-    where: FindOptionsWhere<UsersEntity> | FindOptionsWhere<UsersEntity>[]
-  ) {
-    const user = await this.usersRepository.findOne({ where });
-    if (!user) {
-      throw new NotFoundException("Usuário não encontrado");
-    }
-    return user;
-  }
-
-  async store(data: CreateUserDto) {
-    const user = this.usersRepository.create(data);
-    return await this.usersRepository.save(user);
-  }
-
-  async storeClient(data: CreateClientDto) {
-    const existingUser = await this.usersRepository.findOne({
-      where: [{ email: data.email }, { nif: data.nif }],
-    });
-
-    if (existingUser) {
-      throw new UnauthorizedException("Email or NIF already exists");
-    }
-
-    const randomPassword = generateRandomPassword();
-
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(randomPassword, salt);
-
-    const newClient = this.usersRepository.create({
-      ...data,
-      password: hashedPassword,
-      role: Role.CLIENTE,
-    });
-
-    await this.usersRepository.save(newClient);
-
-    // Generate the reset token and expiration date
-    const { token, expiresAt } = generateResetToken();
-
-    // Save the token in the database
-    const resetToken = this.resetTokenRepo.create({
-      resetToken: token,
-      user: newClient,
-      expiresAt,
-    });
-    await this.resetTokenRepo.save(resetToken);
-
-    await this.emailService.sendClientWelcomeEmail(data.email, token);
-
-    return {
-      message:
-        "Client account created successfully. Temporary password sent via email.",
-      statusCode: HttpStatus.CREATED,
-    };
-  }
-
-  async storeEmployees(data: CreateEmployeesDto) {
-    const existingUser = await this.usersRepository.findOne({
-      where: [{ email: data.email }, { nif: data.nif }],
-    });
-
-    if (existingUser) {
-      throw new UnauthorizedException("Email or NIF already exists");
-    }
-
-    const randomPassword = generateRandomPassword();
-
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(randomPassword, salt);
-
-    console.log(data);
-    const newEmployee = this.usersRepository.create({
-      ...data,
-      password: hashedPassword,
-      role: Role.FUNCIONARIO,
-    });
-
-    await this.usersRepository.save(newEmployee);
-
-    // Generate the reset token and expiration date
-    const { token, expiresAt } = generateResetToken();
-
-    // Save the token in the database
-    const resetToken = this.resetTokenRepo.create({
-      resetToken: token,
-      user: newEmployee,
-      expiresAt,
-    });
-    await this.resetTokenRepo.save(resetToken);
-
-    await this.emailService.sendEmployeeWelcomeEmail(data.email, token);
-
-    return {
-      message:
-        "Employee account created successfully. Temporary password sent via email.",
-      statusCode: HttpStatus.CREATED,
-    };
-  }
-
-  async update(id: string, data: UpdateUserDto): Promise<HttpResponse> {
-    const user = await this.findOneOrFail({ id });
-    this.usersRepository.merge(user, data);
-    await this.usersRepository.save(user);
-    return {
-      statusCode: HttpStatus.OK,
-      message: "ok",
-    };
-  }
-
-  async updateEmployee(id: string, data: UpdateFuncionarioDto): Promise<HttpResponse> {
-    const user = await this.findOneOrFail({ id });
-
-    if (data.email && data.email !== user.email) {
-      const emailExists = await this.usersRepository.findOne({
-        where: { email: data.email },
-      });
-      if (emailExists && emailExists.id !== id) {
-        throw new UnauthorizedException("Email já está em uso por outro funcionário");
-      }
-    }
-
-    if (data.nif && data.nif !== user.nif) {
-      const nifExists = await this.usersRepository.findOne({
-        where: { nif: data.nif },
-      });
-      if (nifExists && nifExists.id !== id) {
-        throw new UnauthorizedException("NIF já está em uso por outro funcionário");
-      }
-    }
-
-    // Atualiza apenas os campos enviados
-    this.usersRepository.merge(user, data);
-    await this.usersRepository.save(user);
-
-    
-
-    return {
-      statusCode: HttpStatus.OK,
-      message: "Funcionário atualizado com sucesso",
-      // user: user, // Descomente se quiser retornar o usuário atualizado
-    };
-  }
-
-  async destroy(id: string) {
-    await this.findOneOrFail({ id });
-    // Se softDelete não estiver a funcionar, certificar se a entidade UsersEntity tem a coluna @DeleteDateColumn(). Caso contrário, usar remove em vez de softDelete.
-    this.usersRepository.softDelete({ id });
-  }
-
-  async save(user: UsersEntity) {
-    return await this.usersRepository.save(user);
-  }
+  constructor(private readonly business: UsersBusinessService) {}
+  getAll(query: ListUsersQueryDto = new ListUsersQueryDto()) { return this.business.getAll(query); }
+  getById(id: string) { return this.business.findOneOrFail({ id }); }
+  create(data: CreateUserDto) { return this.business.create(data); }
+  delete(id: string) { return this.business.delete(id); }
+  findAllClients() { return this.business.findAllClients(); }
+  checkEmailExists(email: string) { return this.business.checkEmailExists(email); }
+  findForAuthentication(where: FindOptionsWhere<UsersEntity>) { return this.business.findForAuthentication(where); }
+  findOneOrFail(where: FindOptionsWhere<UsersEntity> | FindOptionsWhere<UsersEntity>[]) { return this.business.findOneOrFail(where); }
+  loadActor(id: string) { return this.business.loadActor(id); }
+  getAccountProfile(id: string) { return this.business.getAccountProfile(id); }
+  createAccount(manager: EntityManager, data: NewAccount, roles: AccountSystemRole[], assignedBy: string | null) { return this.business.createAccount(manager, data, roles, assignedBy); }
+  storeClient(data: CreateClientDto, actor: Actor | null) { return this.business.createClient(data, actor); }
+  update(id: string, data: UpdateUserDto, actor: Actor) { return this.business.update(id, data, actor); }
+  updatePasswordHash(id: string, passwordHash: string) { return this.business.updatePasswordHash(id, passwordHash); }
+  getRoles(id: string) { return this.business.getRoles(id); }
+  replaceRoles(id: string, roleIds: string[], actor: Actor) { return this.business.replaceRoles(id, roleIds, actor); }
 }

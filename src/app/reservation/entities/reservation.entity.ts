@@ -1,6 +1,7 @@
 import { AnimalEntity } from "src/app/animal/entities/animal.entity";
 import { ReservationStatus } from "src/app/core/enums/reservation-status.enum";
 import { UsersEntity } from "src/app/users/entities/users.entity";
+import { clinicDateTime } from "../reservation-policy";
 import {
   BeforeInsert,
   BeforeUpdate,
@@ -13,30 +14,42 @@ import {
   UpdateDateColumn,
 } from "typeorm";
 
-@Entity("reservation")
+@Entity("vc_reservations")
 export class ReservationEntity {
+  @Column({ type: "nvarchar", length: 255, nullable: true })
+  name: string | null;
+
+  @Column({ type: "nvarchar", length: 240, nullable: true })
+  description: string | null;
+
+  @Column({ type: "nvarchar", length: 500, nullable: true })
+  notes: string | null;
+
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
   @ManyToOne(() => AnimalEntity)
-  @JoinColumn({ name: "animalId" })
+  @JoinColumn({ name: "animal_id" })
   animal: AnimalEntity;
 
+  @Column({ name: "animal_id", type: "uniqueidentifier", nullable: true })
+  animalId: string | null;
+
   @ManyToOne(() => UsersEntity)
-  @JoinColumn({ name: "clientId" })
+  @JoinColumn({ name: "client_id" })
   client: UsersEntity;
 
   @ManyToOne(() => UsersEntity, { nullable: true })
-  @JoinColumn({ name: "employeeId" })
+  @JoinColumn({ name: "employee_id" })
   employee: UsersEntity | null;
 
   @Column()
   date: Date;
 
-  @Column()
+  @Column({ name: "time_start" })
   timeStart: string; // Format: "HH:mm"
 
-  @Column()
+  @Column({ name: "time_end" })
   timeEnd: string; // Format: "HH:mm"
 
   @Column()
@@ -49,19 +62,19 @@ export class ReservationEntity {
   reason: string;
 
   @Column({
-    type: "enum",
+    type: "simple-enum",
     enum: ReservationStatus,
     default: ReservationStatus.PENDING,
   })
   status: ReservationStatus;
 
-  @Column({ nullable: true })
+  @Column({ name: "reschedule_note", nullable: true })
   rescheduleNote: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ name: "created_at" })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ name: "updated_at" })
   updatedAt: Date;
 
   @BeforeInsert()
@@ -76,9 +89,6 @@ export class ReservationEntity {
   }
 
   private combineDateAndTime(date: Date, timeString: string): Date {
-    const [hours, minutes] = timeString.split(":").map(Number);
-    const combined = new Date(date);
-    combined.setHours(hours, minutes, 0, 0);
-    return combined;
+    return clinicDateTime(date, timeString);
   }
 }

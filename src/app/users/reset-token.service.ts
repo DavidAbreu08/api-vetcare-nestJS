@@ -1,3 +1,4 @@
+import { ResetTokenMessages } from "./reset-token.messages";
 // reset-token.service.ts
 import { Injectable } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
@@ -21,6 +22,6 @@ export class ResetTokenService {
       .where("expires_at < :now", { now: new Date() })
       .execute();
 
-    console.log("Expired reset tokens cleaned up!");
+    console.log(ResetTokenMessages.EXPIRED_TOKENS_DELETED);
   }
 }

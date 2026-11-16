@@ -1,90 +1,33 @@
-import {
-  BadRequestException,
-  HttpStatus,
-  Injectable,
-  NotFoundException,
-} from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
+import { Actor } from "../core/authorization";
+import { AnimalBusinessService } from "./animal.business.service";
 import { CreateAnimalDto } from "./dto/create-animal.dto";
-import { Role } from "../core/enums/role.enum";
-import { UsersEntity } from "../users/entities/users.entity";
-import { Repository } from "typeorm";
-import { AnimalEntity } from "./entities/animal.entity";
-import { InjectRepository } from "@nestjs/typeorm";
 import { UpdateAnimalDto } from "./dto/update-animal.dto";
+import { ListAnimalsQueryDto } from "./dto/list-animals-query.dto";
 
+/**
+ * Animal application entry points.
+ * Each call delegates authorization, catalog consistency and lifecycle rules to AnimalBusinessService.
+ * SQL details and error numbers belong to the shared persistence layer.
+ */
 @Injectable()
 export class AnimalService {
-  constructor(
-    @InjectRepository(AnimalEntity)
-    private readonly animalRepository: Repository<AnimalEntity>,
-    @InjectRepository(UsersEntity)
-    private readonly userRepository: Repository<UsersEntity>
-  ) {}
+  constructor(private readonly business: AnimalBusinessService) {}
 
-  async create(dto: CreateAnimalDto, createdByRole: Role) {
-    const owner = await this.userRepository.findOne({
-      where: { id: dto.ownerId },
-    });
-
-    if (!owner || owner.role !== Role.CLIENTE) {
-      throw new BadRequestException("Owner must be a client");
-    }
-
-    const confirmed =
-      createdByRole === Role.ADMIN || createdByRole === Role.FUNCIONARIO;
-
-    const animal = this.animalRepository.create({
-      ...dto,
-      owner,
-      confirmed,
-    });
-
-    return this.animalRepository.save(animal);
-  }
-
-  async update(id: string, dto: UpdateAnimalDto) {
-    const animal = await this.animalRepository.findOne({ where: { id } });
-    if (!animal) throw new NotFoundException("Animal not found");
-
-    Object.assign(animal, dto);
-    return this.animalRepository.save(animal);
-  }
-
-  async confirm(id: string) {
-    const animal = await this.animalRepository.findOne({ where: { id } });
-    if (!animal) throw new NotFoundException("Animal not found");
-
-    animal.confirmed = true;
-    return this.animalRepository.save(animal);
-  }
-
-  async findAll() {
-    return this.animalRepository.find({ relations: ["owner"] });
-  }
-
-  async findByOwner(ownerId: string) {
-    const owner = await this.userRepository.findOne({ where: { id: ownerId } });
-
-    if (!owner || owner.role !== Role.CLIENTE) {
-      throw new BadRequestException("Owner must be a client");
-    }
-
-    return this.animalRepository.find({
-      where: { owner: { id: ownerId } },
-      relations: ["owner"],
-    });
-  }
-
-  async delete(id: string) {
-    const animal = await this.animalRepository.findOne({ where: { id } });
-    if (!animal) {
-      throw new NotFoundException("Animal not found");
-    }
-
-    await this.animalRepository.remove(animal);
-    return {
-      statusCode: HttpStatus.OK,
-      message: `Animal ${animal.name} deleted successfully`,
-    };
-  }
+  /** Lists active animals using validated pagination and caller-scoped filters. */
+  getAll(query: ListAnimalsQueryDto, actor: Actor) { return this.business.getAll(query, actor); }
+  /** Returns one active animal after verifying the caller's access. */
+  getById(id: string, actor: Actor) { return this.business.getById(id, actor); }
+  /** Creates an animal; verification status is decided by the business rules. */
+  create(dto: CreateAnimalDto, actor: Actor) { return this.business.create(dto, actor); }
+  /** Updates provided fields and validates retained or replaced taxonomy relations. */
+  update(id: string, dto: UpdateAnimalDto, actor: Actor) { return this.business.update(id, dto, actor); }
+  /** Keeps historical reservation references by soft-deleting the animal. */
+  delete(id: string) { return this.business.delete(id); }
+  /** Administrative verification action retained for existing clients. */
+  confirm(id: string, actor: Actor) { return this.business.confirm(id, actor); }
+  /** Compatibility route; the canonical collection endpoint provides pagination. */
+  findAll(actor: Actor) { return this.business.findAll(actor); }
+  /** Compatibility route scoped to an existing owner. */
+  findByOwner(ownerId: string, actor: Actor) { return this.business.findByOwner(ownerId, actor); }
 }

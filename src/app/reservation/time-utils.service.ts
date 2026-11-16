@@ -1,12 +1,10 @@
+import { TimeUtilsMessages } from "./time-utils.messages";
 import { Injectable } from "@nestjs/common";
+import { clinicDateTime, CLINIC_POLICY } from "./reservation-policy";
 
 @Injectable()
 export class TimeUtilsService {
-  private readonly BUSINESS_HOURS = {
-    start: "07:00",
-    end: "20:00",
-    days: [1, 2, 3, 4, 5],
-  };
+  private readonly BUSINESS_HOURS = CLINIC_POLICY;
 
   public getBusinessHours(): { start: string; end: string } {
     return {
@@ -54,10 +52,7 @@ export class TimeUtilsService {
   }
 
   public combineDateAndTime(date: Date, timeString: string): Date {
-    const [hours, minutes] = timeString.split(":").map(Number);
-    const combined = new Date(date);
-    combined.setHours(hours, minutes, 0, 0);
-    return combined;
+    return clinicDateTime(date, timeString);
   }
 
   public isWithinBusinessHours(
@@ -69,7 +64,7 @@ export class TimeUtilsService {
 
       // Validate the Date object
     if (isNaN(dateObj.getTime())) {
-      throw new Error('Invalid date provided');
+      throw new Error(TimeUtilsMessages.INVALID_DATE);
     }
     // Check day of week
     const dayOfWeek = dateObj.getDay();

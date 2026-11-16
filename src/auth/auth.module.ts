@@ -1,3 +1,4 @@
+import { jwtSecret } from './jwt-secret';
 import { Module } from "@nestjs/common";
 import { AuthService } from "./auth.service";
 import { AuthController } from "./auth.controller";
@@ -16,14 +17,13 @@ import { DataSource } from "typeorm";
 
 @Module({
   imports: [
-    ConfigModule.forRoot(),
+    ConfigModule,
     ScheduleModule.forRoot(),
     UsersModule,
     PassportModule,
     EmailModule,
-    JwtModule.register({
-      privateKey: process.env.JWT_SECRET_KEY,
-      signOptions: { expiresIn: "1h" },
+    JwtModule.registerAsync({
+      useFactory: () => ({ secret: jwtSecret(), signOptions: { expiresIn: "1h" } }),
     }),
     TypeOrmModule.forFeature([ResetTokenEntity]),
   ],

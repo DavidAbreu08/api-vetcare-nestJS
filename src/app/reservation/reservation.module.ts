@@ -1,5 +1,7 @@
+import { ClinicController } from "./clinic.controller";
 import { Module } from "@nestjs/common";
 import { ReservationService } from "./reservation.service";
+import { ReservationBusinessService } from "./reservation.business.service";
 import { ReservationController } from "./reservation.controller";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { AnimalEntity } from "../animal/entities/animal.entity";
@@ -8,6 +10,8 @@ import { ReservationEntity } from "./entities/reservation.entity";
 import { BlockedTimeEntity } from "./entities/bloked-times.entity";
 import { TimeUtilsService } from "./time-utils.service";
 import { EmailModule } from "src/email/email.module";
+import { RolesModule } from "../roles/roles.module";
+import { EmployeesModule } from "../employees/employees.module";
 
 @Module({
   imports: [
@@ -18,8 +22,10 @@ import { EmailModule } from "src/email/email.module";
       UsersEntity,
     ]),
     EmailModule,
+    RolesModule,
+    EmployeesModule,
   ],
-  providers: [ReservationService, TimeUtilsService],
-  controllers: [ReservationController],
+  providers: [ReservationService, ReservationBusinessService, TimeUtilsService],
+  controllers: [ReservationController, ClinicController],
 })
 export class ReservationModule {}

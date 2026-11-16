@@ -1,9 +1,6 @@
+import { EmailMessages } from "./email.messages";
 import { Injectable, Logger } from "@nestjs/common";
 import * as nodemailer from "nodemailer";
-import * as dotenv from "dotenv";
-
-dotenv.config();
-
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -140,7 +137,7 @@ export class EmailService {
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to,
-      subject: "Reserva Recebida - VetCare",
+      subject: EmailMessages.RESERVATION_CREATED_SUBJECT,
       html: this.reservationCreatedTemplate(
         userName,
         reservationDate,
@@ -150,16 +147,11 @@ export class EmailService {
     };
 
     try {
-      const info = await this.transporter.sendMail(mailOptions);
-      this.logger.log(
-        `Reserva criada: email enviado para ${to}: ${info.response}`
-      );
-    } catch (error) {
-      this.logger.error(
-        `Erro ao enviar email de reserva criada para ${to}:`,
-        error.message
-      );
-      throw new Error("Não foi possível enviar o email de reserva criada");
+      await this.transporter.sendMail(mailOptions);
+      this.logger.log(EmailMessages.RESERVATION_CREATED_SENT);
+    } catch {
+      this.logger.error(EmailMessages.RESERVATION_CREATED_SEND_ERROR);
+      throw new Error(EmailMessages.RESERVATION_CREATED_FAILED);
     }
   }
 
@@ -174,7 +166,7 @@ export class EmailService {
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to,
-      subject: "Reserva Confirmada - VetCare",
+      subject: EmailMessages.RESERVATION_CONFIRMED_SUBJECT,
       html: this.reservationConfirmedTemplate(
         userName,
         reservationDate,
@@ -185,16 +177,11 @@ export class EmailService {
     };
 
     try {
-      const info = await this.transporter.sendMail(mailOptions);
-      this.logger.log(
-        `Reserva confirmada: email enviado para ${to}: ${info.response}`
-      );
-    } catch (error) {
-      this.logger.error(
-        `Erro ao enviar email de confirmação para ${to}:`,
-        error.message
-      );
-      throw new Error("Não foi possível enviar o email de confirmação");
+      await this.transporter.sendMail(mailOptions);
+      this.logger.log(EmailMessages.RESERVATION_CONFIRMED_SENT);
+    } catch {
+      this.logger.error(EmailMessages.RESERVATION_CONFIRMED_SEND_ERROR);
+      throw new Error(EmailMessages.RESERVATION_CONFIRMED_FAILED);
     }
   }
 
@@ -205,17 +192,17 @@ export class EmailService {
     const mailOptions = {
       from: process.env.EMAIL_USER, // Sender address
       to: to, // Receiver address
-      subject: "Password Reset Request",
+      subject: EmailMessages.PASSWORD_RESET_SUBJECT,
       text: `You have requested a password reset. Please click the link below to reset your password:\n\n${resetLink}`,
     };
 
     try {
       // Send the email using the transporter
-      const info = await this.transporter.sendMail(mailOptions);
-      this.logger.log("Email sent successfully:", info.response);
-    } catch (error) {
-      this.logger.error("Error sending email:", error.message);
-      throw new Error("Email could not be sent");
+      await this.transporter.sendMail(mailOptions);
+      this.logger.log(EmailMessages.PASSWORD_RESET_SENT);
+    } catch {
+      this.logger.error(EmailMessages.PASSWORD_RESET_SEND_ERROR);
+      throw new Error(EmailMessages.PASSWORD_RESET_FAILED);
     }
   }
 
@@ -225,16 +212,16 @@ export class EmailService {
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to: to,
-      subject: "Your Employee Account Has Been Created",
+      subject: EmailMessages.EMPLOYEE_WELCOME_SUBJECT,
       html: this.htmlTemplate(resetLink),
     };
 
     try {
-      const info = await this.transporter.sendMail(mailOptions);
-      this.logger.log(`Welcome email sent to ${to}: ${info.response}`);
-    } catch (error) {
-      this.logger.error(`Error sending welcome email to ${to}:`, error.message);
-      throw new Error("Could not send welcome email");
+      await this.transporter.sendMail(mailOptions);
+      this.logger.log(EmailMessages.EMPLOYEE_WELCOME_SENT);
+    } catch {
+      this.logger.error(EmailMessages.EMPLOYEE_WELCOME_SEND_ERROR);
+      throw new Error(EmailMessages.WELCOME_FAILED);
     }
   }
 
@@ -244,16 +231,16 @@ export class EmailService {
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to: to,
-      subject: "Your Client Account Has Been Created",
+      subject: EmailMessages.CLIENT_WELCOME_SUBJECT,
       html: this.htmlTemplate(resetLink),
     };
 
     try {
-      const info = await this.transporter.sendMail(mailOptions);
-      this.logger.log(`Welcome email sent to ${to}: ${info.response}`);
-    } catch (error) {
-      this.logger.error(`Error sending welcome email to ${to}:`, error.message);
-      throw new Error("Could not send welcome email");
+      await this.transporter.sendMail(mailOptions);
+      this.logger.log(EmailMessages.CLIENT_WELCOME_SENT);
+    } catch {
+      this.logger.error(EmailMessages.CLIENT_WELCOME_SEND_ERROR);
+      throw new Error(EmailMessages.WELCOME_FAILED);
     }
   }
 
@@ -271,7 +258,7 @@ export class EmailService {
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to,
-      subject: "Reserva Reagendada - VetCare",
+      subject: EmailMessages.RESERVATION_RESCHEDULED_SUBJECT,
       html: this.reservationRescheduledTemplate(
         userName,
         oldDate,
@@ -284,16 +271,11 @@ export class EmailService {
       ),
     };
     try {
-      const info = await this.transporter.sendMail(mailOptions);
-      this.logger.log(
-        `Reserva reagendada: email enviado para ${to}: ${info.response}`
-      );
-    } catch (error) {
-      this.logger.error(
-        `Erro ao enviar email de reagendamento para ${to}:`,
-        error.message
-      );
-      throw new Error("Não foi possível enviar o email de reagendamento");
+      await this.transporter.sendMail(mailOptions);
+      this.logger.log(EmailMessages.RESERVATION_RESCHEDULED_SENT);
+    } catch {
+      this.logger.error(EmailMessages.RESERVATION_RESCHEDULED_SEND_ERROR);
+      throw new Error(EmailMessages.RESERVATION_RESCHEDULED_FAILED);
     }
   }
 
@@ -306,20 +288,15 @@ export class EmailService {
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to,
-      subject: "Reserva Cancelada - VetCare",
+      subject: EmailMessages.RESERVATION_CANCELLED_SUBJECT,
       html: this.reservationCancelledTemplate(userName, reservationDate, note),
     };
     try {
-      const info = await this.transporter.sendMail(mailOptions);
-      this.logger.log(
-        `Reserva cancelada: email enviado para ${to}: ${info.response}`
-      );
-    } catch (error) {
-      this.logger.error(
-        `Erro ao enviar email de cancelamento para ${to}:`,
-        error.message
-      );
-      throw new Error("Não foi possível enviar o email de cancelamento");
+      await this.transporter.sendMail(mailOptions);
+      this.logger.log(EmailMessages.RESERVATION_CANCELLED_SENT);
+    } catch {
+      this.logger.error(EmailMessages.RESERVATION_CANCELLED_SEND_ERROR);
+      throw new Error(EmailMessages.RESERVATION_CANCELLED_FAILED);
     }
   }
 }

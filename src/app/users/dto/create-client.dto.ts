@@ -1,39 +1,26 @@
-import {
-  IsNotEmpty,
-  IsEmail,
-  Matches,
-  IsString,
-  Min,
-  Max,
-  IsInt,
-} from "class-validator";
-import { RegExHelper } from "../../helpers/regex.helper";
-import { Type } from "class-transformer";
+import { DescriptiveMetadataDto } from "../../core/dto/metadata.dto";
+import { ApiProperty } from "@nestjs/swagger";
+import { AccountField } from "./account-fields";
 
-export class CreateClientDto {
-  @IsNotEmpty()
-  @IsString()
+/** Create a client account (role from CLIENT_ROLE_ID) and send its welcome instructions. */
+export class CreateClientDto extends DescriptiveMetadataDto {
+  @AccountField.name()
+  @ApiProperty({ description: "Full display name.", maxLength: 150 })
   name: string;
 
-  @IsNotEmpty()
-  @IsEmail()
+  @AccountField.email()
+  @ApiProperty({ description: "Email address used for the account (stored lowercase).", maxLength: 255 })
   email: string;
 
-  @IsNotEmpty()
-  @IsString()
-  dateBirth: string;
+  @AccountField.birthDate()
+  @ApiProperty({ description: "Birth date, YYYY-MM-DD.", example: "1990-05-20" })
+  birthDate: string;
 
-  @IsNotEmpty()
-  @IsString()
-  @Matches(RegExHelper.phoneRegex, {
-    message: "Phone number must be 9 digits and only contain numbers",
-  })
+  @AccountField.phone()
+  @ApiProperty({ description: "Nine-digit phone number." })
   phone: string;
 
-  @IsInt({ message: "NIF must be an integer" })
-  @Type(() => Number)
-  @Min(100000000, { message: "NIF Invalid" })
-  @Max(999999999, { message: "NIF Invalid" })
-  nif: number;
-
+  @AccountField.nif()
+  @ApiProperty({ description: "Nine-digit Portuguese taxpayer number, as a string.", example: "123456789" })
+  nif: string;
 }
