@@ -72,6 +72,34 @@ describe("Typed measurement policies", () => {
     await expect(business.get("m", client)).resolves.toMatchObject({ id: "m" });
   });
 
+  it("hides updatedBy from clients in get and list (recordedBy and clinicalVisitStatus kept, rows not mutated)", async () => {
+    const row = stored({ updatedBy: "editor", clinicalVisitId: "visit", clinicalVisit: { id: "visit", status: ClinicalVisitStatus.COMPLETED } as any });
+    q.getOne.mockResolvedValue(row);
+    q.getMany.mockResolvedValue([row]);
+    for (const result of [await business.get("m", client), (await business.list({ skip: 0, take: 10 } as any, client))[0]]) {
+      expect(result).toBeInstanceOf(AnimalMeasurementEntity);
+      const plain = instanceToPlain(result);
+      expect(plain).not.toHaveProperty("updatedBy");
+      expect(plain).toMatchObject({ recordedBy: "author", clinicalVisitStatus: ClinicalVisitStatus.COMPLETED });
+      expect(plain.clinicalVisit).toBeUndefined();
+    }
+    expect(row.updatedBy).toBe("editor");
+  });
+
+  it("shows updatedBy to employees and administrators in get, list, create and update", async () => {
+    q.getOne.mockResolvedValue(stored({ id: "new", updatedBy: "editor" }));
+    q.getMany.mockResolvedValue([stored({ updatedBy: "editor" })]);
+    manager.findOne.mockResolvedValue(stored({}));
+    for (const actor of [employee, admin]) {
+      const results = [
+        await business.get("m", actor), (await business.list({ skip: 0, take: 10 } as any, actor))[0],
+        await business.create({ animalId: "animal", measurementTypeId: "type", value: 1 }, actor),
+        await business.update("m", { notes: "x" }, actor),
+      ];
+      for (const result of results) expect(instanceToPlain(result)).toMatchObject({ recordedBy: "author", updatedBy: "editor" });
+    }
+  });
+
   it("lets employees update but not delete", async () => {
     await expect(business.delete("m", { reason: "duplicate" }, employee)).rejects.toBeInstanceOf(ForbiddenException);
     expect(q.getOne).not.toHaveBeenCalled();

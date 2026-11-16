@@ -12,4 +12,5 @@ export const AuthMessages = {
   /** Logged without the email address or the token. */
   PASSWORD_RESET_FAILED: "Password reset request could not be processed",
   RESET_EMAIL_FAILED: "Password reset email could not be sent",
+  SESSION_TOKEN_AFTER_PASSWORD_CHANGE_FAILED: "Session token could not be issued after password change",
 } as const;

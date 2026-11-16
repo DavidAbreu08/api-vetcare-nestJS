@@ -46,11 +46,21 @@ export class AuthService {
     if (!userEntity || !userEntity.isActive) {
       throw new UnauthorizedException(AuthMessages.INVALID_CREDENTIALS);
     }
-    const payload = { sub: user.id, email: user.email, name: user.name };
-
     return {
-      token: this.jwtService.sign(payload),
+      token: this.signAccessToken(user),
     };
+  }
+
+  /**
+   * Session JWT shared by login and change-password (same payload; expiry from JwtModule signOptions, counted
+   * from iat). With minIssuedAt the iat is never earlier than that instant's second, so a token issued right after a
+   * password change passes isIssuedAfterPasswordChange (iat >= floor(password_changed_at / 1000)) even within the
+   * same second or if the clock steps back; jsonwebtoken keeps an explicit iat and computes exp from it.
+   */
+  private signAccessToken(user: Pick<UsersEntity, "id" | "email" | "name">, minIssuedAt?: Date): string {
+    const payload: { sub: string; email: string; name: string; iat?: number } = { sub: user.id, email: user.email, name: user.name };
+    if (minIssuedAt) payload.iat = Math.max(Math.floor(Date.now() / 1000), Math.floor(minIssuedAt.getTime() / 1000));
+    return this.jwtService.sign(payload);
   }
 
   async validateUser(email: string, password: string) {
@@ -82,7 +92,9 @@ export class AuthService {
 
   /**
    * Changes the password, records password_changed_at (JWTs issued in earlier seconds stop working) and
-   * invalidates pending reset/welcome tokens, all in one transaction.
+   * invalidates pending reset/welcome tokens, all in one transaction. After the commit a new session JWT (same
+   * format as login) is returned, since the token used for this request is no longer accepted. If signing fails
+   * the password is already changed, so the response stays 202 without a token (the client must log in again).
    */
   async changePassword(
     id: string,
@@ -115,10 +127,17 @@ export class AuthService {
       await this.resetTokenRepo.invalidatePending(manager, user.id, now);
     });
 
-    return {
+    const response: { statusCode: HttpStatus; message: string; token?: string } = {
       statusCode: HttpStatus.ACCEPTED,
       message: AuthMessages.PASSWORD_CHANGED,
     };
+    try {
+      // now is stored exactly (datetime2(7), millisecond Date), so iat >= its second is accepted by loadActor.
+      return { ...response, token: this.signAccessToken(user, now) };
+    } catch {
+      this.logger.error(AuthMessages.SESSION_TOKEN_AFTER_PASSWORD_CHANGE_FAILED);
+      return response;
+    }
   }
 
   /**

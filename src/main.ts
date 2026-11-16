@@ -13,6 +13,10 @@ import { parseTrustProxy } from "./trust-proxy";
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   // Client IP (req.ip) used by the password recovery rate limits; off unless TRUST_PROXY is set.
+  // TODO(deploy): when the API runs behind a proxy/load balancer/cloud (nginx, IIS ARR, Azure App Service,
+  // Cloudflare...), set TRUST_PROXY (usually 1, matching the number of proxies in front). Without it every user
+  // shares the proxy IP, so the per-IP rate limit of forgot/reset-password blocks password recovery for everyone.
+  // A proxy in production is likely: validate this on deploy.
   app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY));
 
   app.use(express.static(join(__dirname, "..", "public")));

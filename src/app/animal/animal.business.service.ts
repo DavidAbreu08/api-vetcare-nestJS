@@ -1,4 +1,5 @@
 import { MeasurementService } from "../animal-measurements/measurement.service";
+import { projectMeasurements } from "../animal-measurements/measurement.projection";
 import { BadRequestException, ForbiddenException, HttpStatus, Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { FindOptionsWhere, Repository } from "typeorm";
@@ -116,11 +117,13 @@ export class AnimalBusinessService {
   /**
    * Exposes catalog aliases and independently derived dimensions without storing snapshots. The owner is
    * the full account (no password hash) for administrators and { id, name, email, phone } otherwise.
+   * latestMeasurements hide updatedBy from clients (projectMeasurement).
    */
   private async serializeAnimal(animal: AnimalEntity, actor: Actor, latest?: Awaited<ReturnType<MeasurementService["latest"]>>) {
+    const measurements = latest ?? await this.measurements.latest(animal.id);
     return {
       ...animal, owner: projectRelatedUser(animal.owner, actor, contactSummary),
-      ...(latest ?? await this.measurements.latest(animal.id)), breedDetails: animal.breed, breed: animal.breed?.name ?? null,
+      ...measurements, latestMeasurements: projectMeasurements(measurements.latestMeasurements, actor), breedDetails: animal.breed, breed: animal.breed?.name ?? null,
       type: animal.species?.name ?? null,
       age: animal.birthDate ? this.calculateAgeFromBirthDate(animal.birthDate) : null,
       gender: animal.sex, image: animal.imageUrl, confirmed: animal.isVerified,

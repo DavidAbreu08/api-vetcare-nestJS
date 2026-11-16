@@ -11,6 +11,7 @@ import { CreateMeasurementDto, DeleteMeasurementDto, ListMeasurementsQueryDto, U
 import { MeasurementMessage, MeasurementRelation } from "./measurement.messages";
 import { ClinicalVisitService } from "../clinical-visits/clinical-visit.service";
 import { ClinicalVisitStatus } from "../clinical-visits/enums/clinical-visit-status.enum";
+import { projectMeasurement, projectMeasurements } from "./measurement.projection";
 
 const WRITE_LOCK = { mode: "pessimistic_write" } as const;
 
@@ -61,7 +62,8 @@ export class MeasurementBusinessService {
     if (query.animalId) builder.andWhere("measurement.animalId = :animalId", { animalId: query.animalId });
     if (query.measurementTypeId) builder.andWhere("measurement.measurementTypeId = :typeId", { typeId: query.measurementTypeId });
     if (query.clinicalVisitId) builder.andWhere("measurement.clinicalVisitId = :visitId", { visitId: query.clinicalVisitId });
-    return this.persistence.execute(() => builder.orderBy("measurement.createdAt", "DESC").addOrderBy("measurement.id", "DESC").skip(query.skip).take(query.take).getMany());
+    const rows = await this.persistence.execute(() => builder.orderBy("measurement.createdAt", "DESC").addOrderBy("measurement.id", "DESC").skip(query.skip).take(query.take).getMany());
+    return projectMeasurements(rows, actor);
   }
 
   private async load(id: string) {
@@ -71,6 +73,11 @@ export class MeasurementBusinessService {
   }
 
   async get(id: string, actor: Actor) {
+    return projectMeasurement(await this.readable(id, actor), actor);
+  }
+
+  /** Loaded row (unprojected) after the actor's access to its animal is checked. */
+  private async readable(id: string, actor: Actor) {
     const row = await this.load(id);
     await this.animal(row.animalId, actor);
     return row;
@@ -86,7 +93,7 @@ export class MeasurementBusinessService {
     const saved = dto.clinicalVisitId
       ? await this.visits.withWritableVisit(dto.clinicalVisitId, dto.animalId, actor, manager => manager.save(row))
       : await this.persistence.execute(() => this.measurements.save(row));
-    return this.load(saved.id);
+    return projectMeasurement(await this.load(saved.id), actor);
   }
 
   /** Reads the row under an update lock inside the caller's transaction; soft-deleted rows are not found. */
@@ -102,7 +109,7 @@ export class MeasurementBusinessService {
    */
   async update(id: string, dto: UpdateMeasurementDto, actor: Actor) {
     requireStaff(actor, MeasurementMessage.StaffOnly);
-    const current = await this.get(id, actor);
+    const current = await this.readable(id, actor);
     const value = dto.value !== undefined ? this.value(dto.value, current.measurementType.code) : undefined;
     const measuredAt = dto.measuredAt !== undefined ? this.time(dto.measuredAt) : undefined;
     const apply = async (manager: EntityManager) => {
@@ -118,13 +125,13 @@ export class MeasurementBusinessService {
     // Measurements of a visit change only while it is IN_PROGRESS, by staff with clinical access (visit lock, then row lock).
     if (current.clinicalVisitId) await this.visits.withWritableVisit(current.clinicalVisitId, current.animalId, actor, apply);
     else await this.persistence.execute(() => this.measurements.manager.transaction(apply));
-    return this.load(id);
+    return projectMeasurement(await this.load(id), actor);
   }
 
   /** Administrators only: audited soft-delete; measurements of a clinical visit are never deleted. */
   async delete(id: string, dto: DeleteMeasurementDto, actor: Actor) {
     requireAdmin(actor, MeasurementMessage.AdminOnly);
-    const current = await this.get(id, actor);
+    const current = await this.readable(id, actor);
     if (current.clinicalVisitId) throw new ConflictException(MeasurementMessage.ClinicalMeasurementNotDeletable);
     await this.persistence.execute(() => this.measurements.manager.transaction(async manager => {
       const row = await this.locked(manager, id);
@@ -137,7 +144,10 @@ export class MeasurementBusinessService {
     return { message: MeasurementMessage.Deleted };
   }
 
-  /** One ranked batch query selects each type independently, including inactive historical types. */
+  /**
+   * One ranked batch query selects each type independently, including inactive historical types. Rows are
+   * unprojected: callers serializing them for an actor apply projectMeasurement (updatedBy hidden from clients).
+   */
   async latestMany(animalIds: string[]): Promise<Map<string, LatestMeasurements>> {
     const result = new Map<string, LatestMeasurements>(animalIds.map(id => [id, { weight: null, height: null, latestMeasurements: [] }]));
     if (!animalIds.length) return result;

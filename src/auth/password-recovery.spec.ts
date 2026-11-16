@@ -1,14 +1,17 @@
 import "src/force-utc";
 import { BadRequestException, Logger, UnauthorizedException } from "@nestjs/common";
 import { createHash } from "crypto";
-import { hashSync } from "bcrypt";
+import { compareSync, hashSync } from "bcrypt";
 import { MssqlParameter } from "typeorm";
+import { JwtService } from "@nestjs/jwt";
 import { PersistenceService } from "src/app/core/persistence/persistence.service";
 import { UsersBusinessService } from "src/app/users/users.business.service";
 import { UsersService } from "src/app/users/users.service";
 import { AuthMessages } from "./auth.messages";
 import { AuthService, RESET_TOKENS_PER_WINDOW } from "./auth.service";
 import { ResetTokenEntityRepository } from "./repository/reset-token.repository";
+import { JwtStrategy } from "./strategies/jwt.strategy";
+import { jwtSecret } from "./jwt-secret";
 
 type TokenRow = { userId: string; tokenHash: Buffer; expiresAt: Date; usedAt: Date | null; createdAt: Date };
 type UserRow = { id: string; email: string; name: string; isActive: boolean; deletedAt: Date | null; passwordHash: string; passwordChangedAt: Date | null };
@@ -91,7 +94,7 @@ function fakeDatabase() {
 
 describe("Password recovery", () => {
   let fake: ReturnType<typeof fakeDatabase>, auth: AuthService, email: { sendResetPasswordEmail: jest.Mock }, logs: jest.SpyInstance[];
-  let background: jest.SpyInstance;
+  let background: jest.SpyInstance, jwt: JwtService;
 
   const addUser = (overrides: Partial<UserRow> = {}) => {
     const user: UserRow = { id: "U-1", email: "ana@x.pt", name: "Ana", isActive: true, deletedAt: null, passwordHash: hashSync("Old#12345", 4), passwordChangedAt: null, ...overrides };
@@ -114,9 +117,16 @@ describe("Password recovery", () => {
   beforeEach(() => {
     fake = fakeDatabase();
     email = { sendResetPasswordEmail: jest.fn(async () => undefined) };
-    const business = new UsersBusinessService(new PersistenceService(), fake.dataSource as any, fake.usersRepository as any, {} as any, {} as any, {} as any, {} as any);
+    // Minimal collaborators so loadActor (JwtStrategy) can run against the in-memory vc_users.
+    const employees = { findOne: jest.fn(async () => null) };
+    const settings = { systemRoleFlags: jest.fn(async () => ({ isAdmin: false, isEmployee: false, isClient: true })) };
+    const membership = { activeRolesOf: jest.fn(async () => []) };
+    const business = new UsersBusinessService(new PersistenceService(), fake.dataSource as any, fake.usersRepository as any, employees as any, {} as any, settings as any, membership as any);
     const repository = new ResetTokenEntityRepository({ createEntityManager: () => ({}) } as any);
-    auth = new AuthService(new UsersService(business), {} as any, email as any, repository, fake.dataSource as any, new PersistenceService());
+    // Same signing options as AuthModule (JwtModule.registerAsync).
+    process.env.JWT_SECRET_KEY ??= "test-secret-for-password-recovery-spec";
+    jwt = new JwtService({ secret: jwtSecret(), signOptions: { expiresIn: "1h" } });
+    auth = new AuthService(new UsersService(business), jwt, email as any, repository, fake.dataSource as any, new PersistenceService());
     logs = (["log", "error", "warn", "debug", "verbose"] as const).map(level => jest.spyOn(Logger.prototype, level).mockImplementation(() => undefined));
     jest.spyOn(console, "log").mockImplementation(() => undefined);
     jest.spyOn(console, "error").mockImplementation(() => undefined);
@@ -278,6 +288,90 @@ describe("Password recovery", () => {
       expect(fake.db.tokens[0].usedAt).toEqual(fake.db.users[0].passwordChangedAt);
       expect(fake.dataSource.transaction).toHaveBeenCalledTimes(1);
       expect(fake.db.statements).toEqual(["user", "invalidate"]);
+    });
+
+    describe("returns a new session JWT", () => {
+      const CHANGE_AT = new Date("2026-11-16T10:00:05.700Z");
+      const strategy = () => new JwtStrategy(auth);
+      // Only Date is faked (bcrypt and the fake transaction keep real timers).
+      beforeEach(() => jest.useFakeTimers({ now: CHANGE_AT, doNotFake: ["hrtime", "nextTick", "performance", "queueMicrotask", "requestAnimationFrame", "cancelAnimationFrame", "requestIdleCallback", "cancelIdleCallback", "setImmediate", "clearImmediate", "setInterval", "clearInterval", "setTimeout", "clearTimeout"] }));
+      afterEach(() => jest.useRealTimers());
+
+      it("issues the token after the commit, like login, accepted by JwtStrategy in the same second", async () => {
+        addUser();
+        const response = await auth.changePassword("U-1", "Old#12345", PASSWORD, PASSWORD);
+        expect(response).toEqual({ statusCode: 202, message: AuthMessages.PASSWORD_CHANGED, token: expect.any(String) });
+        const changedAt = fake.db.users[0].passwordChangedAt!;
+        expect(changedAt).toEqual(CHANGE_AT);
+        const payload = jwt.verify(response.token!);
+        expect(payload).toMatchObject({ sub: "U-1", email: "ana@x.pt", name: "Ana" });
+        expect(payload.iat).toBe(Math.floor(changedAt.getTime() / 1000));
+        expect(payload.exp - payload.iat).toBe(3600);
+        // Same payload shape and expiry as a login token.
+        const login = jwt.verify((await auth.login({ id: "U-1", email: "ana@x.pt", name: "Ana" } as any)).token);
+        expect(Object.keys(login).sort()).toEqual(Object.keys(payload).sort());
+        await expect(strategy().validate(payload)).resolves.toMatchObject({ id: "U-1", email: "ana@x.pt" });
+      });
+
+      it("keeps rejecting the token used for the request (issued in an earlier second)", async () => {
+        addUser();
+        const previous = jwt.verify(jwt.sign({ sub: "U-1", email: "ana@x.pt", name: "Ana", iat: Math.floor(CHANGE_AT.getTime() / 1000) - 1 }));
+        await expect(strategy().validate(previous)).resolves.toMatchObject({ id: "U-1" });
+        await auth.changePassword("U-1", "Old#12345", PASSWORD, PASSWORD);
+        await expect(strategy().validate(previous)).rejects.toBeInstanceOf(UnauthorizedException);
+      });
+
+      it("never issues an iat before password_changed_at, even if the clock steps back after the commit", async () => {
+        addUser();
+        const transaction = fake.dataSource.transaction.getMockImplementation()!;
+        fake.dataSource.transaction.mockImplementation(async work => {
+          const result = await transaction(work);
+          jest.setSystemTime(new Date(CHANGE_AT.getTime() - 2000));
+          return result;
+        });
+        const token = (await auth.changePassword("U-1", "Old#12345", PASSWORD, PASSWORD)).token!;
+        jest.setSystemTime(CHANGE_AT);
+        const payload = jwt.verify(token);
+        expect(payload.iat).toBe(Math.floor(CHANGE_AT.getTime() / 1000));
+        await expect(strategy().validate(payload)).resolves.toMatchObject({ id: "U-1" });
+      });
+
+      it("signs only after the transaction has resolved (committed)", async () => {
+        addUser();
+        const order: string[] = [];
+        const transaction = fake.dataSource.transaction.getMockImplementation()!;
+        fake.dataSource.transaction.mockImplementation(async work => {
+          const result = await transaction(work);
+          order.push("commit");
+          return result;
+        });
+        const sign = jest.spyOn(jwt, "sign").mockImplementation(((...args: Parameters<JwtService["sign"]>) => {
+          order.push("sign");
+          return JwtService.prototype.sign.apply(jwt, args);
+        }) as any);
+        await auth.changePassword("U-1", "Old#12345", PASSWORD, PASSWORD);
+        expect(order).toEqual(["commit", "sign"]);
+        expect(sign).toHaveBeenCalledTimes(1);
+      });
+
+      it("still answers 202 without a token when signing fails after the commit", async () => {
+        addUser();
+        jest.spyOn(jwt, "sign").mockImplementation(() => { throw new Error("secret=leak"); });
+        const response = await auth.changePassword("U-1", "Old#12345", PASSWORD, PASSWORD);
+        expect(response).toEqual({ statusCode: 202, message: AuthMessages.PASSWORD_CHANGED });
+        expect(response).not.toHaveProperty("token");
+        expect(fake.db.users[0].passwordChangedAt).toEqual(CHANGE_AT);
+        expect(compareSync(PASSWORD, fake.db.users[0].passwordHash)).toBe(true);
+        expect(loggedText()).toContain(AuthMessages.SESSION_TOKEN_AFTER_PASSWORD_CHANGE_FAILED);
+        expect(loggedText()).not.toContain("leak");
+      });
+
+      it("returns no token when the change fails", async () => {
+        addUser({ isActive: false });
+        const sign = jest.spyOn(jwt, "sign");
+        await expect(auth.changePassword("U-1", "Old#12345", PASSWORD, PASSWORD)).rejects.toBeInstanceOf(UnauthorizedException);
+        expect(sign).not.toHaveBeenCalled();
+      });
     });
 
     it("keeps rejecting a wrong old password without writing", async () => {
