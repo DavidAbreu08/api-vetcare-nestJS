@@ -1,4 +1,6 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
+import { ConflictException, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, EntityManager, Repository } from "typeorm";
 import { AnimalEntity } from "../animal/entities/animal.entity";
@@ -16,6 +18,7 @@ import { CLINICAL_VISIT_ANIMAL_IN_PROGRESS_INDEX, ClinicalVisitEntity } from "./
 import { ClinicalVisitStatus } from "./enums/clinical-visit-status.enum";
 import { ClinicalVisitMessage } from "./clinical-visit.messages";
 import { serializeClinicalVisit } from "./clinical-visit.serializer";
+import { activeTutorExists, AnimalAccessService } from "../animal-owners/animal-access.service";
 
 const WRITE_LOCK = { mode: "pessimistic_write" } as const;
 const RELATIONS = { animal: { owner: true }, employee: { user: true } } as const;
@@ -26,7 +29,8 @@ export const CLINICAL_ACCESS_RESERVATION_STATUSES = [ReservationStatus.CONFIRMED
  * Clinical visits. Access (no RBAC): administrators see everything; an employee with an active profile sees the
  * visits they are responsible for and those of animals with reservations assigned to them in CONFIRMED,
  * COMPLETED or NO_SHOW (a PENDING assignment is not yet accepted and grants nothing);
- * the animal's owner sees the visits of their animals without clinical notes. Lock order is always
+ * every active tutor (primary or secondary) of the animal sees its visits without clinical notes (the clinical record
+ * follows the animal: a new tutor sees earlier visits, a former tutor none). Lock order is always
  * reservation -> animal -> visit -> measurement, matching reservation flows, animal deletion and visit start.
  */
 @Injectable()
@@ -39,6 +43,7 @@ export class ClinicalVisitBusinessService {
     private readonly history: ReservationHistoryService,
     @InjectRepository(ClinicalVisitEntity) private readonly visits: Repository<ClinicalVisitEntity>,
     @InjectRepository(ReservationEntity) private readonly reservations: Repository<ReservationEntity>,
+    private readonly access: AnimalAccessService,
   ) {}
 
   private transaction<T>(work: (manager: EntityManager) => Promise<T>): Promise<T> {
@@ -72,25 +77,26 @@ export class ClinicalVisitBusinessService {
     return (await this.assignedAnimalIds(employeeId, [visit.animalId], manager)).has(visit.animalId.toLowerCase());
   }
 
-  private isOwner(actor: Actor, visit: ClinicalVisitEntity): boolean {
-    return !!visit.animal?.owner && sameId(visit.animal.owner.id, actor.id);
+  /** Active tutor (primary or secondary) of the visit's animal. */
+  private isTutor(actor: Actor, visit: ClinicalVisitEntity): Promise<boolean> {
+    return this.access.isActiveTutor(visit.animalId, actor.id);
   }
 
   /** Administrator or the responsible employee (active profile). */
   private requireResponsible(actor: Actor, visit: ClinicalVisitEntity) {
-    if (!actor.isAdmin && !sameId(visit.employeeId, this.actorEmployeeId(actor))) throw new ForbiddenException(ClinicalVisitMessage.NotResponsible);
+    if (!actor.isAdmin && !sameId(visit.employeeId, this.actorEmployeeId(actor))) throw applicationError(ErrorMetadata.FORBIDDEN, ClinicalVisitMessage.NotResponsible);
   }
 
   private async load(id: string): Promise<ClinicalVisitEntity> {
     const visit = await this.persistence.execute(() => this.visits.findOne({ where: { id }, relations: RELATIONS, withDeleted: true }));
-    if (!visit) throw new NotFoundException(ClinicalVisitMessage.NotFound);
+    if (!visit) throw applicationError(ErrorMetadata.NOT_FOUND, ClinicalVisitMessage.NotFound);
     return visit;
   }
 
   async get(id: string, actor: Actor) {
     const visit = await this.load(id);
     const professional = await this.hasProfessionalAccess(actor, visit);
-    if (!professional && !this.isOwner(actor, visit)) throw new ForbiddenException(ClinicalVisitMessage.ClinicalAccessDenied);
+    if (!professional && !(await this.isTutor(actor, visit))) throw applicationError(ErrorMetadata.FORBIDDEN, ClinicalVisitMessage.ClinicalAccessDenied);
     return serializeClinicalVisit(visit, actor, professional);
   }
 
@@ -103,7 +109,7 @@ export class ClinicalVisitBusinessService {
       .leftJoinAndSelect("employee.user", "employeeUser");
     const employeeId = this.actorEmployeeId(actor);
     if (!actor.isAdmin) {
-      const scopes = ["owner.id = :actorId"];
+      const scopes = [activeTutorExists("visit.animalId", "actorId")];
       if (employeeId) {
         scopes.push("visit.employeeId = :actorEmployeeId");
         scopes.push("visit.animalId IN (SELECT r.animal_id FROM vc_reservations r WHERE r.employee_id = :actorEmployeeId AND r.status IN (:...accessStatuses))");
@@ -129,11 +135,11 @@ export class ClinicalVisitBusinessService {
    */
   private async resolveEmployee(manager: EntityManager, requested: string | undefined, actor: Actor, fallback?: string | null): Promise<EmployeeEntity> {
     const own = this.actorEmployeeId(actor);
-    if (requested && !actor.isAdmin && !sameId(requested, own)) throw new ForbiddenException(ClinicalVisitMessage.EmployeeForbidden);
+    if (requested && !actor.isAdmin && !sameId(requested, own)) throw applicationError(ErrorMetadata.FORBIDDEN, ClinicalVisitMessage.EmployeeForbidden);
     const target = requested ?? fallback ?? own;
-    if (!target) throw new BadRequestException(ClinicalVisitMessage.EmployeeRequired);
+    if (!target) throw applicationError(ErrorMetadata.INVALID_VALUE, ClinicalVisitMessage.EmployeeRequired);
     const employee = await manager.findOne(EmployeeEntity, { where: { id: target }, relations: { user: true } });
-    if (!isActiveEmployee(employee)) throw new BadRequestException(ClinicalVisitMessage.InvalidEmployee);
+    if (!isActiveEmployee(employee)) throw applicationError(ErrorMetadata.INVALID_VALUE, ClinicalVisitMessage.InvalidEmployee);
     return employee;
   }
 
@@ -147,28 +153,28 @@ export class ClinicalVisitBusinessService {
    * uq_vc_clinical_visits_animal_in_progress rejects the insert (concurrent start).
    */
   async start(dto: CreateClinicalVisitDto, actor: Actor) {
-    if (!dto.reservationId && !dto.animalId) throw new BadRequestException(ClinicalVisitMessage.AnimalOrReservationRequired);
+    if (!dto.reservationId && !dto.animalId) throw applicationError(ErrorMetadata.INVALID_VALUE, ClinicalVisitMessage.AnimalOrReservationRequired);
     const saved = await this.transaction(async manager => {
       let animalId = dto.animalId as string;
       let reservationId: string | null = null;
       let reservationEmployeeId: string | null = null;
       if (dto.reservationId) {
         const reservation = await manager.findOne(ReservationEntity, { where: { id: dto.reservationId }, lock: WRITE_LOCK });
-        if (!reservation) throw new NotFoundException(ClinicalVisitMessage.ReservationNotFound);
-        if (reservation.status !== ReservationStatus.CONFIRMED) throw new ConflictException(ClinicalVisitMessage.ReservationNotConfirmed);
+        if (!reservation) throw applicationError(ErrorMetadata.NOT_FOUND, ClinicalVisitMessage.ReservationNotFound);
+        if (reservation.status !== ReservationStatus.CONFIRMED) throw applicationError(ErrorMetadata.CONFLICT, ClinicalVisitMessage.ReservationNotConfirmed);
         if (!actor.isAdmin && !sameId(reservation.employeeId, this.actorEmployeeId(actor))) {
-          throw new ForbiddenException(ClinicalVisitMessage.NotReservationEmployee);
+          throw applicationError(ErrorMetadata.FORBIDDEN, ClinicalVisitMessage.NotReservationEmployee);
         }
-        if (dto.animalId && !sameId(dto.animalId, reservation.animalId)) throw new BadRequestException(ClinicalVisitMessage.AnimalMismatch);
+        if (dto.animalId && !sameId(dto.animalId, reservation.animalId)) throw applicationError(ErrorMetadata.INVALID_VALUE, ClinicalVisitMessage.AnimalMismatch);
         if ((await manager.count(ClinicalVisitEntity, { where: { reservationId: reservation.id } })) > 0) {
-          throw new ConflictException(ClinicalVisitMessage.ReservationHasVisit);
+          throw applicationError(ErrorMetadata.CONFLICT, ClinicalVisitMessage.ReservationHasVisit);
         }
         animalId = reservation.animalId;
         reservationId = reservation.id;
         reservationEmployeeId = reservation.employeeId;
       }
       const animal = await manager.findOne(AnimalEntity, { where: { id: animalId }, lock: WRITE_LOCK });
-      if (!animal) throw new NotFoundException(ClinicalVisitMessage.AnimalNotFound);
+      if (!animal) throw applicationError(ErrorMetadata.NOT_FOUND, ClinicalVisitMessage.AnimalNotFound);
       const inProgress = await manager.find(ClinicalVisitEntity, { select: { id: true }, where: { animalId: animal.id, status: ClinicalVisitStatus.IN_PROGRESS } });
       if (inProgress.length) throw this.visitInProgressConflict(inProgress.map(visit => visit.id));
       const employee = await this.resolveEmployee(manager, dto.employeeId, actor, reservationEmployeeId);
@@ -187,23 +193,23 @@ export class ClinicalVisitBusinessService {
   }
 
   private visitInProgressConflict(clinicalVisitIds: string[]): ConflictException {
-    return new ConflictException({ statusCode: 409, code: "ANIMAL_VISIT_IN_PROGRESS", message: ClinicalVisitMessage.AnimalVisitInProgress, clinicalVisitIds });
+    return applicationError(ErrorMetadata.IN_USE, ClinicalVisitMessage.AnimalVisitInProgress, undefined, { code: "ANIMAL_VISIT_IN_PROGRESS", clinicalVisitIds });
   }
 
   /** Locks the reservation (if any) and then the visit, re-reading the visit under its lock. */
   private async lockVisit(manager: EntityManager, id: string): Promise<{ visit: ClinicalVisitEntity; reservation: ReservationEntity | null }> {
     const current = await manager.findOne(ClinicalVisitEntity, { where: { id } });
-    if (!current) throw new NotFoundException(ClinicalVisitMessage.NotFound);
+    if (!current) throw applicationError(ErrorMetadata.NOT_FOUND, ClinicalVisitMessage.NotFound);
     const reservation = current.reservationId
       ? await manager.findOne(ReservationEntity, { where: { id: current.reservationId }, lock: WRITE_LOCK })
       : null;
     const visit = await manager.findOne(ClinicalVisitEntity, { where: { id }, lock: WRITE_LOCK });
-    if (!visit) throw new NotFoundException(ClinicalVisitMessage.NotFound);
+    if (!visit) throw applicationError(ErrorMetadata.NOT_FOUND, ClinicalVisitMessage.NotFound);
     return { visit, reservation };
   }
 
   private requireInProgress(visit: ClinicalVisitEntity) {
-    if (visit.status !== ClinicalVisitStatus.IN_PROGRESS) throw new ConflictException(ClinicalVisitMessage.NotInProgress);
+    if (visit.status !== ClinicalVisitStatus.IN_PROGRESS) throw applicationError(ErrorMetadata.CONFLICT, ClinicalVisitMessage.NotInProgress);
   }
 
   /** Notes/description of an IN_PROGRESS visit (responsible employee or administrator). */
@@ -231,7 +237,7 @@ export class ClinicalVisitBusinessService {
       this.requireResponsible(actor, visit);
       this.requireInProgress(visit);
       if (visit.reservationId) {
-        if (!reservation) throw new NotFoundException(ClinicalVisitMessage.ReservationNotFound);
+        if (!reservation) throw applicationError(ErrorMetadata.NOT_FOUND, ClinicalVisitMessage.ReservationNotFound);
         assertTransition(reservation.status, ReservationStatus.COMPLETED);
       }
       const endedAt = new Date(Math.max(Date.now(), visit.startedAt.getTime()));
@@ -256,9 +262,9 @@ export class ClinicalVisitBusinessService {
    * never before startedAt (ck_vc_clinical_visits_voided_dates), as endedAt on completion.
    */
   async voidVisit(id: string, dto: VoidClinicalVisitDto, actor: Actor) {
-    if (!actor.isAdmin) throw new ForbiddenException(ClinicalVisitMessage.NotResponsible);
+    if (!actor.isAdmin) throw applicationError(ErrorMetadata.FORBIDDEN, ClinicalVisitMessage.NotResponsible);
     const reason = typeof dto.reason === "string" ? dto.reason.trim() : "";
-    if (!reason) throw new BadRequestException(ClinicalVisitMessage.ReasonRequired);
+    if (!reason) throw applicationError(ErrorMetadata.INVALID_VALUE, ClinicalVisitMessage.ReasonRequired);
     let voidedAt = new Date();
     await this.transaction(async manager => {
       const { visit } = await this.lockVisit(manager, id);
@@ -277,10 +283,10 @@ export class ClinicalVisitBusinessService {
   async withWritableVisit<T>(visitId: string, animalId: string, actor: Actor, work: (manager: EntityManager) => Promise<T>): Promise<T> {
     return this.transaction(async manager => {
       const visit = await manager.findOne(ClinicalVisitEntity, { where: { id: visitId }, lock: WRITE_LOCK });
-      if (!visit) throw new NotFoundException(ClinicalVisitMessage.NotFound);
-      if (!sameId(visit.animalId, animalId)) throw new BadRequestException(ClinicalVisitMessage.MeasurementAnimalMismatch);
-      if (!(await this.hasProfessionalAccess(actor, visit, manager))) throw new ForbiddenException(ClinicalVisitMessage.ClinicalAccessDenied);
-      if (visit.status !== ClinicalVisitStatus.IN_PROGRESS) throw new ConflictException(ClinicalVisitMessage.MeasurementVisitClosed);
+      if (!visit) throw applicationError(ErrorMetadata.NOT_FOUND, ClinicalVisitMessage.NotFound);
+      if (!sameId(visit.animalId, animalId)) throw applicationError(ErrorMetadata.INVALID_VALUE, ClinicalVisitMessage.MeasurementAnimalMismatch);
+      if (!(await this.hasProfessionalAccess(actor, visit, manager))) throw applicationError(ErrorMetadata.FORBIDDEN, ClinicalVisitMessage.ClinicalAccessDenied);
+      if (visit.status !== ClinicalVisitStatus.IN_PROGRESS) throw applicationError(ErrorMetadata.CONFLICT, ClinicalVisitMessage.MeasurementVisitClosed);
       return work(manager);
     });
   }

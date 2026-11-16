@@ -1,5 +1,6 @@
 import { ReservationPolicyMessages } from "./reservation-policy.messages";
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { applicationError } from "../core/exceptions/application-error";
+import { ErrorMetadata } from "../core/enums/error-metadata.enum";
 import { ReservationStatus as Status } from '../core/enums/reservation-status.enum';
 
 /** Clinic calendar. The buffer between reservations and the no-show tolerance live in vc_system_settings. */
@@ -8,7 +9,7 @@ export const CLINIC_POLICY = Object.freeze({
   slotDurationMinutes: 30, timeZone: 'Europe/Lisbon',
 });
 export function policyError(code: string, message: string): never {
-  throw new BadRequestException({ statusCode: 400, code, message });
+  throw applicationError(ErrorMetadata.INVALID_VALUE, message, undefined, { code });
 }
 export function dateKey(value: Date | string): string {
   if (value instanceof Date && Number.isNaN(value.getTime())) policyError('INVALID_DATE', ReservationPolicyMessages.INVALID_DATE);
@@ -92,6 +93,6 @@ const TRANSITIONS: Record<Status, Status[]> = {
 /** State machine of reservations; an invalid change is a 409 conflict with the current state. */
 export function assertTransition(from: Status, to: Status): void {
   if (!TRANSITIONS[from]?.includes(to)) {
-    throw new ConflictException({ statusCode: 409, code: 'INVALID_TRANSITION', message: ReservationPolicyMessages.invalidTransition(from, to) });
+    throw applicationError(ErrorMetadata.CONFLICT, ReservationPolicyMessages.invalidTransition(from, to), undefined, { code: 'INVALID_TRANSITION' });
   }
 }

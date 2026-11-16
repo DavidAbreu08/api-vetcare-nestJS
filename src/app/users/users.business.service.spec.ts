@@ -27,10 +27,17 @@ describe("User role management", () => {
   let manager: any, business: UsersBusinessService, otherAdmins: number, currentRows: any[], profile: { id?: string; terminationDate: string | null } | null;
   /** Open reservations returned by findOpenReservations, per filter column (clientId / employeeId). */
   let open: Record<string, any[]>, account: any;
+  /** Tutorship side (AnimalAccessService): animals of which U-1 is the active primary tutor. */
+  let animalAccess: any, primaryOf: string[];
 
   beforeEach(() => {
     otherAdmins = 0;
     profile = null;
+    primaryOf = [];
+    animalAccess = {
+      primaryAnimalIdsOf: jest.fn(async () => primaryOf),
+      closeSecondaryTutorships: jest.fn(async () => ["DOG"]),
+    };
     open = {};
     account = { id: "U-1", isActive: true, email: "a@b.pt", nif: null };
     currentRows = [{ userId: "U-1", roleId: ADMIN_ID.toUpperCase(), assignedBy: "original-admin", createdAt: new Date(2020, 0, 1) }];
@@ -57,7 +64,7 @@ describe("User role management", () => {
       { code: SystemSettingCode.EMPLOYEE_ROLE_ID, value: EMPLOYEE_ID },
       { code: SystemSettingCode.CLIENT_ROLE_ID, value: CLIENT_ID },
     ] } as any);
-    business = new UsersBusinessService(new PersistenceService(), dataSource as any, {} as any, {} as any, {} as any, settings, {} as any);
+    business = new UsersBusinessService(new PersistenceService(), dataSource as any, {} as any, {} as any, {} as any, settings, {} as any, animalAccess as any);
   });
 
   afterEach(() => jest.restoreAllMocks());
@@ -222,6 +229,48 @@ describe("User role management", () => {
     });
   });
 
+  describe("tutorships of the account (decision 14, B3)", () => {
+    beforeEach(() => { currentRows = []; });
+
+    it("refuses (409 with the animals) to delete the active primary tutor of non-deleted animals, after locking the account", async () => {
+      primaryOf = ["CAT", "DOG"];
+      const error = await business.delete("U-1", admin).catch(e => e);
+      expect(error).toBeInstanceOf(ConflictException);
+      expect(error.getResponse()).toMatchObject({ code: "PRIMARY_TUTOR_OF_ANIMALS", animalIds: ["CAT", "DOG"] });
+      expect(animalAccess.primaryAnimalIdsOf).toHaveBeenCalledWith(manager, "U-1");
+      expect(manager.findOne.mock.invocationCallOrder[0]).toBeLessThan(animalAccess.primaryAnimalIdsOf.mock.invocationCallOrder[0]);
+      expect(animalAccess.closeSecondaryTutorships).not.toHaveBeenCalled();
+      expect(manager.softDelete).not.toHaveBeenCalled();
+    });
+
+    it("closes the account's secondary tutorships (ACCOUNT_DELETED, by the actor) in the deletion transaction", async () => {
+      await business.delete("U-1", admin);
+      expect(animalAccess.closeSecondaryTutorships).toHaveBeenCalledWith(manager, "U-1", "ACCOUNT_DELETED", "u-admin");
+      expect(animalAccess.closeSecondaryTutorships.mock.invocationCallOrder[0]).toBeLessThan(manager.softDelete.mock.invocationCallOrder[0]);
+      expect(manager.softDelete).toHaveBeenCalledWith(UsersEntity, { id: "U-1" });
+    });
+
+    it("does not touch tutorships when an account is deactivated (reversible; it only loses access while inactive)", async () => {
+      await business.update("U-1", { isActive: false }, admin);
+      expect(animalAccess.primaryAnimalIdsOf).not.toHaveBeenCalled();
+      expect(animalAccess.closeSecondaryTutorships).not.toHaveBeenCalled();
+    });
+
+    it("applies the same rule when the CLIENT role is removed (ROLE_CHANGED), and ignores other role changes", async () => {
+      currentRows = [{ userId: "U-1", roleId: CLIENT_ID }];
+      primaryOf = ["CAT"];
+      await expect(business.replaceRoles("U-1", [], admin)).rejects.toMatchObject({ response: { code: "PRIMARY_TUTOR_OF_ANIMALS", animalIds: ["CAT"] } });
+      expect(manager.delete).not.toHaveBeenCalled();
+      primaryOf = [];
+      await business.replaceRoles("U-1", [], admin);
+      expect(animalAccess.closeSecondaryTutorships).toHaveBeenCalledWith(manager, "U-1", "ROLE_CHANGED", "u-admin");
+      animalAccess.primaryAnimalIdsOf.mockClear();
+      currentRows = [{ userId: "U-1", roleId: CLIENT_ID }];
+      await business.replaceRoles("U-1", [CLIENT_ID], admin);
+      expect(animalAccess.primaryAnimalIdsOf).not.toHaveBeenCalled();
+    });
+  });
+
   it("refuses new role assignments to an inactive account (409) but still allows removals (A4)", async () => {
     currentRows = [{ userId: "U-1", roleId: CLIENT_ID }];
     account.isActive = false;
@@ -255,7 +304,7 @@ describe("User role management", () => {
         { code: SystemSettingCode.EMPLOYEE_ROLE_ID, value: EMPLOYEE_ID },
         { code: SystemSettingCode.CLIENT_ROLE_ID, value: CLIENT_ID },
       ] } as any);
-      const service = new UsersBusinessService(new PersistenceService(), {} as any, usersRepository, employeesRepository, {} as any, settings, membership);
+      const service = new UsersBusinessService(new PersistenceService(), {} as any, usersRepository, employeesRepository, {} as any, settings, membership, {} as any);
       return service.loadActor("U-1");
     };
 
@@ -290,7 +339,7 @@ describe("User role management", () => {
     const usersRepository = { findOne: jest.fn(async () => ({ id: "U-1", name: "Ana", email: "ana@x.pt", isActive: true, passwordHash: "h" })) };
     const employeesRepository = { findOne: jest.fn(async () => ({ id: "E-1", userId: "U-1", terminationDate: null, jobTitleLinks: [] })) };
     const membership = { activeRolesOf: jest.fn(async () => [ROLES[2], ROLES[1]]) };
-    const service = new UsersBusinessService(new PersistenceService(), {} as any, usersRepository as any, employeesRepository as any, {} as any, {} as any, membership as any);
+    const service = new UsersBusinessService(new PersistenceService(), {} as any, usersRepository as any, employeesRepository as any, {} as any, {} as any, membership as any, {} as any);
     const me: any = await service.getAccountProfile("U-1");
     expect(me.roles.map((role: any) => role.code)).toEqual(["CLIENT", "EMPLOYEE"]);
     expect(me.employee).toMatchObject({ id: "E-1", userId: "U-1" });
@@ -315,7 +364,7 @@ describe("Welcome tokens of accounts created without a password", () => {
     const dataSource = { transaction: jest.fn(async (work: (m: unknown) => unknown) => work(manager)) };
     const settings = new SystemSettingsService({ loadAll: async () => [{ code: SystemSettingCode.CLIENT_ROLE_ID, value: CLIENT_ID }] } as any);
     const email = { sendClientWelcomeEmail: jest.fn(async () => undefined) };
-    const business = new UsersBusinessService(new PersistenceService(), dataSource as any, {} as any, {} as any, email as any, settings, {} as any);
+    const business = new UsersBusinessService(new PersistenceService(), dataSource as any, {} as any, {} as any, email as any, settings, {} as any, {} as any);
 
     await business.createClient({ name: "Ana", email: "ana@x.pt" } as any, admin);
 

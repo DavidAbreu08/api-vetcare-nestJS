@@ -1,4 +1,6 @@
-import { Injectable, InternalServerErrorException } from "@nestjs/common";
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
+import { Injectable } from "@nestjs/common";
 import { isUUID } from "class-validator";
 import { ListQueryDto } from "../core/dto/list-query.dto";
 import { SystemRole } from "../core/enums/system-role.enum";
@@ -52,7 +54,7 @@ export class SystemSettingsService {
   /** Fails closed: a missing or malformed role setting is a server misconfiguration. */
   async resolveRoleId(role: SystemRole): Promise<string> {
     const value = (await this.getValue(role))?.trim();
-    if (!value || !isUUID(value)) throw new InternalServerErrorException(SystemSettingMessage.Misconfigured);
+    if (!value || !isUUID(value)) throw applicationError(ErrorMetadata.INTERNAL_ERROR, SystemSettingMessage.Misconfigured);
     return value.toLowerCase();
   }
 
@@ -69,7 +71,7 @@ export class SystemSettingsService {
   /** Non-negative integer setting (tolerances in minutes); fails closed (500) when missing or invalid. */
   async getNonNegativeInteger(code: SystemSettingCode): Promise<number> {
     const value = normalizedNonNegativeInteger(await this.getValue(code));
-    if (value === null) throw new InternalServerErrorException(SystemSettingMessage.Misconfigured);
+    if (value === null) throw applicationError(ErrorMetadata.INTERNAL_ERROR, SystemSettingMessage.Misconfigured);
     return Number(value);
   }
 

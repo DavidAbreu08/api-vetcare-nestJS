@@ -93,8 +93,13 @@ function setup() {
   const usersRepository = { findOne: jest.fn(async ({ where }: any) => accounts[where.id] ?? null) };
   const animalRepository = { findOne: jest.fn(async ({ where }: any) => pets[where.id] ?? null) };
 
+  /** Tutorship double: the pet's owner is its primary tutor; `secondary` adds secondary tutors per animal. */
+  const secondary: Record<string, string[]> = {};
+  const access = {
+    isActiveTutor: jest.fn(async (animalId: string, userId: string) => sameId(pets[animalId]?.owner?.id, userId) || (secondary[animalId] ?? []).some(id => sameId(id, userId))),
+  };
   const business = new ReservationBusinessService(new PersistenceService(), dataSource as any, email as any, settings as any,
-    membership as any, history as any, reservationRepository as any, usersRepository as any, animalRepository as any);
+    membership as any, history as any, reservationRepository as any, usersRepository as any, animalRepository as any, access as any);
   const addReservation = (row: Partial<ReservationEntity> & { id: string }) => {
     reservations.set(row.id, {
       animalId: "CAT", clientId: "ANA", employeeId: null, startAt, endAt, status: ReservationStatus.PENDING,
@@ -102,7 +107,7 @@ function setup() {
     });
   };
   const actions = () => history.record.mock.calls.map((call: any[]) => call[1].action);
-  return { business, manager, history, settings, membership, reservations, visits, queryBuilders, state, addReservation, actions, accounts, pets, employees };
+  return { business, manager, history, settings, membership, reservations, visits, queryBuilders, state, addReservation, actions, accounts, pets, employees, access, secondary };
 }
 
 afterEach(() => jest.restoreAllMocks());
@@ -289,9 +294,9 @@ describe("Reservation parties re-checked inside the transaction (B1, A3)", () =>
     expect(t.manager.save).not.toHaveBeenCalled();
   });
 
-  it("re-checks on creation, after locking animal and client, that the client still owns the animal (409)", async () => {
+  it("re-checks on creation, after locking animal and client, that the client is still an active tutor (409)", async () => {
     const t = setup();
-    // Ownership passes the pre-check; the animal is transferred (committed) just before the transaction locks it.
+    // Tutorship passes the pre-check; the animal is transferred (committed) just before the transaction locks it.
     const findOne = t.manager.findOne.getMockImplementation();
     t.manager.findOne.mockImplementation(async (entity: unknown, options: any) => {
       if (entity === AnimalEntity && options.lock) t.pets.CAT.owner = { id: "BOB" };
@@ -299,11 +304,13 @@ describe("Reservation parties re-checked inside the transaction (B1, A3)", () =>
     });
     await expect(t.business.create({ animalId: "CAT", startAt: START, endAt: END } as any, ana)).rejects.toMatchObject({ status: 409, response: { code: "ANIMAL_OWNER_MISMATCH" } });
     expect(t.manager.save).not.toHaveBeenCalled();
-    const ownershipRead = t.manager.findOne.mock.calls.findIndex(([target, options]: any[]) => target === AnimalEntity && options.where.owner);
-    expect(t.manager.findOne.mock.calls[ownershipRead][1]).toEqual({ select: { id: true }, where: { id: "CAT", owner: { id: "ANA" } } });
+    // The in-transaction check reads vc_animal_owners through the transaction manager, after both locks.
+    const inTransaction = t.access.isActiveTutor.mock.calls.findIndex((call: any[]) => call[2] === t.manager);
+    expect(t.access.isActiveTutor.mock.calls[inTransaction]).toEqual(["CAT", "ANA", t.manager]);
     const lockOrder = (entity: unknown) => t.manager.findOne.mock.invocationCallOrder[lockCall(t, entity)];
     expect(lockOrder(AnimalEntity)).toBeLessThan(lockOrder(UsersEntity));
-    expect(lockOrder(UsersEntity)).toBeLessThan(t.manager.findOne.mock.invocationCallOrder[ownershipRead]);
+    expect(lockOrder(UsersEntity)).toBeLessThan(t.access.isActiveTutor.mock.invocationCallOrder[inTransaction]);
+    expect(t.manager.findOne).not.toHaveBeenCalledWith(AnimalEntity, expect.objectContaining({ where: expect.objectContaining({ owner: expect.anything() }) }));
   });
 
   it("sees an employee account deactivated by the transaction that held the profile lock (400)", async () => {
@@ -389,5 +396,50 @@ describe("Reservation state machine and history projection", () => {
     expect(serializeHistoryEvent(row, ana)).toMatchObject({ changedBy: null, changedBySelf: false, newData: { status: "CONFIRMED" } });
     expect(serializeHistoryEvent(row, admin)).toMatchObject({ changedBy: "ADM", changedBySelf: true });
     expect(serializeHistoryEvent({ ...row, changedBy: "ana" }, ana)).toMatchObject({ changedBy: "ana", changedBySelf: true });
+  });
+});
+
+describe("Reservations of animals with several tutors (decisions 11, 13)", () => {
+  const dto = { animalId: "CAT", startAt: START, endAt: END } as any;
+  const carla = actor({ id: "CARLA", isClient: true });
+
+  it("lets a secondary tutor book as the responsible client, re-checking the tutorship under the locks", async () => {
+    const t = setup();
+    t.accounts.CARLA = { id: "CARLA", name: "Carla", email: "carla@x.pt", isActive: true };
+    t.secondary.CAT = ["CARLA"];
+    await t.business.create(dto, carla);
+    expect(t.manager.create).toHaveBeenCalledWith(ReservationEntity, expect.objectContaining({ animalId: "CAT", clientId: "CARLA" }));
+    expect(t.access.isActiveTutor).toHaveBeenCalledWith("CAT", "CARLA", t.manager);
+    // Staff booking for a secondary tutor of the animal.
+    await t.business.create({ ...dto, ownerId: "CARLA" }, ana);
+    expect(t.manager.create).toHaveBeenLastCalledWith(ReservationEntity, expect.objectContaining({ clientId: "CARLA" }));
+  });
+
+  it("refuses a client who is not (or no longer) a tutor of the animal (400), and staff booking for one", async () => {
+    const t = setup();
+    t.accounts.CARLA = { id: "CARLA", name: "Carla", email: "carla@x.pt", isActive: true };
+    await expect(t.business.create(dto, carla)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(t.business.create({ ...dto, ownerId: "CARLA" }, ana)).rejects.toBeInstanceOf(BadRequestException);
+    expect(t.manager.save).not.toHaveBeenCalled();
+  });
+
+  it("lets every active tutor read the animal's reservations and their history, but only the client or an admin cancel", async () => {
+    const t = setup();
+    t.secondary.CAT = ["CARLA"];
+    t.addReservation({ id: "R-1" });
+    await expect(t.business.getById("R-1", carla)).resolves.toMatchObject({ id: "R-1", clientId: "ANA" });
+    await expect(t.business.cancel("R-1", {}, carla)).rejects.toBeInstanceOf(ForbiddenException);
+    // A former tutor loses access to reservations they are not the client of.
+    t.secondary.CAT = [];
+    await expect(t.business.getById("R-1", carla)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it("keeps a reservation visible to its client after they stop being a tutor (they remain responsible for it)", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1", animalId: "DOG", clientId: "ANA" });
+    expect(await t.access.isActiveTutor("DOG", "ANA")).toBe(false);
+    await expect(t.business.getById("R-1", ana)).resolves.toMatchObject({ id: "R-1" });
+    expect(await t.business.canRead(bob, { clientId: "ANA", employeeId: null, animalId: "DOG" })).toBe(true);
+    expect(await t.business.canRead(actor({ id: "EVE", isClient: true }), { clientId: "ANA", employeeId: null, animalId: "DOG" })).toBe(false);
   });
 });

@@ -13,6 +13,8 @@ import { AuthService } from "./auth.service";
 import { ChangePasswordDto } from "./dto/change-password.dto";
 import { ForgotPasswordDto } from "./dto/forgot-password.dto";
 import { ResetPasswordDto } from "./dto/reset-password.dto";
+import { ResponseMessage } from "src/app/core/decorators/response-message.decorator";
+import { AuthMessages } from "./auth.messages";
 
 /** Per-IP limits of the public password recovery routes (the guard is applied only to these routes). */
 export const PASSWORD_RECOVERY_THROTTLE_TTL_MS = 15 * 60 * 1000;
@@ -38,6 +40,7 @@ export class AuthController {
 
   @UseGuards(AuthGuard("jwt"))
   @Post("change-password")
+  @ResponseMessage(AuthMessages.PASSWORD_CHANGED)
   async changePassword(
     @Body() changePasswordDto: ChangePasswordDto,
     @Req() req
@@ -53,6 +56,7 @@ export class AuthController {
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: FORGOT_PASSWORD_LIMIT, ttl: PASSWORD_RECOVERY_THROTTLE_TTL_MS } })
   @Post("forgot-password")
+  @ResponseMessage(AuthMessages.PASSWORD_RESET_REQUESTED)
   async forgotPassword(@Body() forgotPassword: ForgotPasswordDto) {
     return await this.authService.forgotPassword(forgotPassword.email);
   }
@@ -60,6 +64,7 @@ export class AuthController {
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: RESET_PASSWORD_LIMIT, ttl: PASSWORD_RECOVERY_THROTTLE_TTL_MS } })
   @Put("reset-password")
+  @ResponseMessage(AuthMessages.PASSWORD_RESET)
   async resetPassword(@Body() resetPasswordDto: ResetPasswordDto) {
     return this.authService.resetPassword(
       resetPasswordDto.resetToken,

@@ -24,7 +24,7 @@ describe("JwtStrategy revokes tokens issued before the last password change", ()
       { code: SystemSettingCode.EMPLOYEE_ROLE_ID, value: "20000000-0000-4000-8000-000000000002" },
       { code: SystemSettingCode.CLIENT_ROLE_ID, value: "20000000-0000-4000-8000-000000000003" },
     ] } as any);
-    const business = new UsersBusinessService(new PersistenceService(), {} as any, usersRepository as any, employeesRepository as any, {} as any, settings, membership as any);
+    const business = new UsersBusinessService(new PersistenceService(), {} as any, usersRepository as any, employeesRepository as any, {} as any, settings, membership as any, {} as any);
     const auth = new AuthService(new UsersService(business), {} as any, {} as any, {} as any, {} as any, new PersistenceService());
     strategy = new JwtStrategy(auth);
   });

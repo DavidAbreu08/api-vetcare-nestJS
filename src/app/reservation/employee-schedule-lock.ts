@@ -1,4 +1,6 @@
-import { ConflictException, ServiceUnavailableException } from "@nestjs/common";
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
+
 import { EntityManager } from "typeorm";
 import { normalizeId } from "../core/catalog";
 import { ReservationMessages } from "./reservation.messages";
@@ -18,7 +20,7 @@ export function employeeScheduleResource(employeeId: string): string {
  * -2 cancelled, -3 deadlock victim (409, retry); -999 or anything else (503).
  */
 export async function acquireEmployeeScheduleLock(manager: EntityManager, employeeId: string, timeoutMs = EMPLOYEE_SCHEDULE_LOCK_TIMEOUT_MS): Promise<void> {
-  if (!manager.queryRunner?.isTransactionActive) throw new ServiceUnavailableException(ReservationMessages.SCHEDULE_LOCK_UNAVAILABLE);
+  if (!manager.queryRunner?.isTransactionActive) throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, ReservationMessages.SCHEDULE_LOCK_UNAVAILABLE);
   const rows: { result: number }[] = await manager.query(
     `DECLARE @result int;
      EXEC @result = sp_getapplock @Resource = @0, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = @1;
@@ -27,6 +29,6 @@ export async function acquireEmployeeScheduleLock(manager: EntityManager, employ
   );
   const result = Number(rows?.[0]?.result);
   if (result === 0 || result === 1) return;
-  if (result === -1 || result === -2 || result === -3) throw new ConflictException({ statusCode: 409, code: "SCHEDULE_BUSY", message: ReservationMessages.SCHEDULE_BUSY });
-  throw new ServiceUnavailableException(ReservationMessages.SCHEDULE_LOCK_UNAVAILABLE);
+  if (result === -1 || result === -2 || result === -3) throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.SCHEDULE_BUSY, undefined, { code: "SCHEDULE_BUSY" });
+  throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, ReservationMessages.SCHEDULE_LOCK_UNAVAILABLE);
 }

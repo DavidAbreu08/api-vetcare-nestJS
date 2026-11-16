@@ -1,4 +1,5 @@
-import { BadRequestException } from "@nestjs/common";
+import { applicationError } from "../exceptions/application-error";
+import { ErrorMetadata } from "../enums/error-metadata.enum";
 import { ValueTransformer } from "typeorm";
 
 export const UtcDateTimeMessage = {
@@ -17,7 +18,7 @@ export function toDbUtc(instant: Date): Date {
     instant.getUTCHours(), instant.getUTCMinutes(), instant.getUTCSeconds(), instant.getUTCMilliseconds(),
   );
   if (local.getHours() !== instant.getUTCHours() || local.getMinutes() !== instant.getUTCMinutes() || local.getDate() !== instant.getUTCDate()) {
-    throw new BadRequestException(UtcDateTimeMessage.Unrepresentable);
+    throw applicationError(ErrorMetadata.INVALID_VALUE, UtcDateTimeMessage.Unrepresentable);
   }
   return local;
 }

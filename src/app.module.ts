@@ -11,6 +11,7 @@ import { AnimalModule } from "./app/animal/animal.module";
 import { ReservationModule } from "./app/reservation/reservation.module";
 import { BlockedTimeModule } from "./app/blocked-times/blocked-time.module";
 import { PersistenceModule } from "./app/core/persistence/persistence.module";
+import { HttpResponseModule } from "./app/core/http-response.module";
 import { SystemSettingsModule } from "./app/system-settings/system-settings.module";
 import { RolesModule } from "./app/roles/roles.module";
 import { JobTitlesModule } from "./app/job-titles/job-titles.module";
@@ -24,6 +25,7 @@ import { ClinicalVisitModule } from "./app/clinical-visits/clinical-visit.module
     // In-memory store. No APP_GUARD: ThrottlerGuard + @Throttle only on the password recovery routes.
     ThrottlerModule.forRoot([{ name: "default", ttl: 15 * 60 * 1000, limit: 5 }]),
     PersistenceModule,
+    HttpResponseModule,
     SystemSettingsModule,
     RolesModule,
     JobTitlesModule,

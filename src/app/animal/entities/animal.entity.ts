@@ -7,10 +7,14 @@ import { BreedEntity } from "../../breeds/entities/breed.entity";
  * Animal record with structured taxonomy; measurements are stored separately.
  * TypeScript/HTTP attributes remain camelCase; physical columns use snake_case.
  * Soft deletion preserves reservation history. Legacy owner references may be null.
+ * owner (owner_id) is a synchronized copy of the active primary tutor in vc_animal_owners, written in the same
+ * transaction as every tutorship change; access decisions use vc_animal_owners (AnimalAccessService), never owner_id.
  */
 @Entity("vc_animals")
 @Index("ix_vc_animals_species", ["speciesId"])
 @Index("ix_vc_animals_breed_species", ["breedId", "speciesId"])
+/** Migration 1795435200000. */
+@Index("ix_vc_animals_owner_id", ["owner"])
 export class AnimalEntity {
   @PrimaryGeneratedColumn("uuid")
   id: string;

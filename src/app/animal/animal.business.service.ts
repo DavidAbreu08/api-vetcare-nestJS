@@ -1,8 +1,10 @@
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
 import { MeasurementService } from "../animal-measurements/measurement.service";
 import { projectMeasurements } from "../animal-measurements/measurement.projection";
-import { BadRequestException, ConflictException, ForbiddenException, HttpStatus, Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { DataSource, EntityManager, FindOptionsWhere, Repository } from "typeorm";
+import { DataSource, EntityManager, Repository } from "typeorm";
 import { ClinicalVisitEntity } from "../clinical-visits/entities/clinical-visit.entity";
 import { ClinicalVisitStatus } from "../clinical-visits/enums/clinical-visit-status.enum";
 import { findOpenReservations } from "../reservation/open-reservations";
@@ -24,6 +26,9 @@ import { UpdateAnimalDto } from "./dto/update-animal.dto";
 import { ConfirmAnimalDto } from "./dto/confirm-animal.dto";
 import { ListAnimalsQueryDto } from "./dto/list-animals-query.dto";
 import { contactSummary, projectRelatedUser } from "../users/user.projection";
+import { activeTutorExists, AnimalAccessService } from "../animal-owners/animal-access.service";
+import { AnimalOwnersBusinessService, serializeTutor } from "../animal-owners/animal-owners.business.service";
+import { AnimalOwnerEntity } from "../animal-owners/entities/animal-owner.entity";
 
 /** Owns animal access rules, taxonomy consistency, derived measurements and lifecycle. */
 @Injectable()
@@ -38,19 +43,26 @@ export class AnimalBusinessService {
     private readonly membership: RoleMembershipService,
     private readonly dataSource: DataSource,
     private readonly qualifications: EmployeeQualificationService,
+    private readonly access: AnimalAccessService,
+    private readonly owners: AnimalOwnersBusinessService,
   ) {}
 
-  private async requireClientOwner(ownerId: string): Promise<UsersEntity> {
+  /**
+   * Account holding CLIENT (400 otherwise). A new tutor (creation) must also be active (requireActive); listing the
+   * animals of an inactive client stays possible.
+   */
+  private async requireClientOwner(ownerId: string, requireActive = false): Promise<UsersEntity> {
     const owner = await this.persistence.execute(() => this.usersRepository.findOneBy({ id: ownerId }));
-    if (!owner || !(await this.membership.hasSystemRole(owner.id, SystemRole.CLIENT))) throw new BadRequestException(AnimalMessage.InvalidOwner);
+    if (!owner || (requireActive && !owner.isActive) || !(await this.membership.hasSystemRole(owner.id, SystemRole.CLIENT))) {
+      throw applicationError(ErrorMetadata.INVALID_VALUE, AnimalMessage.InvalidOwner);
+    }
     return owner;
   }
 
   private async loadAnimal(id: string): Promise<AnimalEntity> {
     const animal = await this.persistence.execute(() => this.animalRepository.findOne({
-      where: { id }, relations: [AnimalRelation.Owner, AnimalRelation.Species, AnimalRelation.Breed],
-    }));
-    if (!animal) throw new NotFoundException(AnimalMessage.NotFound);
+      where: { id }, relations: [AnimalRelation.Owner, AnimalRelation.Species, AnimalRelation.Breed] }));
+    if (!animal) throw applicationError(ErrorMetadata.NOT_FOUND, AnimalMessage.NotFound);
     return animal;
   }
 
@@ -61,34 +73,36 @@ export class AnimalBusinessService {
    */
   private async lockAnimal(manager: EntityManager, id: string): Promise<AnimalEntity> {
     const locked = await manager.findOne(AnimalEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
-    if (!locked) throw new NotFoundException(AnimalMessage.NotFound);
+    if (!locked) throw applicationError(ErrorMetadata.NOT_FOUND, AnimalMessage.NotFound);
     const animal = await manager.findOne(AnimalEntity, {
-      where: { id }, relations: [AnimalRelation.Owner, AnimalRelation.Species, AnimalRelation.Breed],
-    });
-    if (!animal) throw new NotFoundException(AnimalMessage.NotFound);
+      where: { id }, relations: [AnimalRelation.Owner, AnimalRelation.Species, AnimalRelation.Breed] });
+    if (!animal) throw applicationError(ErrorMetadata.NOT_FOUND, AnimalMessage.NotFound);
     return animal;
   }
 
-  private requireReadOrWriteAccess(animal: AnimalEntity, actor: Actor): void {
-    if (animal.owner) requireAnimalAccess(actor, animal.owner.id);
-    else if (!isStaff(actor)) {
-      throw new ForbiddenException(AnimalMessage.MissingOwner);
-    }
+  /** Staff, or an active tutor (primary or secondary) of the animal; former tutors lose access. */
+  private async requireReadAccess(animal: AnimalEntity, actor: Actor): Promise<void> {
+    if (!(await this.access.canReadAnimal(actor, animal.id))) throw applicationError(ErrorMetadata.FORBIDDEN, AnimalMessage.AccessDenied);
+  }
+
+  /** Staff or the active primary tutor; secondary tutors only read. Run after locking the animal row. */
+  private async requireWriteAccess(manager: EntityManager, animal: AnimalEntity, actor: Actor): Promise<void> {
+    if (!(await this.access.canManageAnimal(actor, animal.id, manager))) throw applicationError(ErrorMetadata.FORBIDDEN, AnimalMessage.EditForbidden);
   }
 
   /** Maps validated HTTP fields to writable entity attributes; never accepts verification state. */
   private mapWritableAttributes(dto: UpdateAnimalDto): Partial<AnimalEntity> {
     for (const value of [dto.name, dto.color, dto.sex, dto.gender, dto.speciesId, dto.ownerId, dto.type]) {
-      if (value === null) throw new BadRequestException(AnimalMessage.NullRequiredField);
+      if (value === null) throw applicationError(ErrorMetadata.INVALID_VALUE, AnimalMessage.NullRequiredField);
     }
     if (dto.birthDate && dto.birthDate > new Date().toISOString().slice(0, 10)) {
-      throw new BadRequestException(AnimalMessage.FutureBirthDate);
+      throw applicationError(ErrorMetadata.INVALID_VALUE, AnimalMessage.FutureBirthDate);
     }
     if (dto.sex !== undefined && dto.gender !== undefined && dto.sex !== dto.gender) {
-      throw new BadRequestException(AnimalMessage.SexAliasConflict);
+      throw applicationError(ErrorMetadata.INVALID_VALUE, AnimalMessage.SexAliasConflict);
     }
     if (dto.imageUrl !== undefined && dto.image !== undefined && dto.imageUrl !== dto.image) {
-      throw new BadRequestException(AnimalMessage.ImageAliasConflict);
+      throw applicationError(ErrorMetadata.INVALID_VALUE, AnimalMessage.ImageAliasConflict);
     }
     const attributes: Partial<AnimalEntity> = {};
     if (dto.name !== undefined) attributes.name = dto.name;
@@ -105,16 +119,16 @@ export class AnimalBusinessService {
 
   /** Database lookups apply the same collation rules used by the migration and UNIQUE constraints. */
   private async resolveAnimalTaxonomy(speciesId?: string, breedId?: string | null, type?: string, breedName?: string) {
-    if (speciesId === null || type === null || breedName === null) throw new BadRequestException(AnimalMessage.NullTaxonomyLabel);
+    if (speciesId === null || type === null || breedName === null) throw applicationError(ErrorMetadata.INVALID_VALUE, AnimalMessage.NullTaxonomyLabel);
     let species: SpeciesEntity | null = null;
     try {
       species = speciesId ? await this.speciesService.getById(speciesId) : type?.trim() ? await this.speciesService.findByName(type) : null;
     } catch (error) {
       if (!(error instanceof NotFoundException)) throw error;
     }
-    if (!species) throw new BadRequestException(AnimalMessage.InvalidSpecies);
+    if (!species) throw applicationError(ErrorMetadata.INVALID_VALUE, AnimalMessage.InvalidSpecies);
     if (type !== undefined && (await this.speciesService.findByName(type))?.id !== species.id) {
-      throw new BadRequestException(AnimalMessage.SpeciesAliasConflict);
+      throw applicationError(ErrorMetadata.INVALID_VALUE, AnimalMessage.SpeciesAliasConflict);
     }
     let breed: BreedEntity | null = null;
     try {
@@ -122,12 +136,12 @@ export class AnimalBusinessService {
     } catch (error) {
       if (!(error instanceof NotFoundException)) throw error;
     }
-    if ((breedId || breedName?.trim()) && !breed) throw new BadRequestException(AnimalMessage.InvalidBreed);
-    if (breed && breed.speciesId !== species.id) throw new BadRequestException(AnimalMessage.BreedSpeciesMismatch);
+    if ((breedId || breedName?.trim()) && !breed) throw applicationError(ErrorMetadata.INVALID_VALUE, AnimalMessage.InvalidBreed);
+    if (breed && breed.speciesId !== species.id) throw applicationError(ErrorMetadata.INVALID_VALUE, AnimalMessage.BreedSpeciesMismatch);
     if (breed && breedName !== undefined && (await this.breedsService.findByName(species.id, breedName))?.id !== breed.id) {
-      throw new BadRequestException(AnimalMessage.BreedAliasConflict);
+      throw applicationError(ErrorMetadata.INVALID_VALUE, AnimalMessage.BreedAliasConflict);
     }
-    if (breedId === null && breedName?.trim()) throw new BadRequestException(AnimalMessage.BreedAliasConflict);
+    if (breedId === null && breedName?.trim()) throw applicationError(ErrorMetadata.INVALID_VALUE, AnimalMessage.BreedAliasConflict);
     return { species, speciesId: species.id, breed, breedId: breed?.id ?? null };
   }
 
@@ -137,14 +151,16 @@ export class AnimalBusinessService {
   }
 
   /**
-   * Exposes catalog aliases and independently derived dimensions without storing snapshots. The owner is
-   * the full account (no password hash) for administrators and { id, name, email, phone } otherwise.
-   * latestMeasurements hide updatedBy from clients (projectMeasurement).
+   * Exposes catalog aliases and independently derived dimensions without storing snapshots. The owner (the active
+   * primary tutor, vc_animals.owner_id) is the full account (no password hash) for administrators and
+   * { id, name, email, phone } otherwise; `tutors` lists every active tutor { user, isPrimary, assignedAt }, primary
+   * first, with the same projection. latestMeasurements hide updatedBy from clients (projectMeasurement).
    */
-  private async serializeAnimal(animal: AnimalEntity, actor: Actor, latest?: Awaited<ReturnType<MeasurementService["latest"]>>) {
+  private async serializeAnimal(animal: AnimalEntity, actor: Actor, latest?: Awaited<ReturnType<MeasurementService["latest"]>>, tutors?: AnimalOwnerEntity[]) {
     const measurements = latest ?? await this.measurements.latest(animal.id);
+    const active = tutors ?? (await this.access.activeTutorsOf([animal.id])).get(animal.id.toLowerCase()) ?? [];
     return {
-      ...animal, owner: projectRelatedUser(animal.owner, actor, contactSummary),
+      ...animal, owner: projectRelatedUser(animal.owner, actor, contactSummary), tutors: active.map(row => serializeTutor(row, actor)),
       ...measurements, latestMeasurements: projectMeasurements(measurements.latestMeasurements, actor), breedDetails: animal.breed, breed: animal.breed?.name ?? null,
       type: animal.species?.name ?? null,
       age: animal.birthDate ? this.calculateAgeFromBirthDate(animal.birthDate) : null,
@@ -154,70 +170,99 @@ export class AnimalBusinessService {
 
   /** Bound SQL observation reads even on compatibility collections without pagination. */
   private async serializeAnimals(animals: AnimalEntity[], actor: Actor) {
-    const latest = await this.measurements.latestMany(animals.map(animal => animal.id));
-    return Promise.all(animals.map(animal => this.serializeAnimal(animal, actor, latest.get(animal.id))));
+    const ids = animals.map(animal => animal.id);
+    const [latest, tutors] = await Promise.all([this.measurements.latestMany(ids), this.access.activeTutorsOf(ids)]);
+    return Promise.all(animals.map(animal => this.serializeAnimal(animal, actor, latest.get(animal.id), tutors.get(animal.id.toLowerCase()) ?? [])));
   }
 
+  /** Animals with owner, species and breed; `tutorId` keeps those of which the account is an active tutor (EXISTS). */
+  private animalsQuery(tutorId?: string) {
+    const builder = this.animalRepository.createQueryBuilder("animal")
+      .leftJoinAndSelect("animal.owner", "owner")
+      .leftJoinAndSelect("animal.species", "species")
+      .leftJoinAndSelect("animal.breed", "breed");
+    if (tutorId) builder.andWhere(activeTutorExists("animal.id", "tutorId"), { tutorId });
+    return builder;
+  }
+
+  /**
+   * Staff list every animal (ownerId = animals of which that account is an active tutor, primary or secondary);
+   * everyone else only the animals of which they are an active tutor (ownerId other than themselves: 403).
+   */
   async getAll(query: ListAnimalsQueryDto, actor: Actor) {
-    const where: FindOptionsWhere<AnimalEntity> = {};
-    if (!isStaff(actor)) {
-      if (query.ownerId) requireAnimalAccess(actor, query.ownerId);
-      where.owner = { id: actor.id };
-    } else if (query.ownerId) where.owner = { id: query.ownerId };
-    if (query.speciesId) where.speciesId = query.speciesId;
-    const animals = await this.persistence.execute(() => this.animalRepository.find({
-      where, skip: query.skip, take: query.take, order: { name: "ASC", id: "ASC" },
-      relations: [AnimalRelation.Owner, AnimalRelation.Species, AnimalRelation.Breed],
-    }));
+    if (!isStaff(actor) && query.ownerId) requireAnimalAccess(actor, query.ownerId);
+    const builder = this.animalsQuery(isStaff(actor) ? query.ownerId : actor.id);
+    if (query.speciesId) builder.andWhere("animal.speciesId = :speciesId", { speciesId: query.speciesId });
+    const animals = await this.persistence.execute(() => builder
+      .orderBy("animal.name", "ASC").addOrderBy("animal.id", "ASC").skip(query.skip).take(query.take).getMany());
     return this.serializeAnimals(animals, actor);
   }
 
   async getById(id: string, actor: Actor) {
     const animal = await this.loadAnimal(id);
-    this.requireReadOrWriteAccess(animal, actor);
+    await this.requireReadAccess(animal, actor);
     return this.serializeAnimal(animal, actor);
   }
 
+  /**
+   * Creates the animal and its first primary tutorship (vc_animal_owners) in one transaction. The owner must be an
+   * active client account (400); clients register only their own animals. The new animal row is written first (no
+   * other transaction can be waiting on it), then the owner's account is locked before the tutorship row, as in every
+   * tutorship write (animal -> account -> vc_animal_owners).
+   */
   async create(dto: CreateAnimalDto, actor: Actor) {
     const attributes = this.mapWritableAttributes(dto);
     requireAnimalAccess(actor, dto.ownerId);
-    const owner = await this.requireClientOwner(dto.ownerId);
+    const owner = await this.requireClientOwner(dto.ownerId, true);
     const taxonomy = await this.resolveAnimalTaxonomy(dto.speciesId, dto.breedId, dto.type, dto.breed);
     const animal = this.animalRepository.create({
       ...attributes, ...taxonomy, owner,
       // Same approval rule as update/confirm: only an administrator or a veterinarian (not for their own animal)
       // registers it verified; anyone else (client, receptionist) leaves it pending approval.
-      isVerified: await this.canApprove(actor, owner.id),
-    });
-    return this.serializeAnimal(await this.persistence.execute(() => this.animalRepository.save(animal)), actor);
+      isVerified: await this.canApprove(actor, sameId(owner.id, actor.id)) });
+    const saved = await this.persistence.execute(() => this.dataSource.transaction(async manager => {
+      const created = await manager.save(animal);
+      await this.owners.lockTutorAccount(manager, owner.id);
+      await this.owners.openInitialPrimary(manager, created.id, owner.id, actor.id);
+      return created;
+    }));
+    return this.serializeAnimal(saved, actor);
   }
 
   /**
    * Whether the actor may approve an animal's data (verification) or change its species/breed with immediate
    * effect: an administrator, or a veterinarian (active employee holding the job title of the
-   * VETERINARIAN_JOB_TITLE_ID setting; none when unset) acting on another client's animal. Staff acting on their own animal follow the client path, as on creation.
+   * VETERINARIAN_JOB_TITLE_ID setting; none when unset) acting on another client's animal. Staff who are an active
+   * tutor (primary or secondary) of the animal follow the client path, as on creation.
    */
-  private async canApprove(actor: Actor, ownerId: string | null | undefined, manager?: EntityManager): Promise<boolean> {
+  private async canApprove(actor: Actor, isTutor: boolean, manager?: EntityManager): Promise<boolean> {
     if (actor.isAdmin) return true;
-    if (ownerId && sameId(ownerId, actor.id)) return false;
+    if (isTutor) return false;
     return this.qualifications.isVeterinarian(actor, manager);
   }
 
   /**
-   * The owner (and any staff with write access) may change species and breed; sending the current values is not a
-   * change. A change by an administrator or a veterinarian is approved at once (isVerified=true); a change by
-   * anyone else (client, non-veterinarian employee) leaves the animal unverified until an administrator or a
-   * veterinarian approves it through PUT /api/animal/confirm/:id.
+   * Staff and the active primary tutor edit the animal (secondary tutors: 403). The primary tutor (and any staff)
+   * may change species and breed; sending the current values is not a change. A change by an administrator or a
+   * veterinarian is approved at once (isVerified=true); a change by anyone else (client, non-veterinarian employee)
+   * leaves the animal unverified until an administrator or a veterinarian approves it through PUT /api/animal/confirm/:id.
+   *
+   * ownerId no longer overwrites owner_id: sending the current primary tutor is accepted as a no-op (clients that
+   * send the whole object keep working); a different ownerId is a primary-tutor transfer, allowed only to
+   * administrators (403 otherwise) and done in this transaction by AnimalOwnersBusinessService.transferLocked (history
+   * kept, owner_id synchronized). Here it never moves reservations: when the previous primary tutor is the client of
+   * open reservations of the animal the update fails with 409 TUTOR_HAS_OPEN_RESERVATIONS; use
+   * POST /api/animal/:id/transfer with transferFutureReservations.
    */
   async update(id: string, dto: UpdateAnimalDto, actor: Actor) {
     const attributes = this.mapWritableAttributes(dto);
     const saved = await this.persistence.execute(() => this.dataSource.transaction(async manager => {
       const animal = await this.lockAnimal(manager, id);
-      this.requireReadOrWriteAccess(animal, actor);
+      await this.requireWriteAccess(manager, animal, actor);
       const previous = { speciesId: animal.speciesId, breedId: animal.breedId };
-      if (dto.ownerId !== undefined) {
-        requireAnimalAccess(actor, dto.ownerId);
-        animal.owner = await this.requireClientOwner(dto.ownerId);
+      if (dto.ownerId !== undefined && !sameId(dto.ownerId, animal.owner?.id)) {
+        if (!actor.isAdmin) throw applicationError(ErrorMetadata.FORBIDDEN, AnimalMessage.OwnerChangeForbidden);
+        animal.owner = await this.owners.transferLocked(manager, animal.id, { newPrimaryUserId: dto.ownerId }, actor);
       }
       if (dto.speciesId !== undefined || dto.type !== undefined || dto.breedId !== undefined || dto.breed !== undefined) {
         const speciesId = dto.speciesId ?? (dto.type !== undefined ? undefined : animal.speciesId);
@@ -225,7 +270,7 @@ export class AnimalBusinessService {
         Object.assign(animal, await this.resolveAnimalTaxonomy(speciesId, breedId, dto.type, dto.breed));
       }
       if (!sameOptionalId(previous.speciesId, animal.speciesId) || !sameOptionalId(previous.breedId, animal.breedId)) {
-        animal.isVerified = await this.canApprove(actor, animal.owner?.id, manager);
+        animal.isVerified = await this.canApprove(actor, await this.access.isActiveTutor(animal.id, actor.id, manager), manager);
       }
       Object.assign(animal, attributes);
       return manager.save(animal);
@@ -242,13 +287,13 @@ export class AnimalBusinessService {
   async confirm(id: string, actor: Actor, dto: ConfirmAnimalDto = {}) {
     const saved = await this.persistence.execute(() => this.dataSource.transaction(async manager => {
       const animal = await this.lockAnimal(manager, id);
-      if (!(await this.canApprove(actor, animal.owner?.id, manager))) throw new ForbiddenException(AnimalMessage.VerificationForbidden);
+      if (!(await this.canApprove(actor, await this.access.isActiveTutor(animal.id, actor.id, manager), manager))) {
+        throw applicationError(ErrorMetadata.FORBIDDEN, AnimalMessage.VerificationForbidden);
+      }
       if ((dto.expectedSpeciesId !== undefined && !sameId(dto.expectedSpeciesId, animal.speciesId))
         || (dto.expectedBreedId !== undefined && !sameOptionalId(dto.expectedBreedId, animal.breedId))) {
-        throw new ConflictException({
-          statusCode: 409, code: "ANIMAL_DATA_CHANGED", message: AnimalMessage.DataChanged,
-          speciesId: animal.speciesId, breedId: animal.breedId,
-        });
+        throw applicationError(ErrorMetadata.CONFLICT, AnimalMessage.DataChanged, undefined, {
+          code: "ANIMAL_DATA_CHANGED", speciesId: animal.speciesId, breedId: animal.breedId });
       }
       animal.isVerified = true;
       return manager.save(animal);
@@ -263,13 +308,12 @@ export class AnimalBusinessService {
     return this.serializeAnimals(animals, actor);
   }
 
+  /** Animals of which the account is an active tutor (primary or secondary); the account itself or staff. */
   async findByOwner(ownerId: string, actor: Actor) {
     requireAnimalAccess(actor, ownerId);
     await this.requireClientOwner(ownerId);
-    const animals = await this.persistence.execute(() => this.animalRepository.find({
-      where: { owner: { id: ownerId } },
-      relations: [AnimalRelation.Owner, AnimalRelation.Species, AnimalRelation.Breed],
-    }));
+    const animals = await this.persistence.execute(() => this.animalsQuery(ownerId)
+      .orderBy("animal.name", "ASC").addOrderBy("animal.id", "ASC").getMany());
     return this.serializeAnimals(animals, actor);
   }
 
@@ -282,20 +326,18 @@ export class AnimalBusinessService {
   async delete(id: string) {
     await this.persistence.execute(() => this.dataSource.transaction(async manager => {
       const animal = await manager.findOne(AnimalEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
-      if (!animal) throw new NotFoundException(AnimalMessage.NotFound);
+      if (!animal) throw applicationError(ErrorMetadata.NOT_FOUND, AnimalMessage.NotFound);
       const reservations = await findOpenReservations(manager, { animalId: animal.id });
       const visits = await manager.find(ClinicalVisitEntity, {
         select: { id: true }, where: { animalId: animal.id, status: ClinicalVisitStatus.IN_PROGRESS }, order: { startedAt: "ASC" },
       });
       if (reservations.length || visits.length) {
-        throw new ConflictException({
-          statusCode: 409, code: "ANIMAL_HAS_OPEN_ACTIVITY", message: AnimalMessage.OpenActivity,
-          reservationIds: reservations.map(reservation => reservation.id), clinicalVisitIds: visits.map(visit => visit.id),
-        });
+        throw applicationError(ErrorMetadata.IN_USE, AnimalMessage.OpenActivity, undefined, {
+          code: "ANIMAL_HAS_OPEN_ACTIVITY", reservationIds: reservations.map(reservation => reservation.id), clinicalVisitIds: visits.map(visit => visit.id) });
       }
       await manager.softDelete(AnimalEntity, { id: animal.id });
     }));
-    return { statusCode: HttpStatus.OK, message: AnimalMessage.Deleted };
+    return null;
   }
 }
 

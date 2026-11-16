@@ -1,4 +1,6 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { BreedEntity } from "./entities/breed.entity";
@@ -32,19 +34,19 @@ export class BreedsBusinessService {
 
   async getById(id: string) {
     const breed = await this.persistence.execute(() => this.repository.findOne({ where: { id }, relations: [BreedRelation.Species] }));
-    if (!breed) throw new NotFoundException(BreedsMessage.NotFound);
+    if (!breed) throw applicationError(ErrorMetadata.NOT_FOUND, BreedsMessage.NotFound);
     return breed;
   }
 
   private validateName(name: string) {
-    if (typeof name !== "string" || !name.trim()) throw new BadRequestException(BreedsMessage.InvalidName);
+    if (typeof name !== "string" || !name.trim()) throw applicationError(ErrorMetadata.INVALID_VALUE, BreedsMessage.InvalidName);
     return name.trim();
   }
 
   async create(dto: CreateBreedDto) {
     try { await this.speciesService.getById(dto.speciesId); }
     catch (error) {
-      if (error instanceof NotFoundException) throw new BadRequestException(BreedsMessage.InvalidSpecies);
+      if (error instanceof NotFoundException) throw applicationError(ErrorMetadata.INVALID_VALUE, BreedsMessage.InvalidSpecies);
       throw error;
     }
     const breed = this.repository.create({ speciesId: dto.speciesId, name: this.validateName(dto.name), description: dto.description, notes: dto.notes });

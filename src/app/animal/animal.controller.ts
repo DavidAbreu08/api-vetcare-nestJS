@@ -10,6 +10,8 @@ import { CreateAnimalDto } from "./dto/create-animal.dto";
 import { UpdateAnimalDto } from "./dto/update-animal.dto";
 import { ConfirmAnimalDto } from "./dto/confirm-animal.dto";
 import { ListAnimalsQueryDto } from "./dto/list-animals-query.dto";
+import { ResponseMessage } from "../core/decorators/response-message.decorator";
+import { AnimalMessage } from "./animal.messages";
 
 @Controller("api/animal")
 @UseGuards(AuthGuard("jwt"), RolesGuard)
@@ -59,6 +61,7 @@ export class AnimalController {
   }
 
   @Delete(":id")
+  @ResponseMessage(AnimalMessage.Deleted)
   @Roles(SystemRole.ADMIN)
   delete(@Param("id", ParseUUIDPipe) id: string) { return this.service.delete(id); }
 }

@@ -1,4 +1,6 @@
-import { Injectable, UnauthorizedException } from "@nestjs/common";
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
+import { Injectable } from "@nestjs/common";
 import { PassportStrategy } from "@nestjs/passport";
 import { Strategy } from "passport-local";
 import { AuthService } from "../auth.service";
@@ -14,7 +16,7 @@ export class LocalStrategy extends PassportStrategy(Strategy) {
     const user = await this.authService.validateUser(email, password);
 
     if (!user)
-      throw new UnauthorizedException(MessagesHelper.PASSWORD_OR_EMAIL_INVALID);
+      throw applicationError(ErrorMetadata.UNAUTHORIZED, MessagesHelper.PASSWORD_OR_EMAIL_INVALID);
 
     return user;
   }

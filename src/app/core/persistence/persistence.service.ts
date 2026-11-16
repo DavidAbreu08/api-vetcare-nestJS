@@ -1,6 +1,8 @@
-import { BadRequestException, ConflictException, Injectable, InternalServerErrorException } from "@nestjs/common";
+import { BadRequestException, ConflictException, HttpException, Injectable } from "@nestjs/common";
 import { QueryFailedError } from "typeorm";
 import { PersistenceMessage } from "./persistence.messages";
+import { ErrorMetadata } from "../enums/error-metadata.enum";
+import { ApplicationException } from "../exceptions/application.exception";
 
 /** SQL Server error numbers belong to infrastructure, never resource services. */
 enum SqlServerError {
@@ -60,28 +62,34 @@ export class PersistenceService {
     try {
       return await operation();
     } catch (error: unknown) {
-      const driver = error as DriverError | null;
-      const number = driverErrorNumber(driver);
-      switch (number) {
-        case SqlServerError.DuplicateIndex:
-        case SqlServerError.DuplicateConstraint:
-          throw new ConflictException(PersistenceMessage.Duplicate);
-        case SqlServerError.ConstraintViolation:
-          if (isCheckViolation(driver)) throw new BadRequestException(PersistenceMessage.CheckViolation);
-          throw new ConflictException(PersistenceMessage.ReferenceConflict);
-        case SqlServerError.NullValue:
-        case SqlServerError.TruncatedValue:
-        case SqlServerError.TruncatedValueLegacy:
-        case SqlServerError.NumericOverflow:
-          throw new BadRequestException(PersistenceMessage.InvalidValue);
-        case SqlServerError.Deadlock:
-          throw new ConflictException(PersistenceMessage.Deadlock);
-        default:
-          if (error instanceof QueryFailedError) {
-            throw new InternalServerErrorException(PersistenceMessage.Unavailable);
-          }
-          throw error;
-      }
+      throw this.translate(error);
+    }
+  }
+
+  /** Shared by explicit repository operations and the global HTTP fallback. */
+  translate(error: unknown): unknown {
+    if (error instanceof HttpException) return error;
+    const driver = error as DriverError | null;
+    const number = driverErrorNumber(driver);
+    switch (number) {
+      case SqlServerError.DuplicateIndex:
+      case SqlServerError.DuplicateConstraint:
+        return new ConflictException({ message: PersistenceMessage.Duplicate, errorMetadata: ErrorMetadata.ALREADY_EXISTS }, { cause: error });
+      case SqlServerError.ConstraintViolation:
+        if (isCheckViolation(driver)) return new BadRequestException({ message: PersistenceMessage.CheckViolation, errorMetadata: ErrorMetadata.INVALID_VALUE }, { cause: error });
+        return new ConflictException({ message: PersistenceMessage.ReferenceConflict, errorMetadata: ErrorMetadata.CONFLICT }, { cause: error });
+      case SqlServerError.NullValue:
+      case SqlServerError.TruncatedValue:
+      case SqlServerError.TruncatedValueLegacy:
+      case SqlServerError.NumericOverflow:
+        return new BadRequestException({ message: PersistenceMessage.InvalidValue, errorMetadata: ErrorMetadata.INVALID_VALUE }, { cause: error });
+      case SqlServerError.Deadlock:
+        return new ConflictException({ message: PersistenceMessage.Deadlock, errorMetadata: ErrorMetadata.CONFLICT }, { cause: error });
+      default:
+        if (error instanceof QueryFailedError) {
+          return new ApplicationException(ErrorMetadata.INTERNAL_ERROR, PersistenceMessage.Unavailable, error);
+        }
+        return error;
     }
   }
 }

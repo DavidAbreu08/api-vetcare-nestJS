@@ -1,5 +1,7 @@
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
 import { AuthMessages } from "./auth.messages";
-import { BadRequestException, HttpStatus, Injectable, Logger, UnauthorizedException } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { UsersEntity } from "src/app/users/entities/users.entity";
 import { UsersService } from "src/app/users/users.service";
 import { compare, compareSync, hash } from "bcrypt";
@@ -44,7 +46,7 @@ export class AuthService {
       email: user.email,
     });
     if (!userEntity || !userEntity.isActive) {
-      throw new UnauthorizedException(AuthMessages.INVALID_CREDENTIALS);
+      throw applicationError(ErrorMetadata.UNAUTHORIZED, AuthMessages.INVALID_CREDENTIALS);
     }
     return {
       token: this.signAccessToken(user),
@@ -81,7 +83,7 @@ export class AuthService {
    */
   async validateJwtUser(id: string, issuedAt?: number): Promise<CurrentUser> {
     const currentUser = await this.userService.loadActor(id, issuedAt);
-    if (!currentUser) throw new UnauthorizedException(AuthMessages.USER_NOT_FOUND_AUTHENTICATION);
+    if (!currentUser) throw applicationError(ErrorMetadata.UNAUTHORIZED, AuthMessages.USER_NOT_FOUND_AUTHENTICATION);
     return currentUser;
   }
 
@@ -94,7 +96,7 @@ export class AuthService {
    * Changes the password, records password_changed_at (JWTs issued in earlier seconds stop working) and
    * invalidates pending reset/welcome tokens, all in one transaction. After the commit a new session JWT (same
    * format as login) is returned, since the token used for this request is no longer accepted. If signing fails
-   * the password is already changed, so the response stays 202 without a token (the client must log in again).
+   * the password is already changed, so the operation still succeeds without a token (the client must log in again).
    */
   async changePassword(
     id: string,
@@ -104,39 +106,33 @@ export class AuthService {
   ) {
     const user = await this.userService.findForAuthentication({ id });
     if (!user) {
-      throw new UnauthorizedException(AuthMessages.USER_NOT_FOUND_AUTHENTICATION);
+      throw applicationError(ErrorMetadata.UNAUTHORIZED, AuthMessages.USER_NOT_FOUND_AUTHENTICATION);
     }
 
     const isPasswordValid = await compare(oldPassword, user.passwordHash);
 
     if (!isPasswordValid)
-      throw new UnauthorizedException(AuthMessages.INVALID_OLD_PASSWORD);
+      throw applicationError(ErrorMetadata.UNAUTHORIZED, AuthMessages.INVALID_OLD_PASSWORD);
 
     if (newPassword !== confirmNewPassword)
-      throw new UnauthorizedException(
-        AuthMessages.PASSWORD_CONFIRMATION_MISMATCH
-      );
+      throw applicationError(ErrorMetadata.UNAUTHORIZED, AuthMessages.PASSWORD_CONFIRMATION_MISMATCH);
 
     const passwordHash = await hash(newPassword, BCRYPT_ROUNDS);
     const now = new Date();
     await this.transaction(async manager => {
       // The UPDATE of vc_users takes the account row lock before vc_reset_tokens is touched (users -> tokens).
       if (!(await this.userService.setPasswordHash(manager, user.id, passwordHash, now))) {
-        throw new UnauthorizedException(AuthMessages.USER_NOT_FOUND_AUTHENTICATION);
+        throw applicationError(ErrorMetadata.UNAUTHORIZED, AuthMessages.USER_NOT_FOUND_AUTHENTICATION);
       }
       await this.resetTokenRepo.invalidatePending(manager, user.id, now);
     });
 
-    const response: { statusCode: HttpStatus; message: string; token?: string } = {
-      statusCode: HttpStatus.ACCEPTED,
-      message: AuthMessages.PASSWORD_CHANGED,
-    };
     try {
       // now is stored exactly (datetime2(7), millisecond Date), so iat >= its second is accepted by loadActor.
-      return { ...response, token: this.signAccessToken(user, now) };
+      return { token: this.signAccessToken(user, now) };
     } catch {
       this.logger.error(AuthMessages.SESSION_TOKEN_AFTER_PASSWORD_CHANGE_FAILED);
-      return response;
+      return null;
     }
   }
 
@@ -147,7 +143,7 @@ export class AuthService {
    */
   async forgotPassword(email: string) {
     void this.issuePasswordResetInBackground(email);
-    return { message: AuthMessages.PASSWORD_RESET_REQUESTED };
+    return null;
   }
 
   /** Never rejects (no unhandled rejection); failures are logged as a constant, never the address or the token. */
@@ -189,7 +185,7 @@ export class AuthService {
     confirmNewPassword: string
   ) {
     if (newPassword !== confirmNewPassword) {
-      throw new BadRequestException(AuthMessages.PASSWORD_CONFIRMATION_MISMATCH);
+      throw applicationError(ErrorMetadata.INVALID_VALUE, AuthMessages.PASSWORD_CONFIRMATION_MISMATCH);
     }
     const tokenHash = hashResetToken(resetToken);
     const passwordHash = await hash(newPassword, BCRYPT_ROUNDS);
@@ -199,20 +195,17 @@ export class AuthService {
       // Users-first like every other flow: the user id is read from the token without locks, the account row is
       // locked, and only then is the token consumed (re-checking user, pending and expiry atomically).
       const userId = await this.resetTokenRepo.findPendingUserId(manager, tokenHash, now);
-      if (!userId) throw new BadRequestException(AuthMessages.INVALID_RESET_TOKEN);
+      if (!userId) throw applicationError(ErrorMetadata.INVALID_VALUE, AuthMessages.INVALID_RESET_TOKEN);
       await this.userService.lockForUpdate(manager, userId);
       if (!(await this.resetTokenRepo.consume(manager, tokenHash, userId, now))) {
-        throw new BadRequestException(AuthMessages.INVALID_RESET_TOKEN);
+        throw applicationError(ErrorMetadata.INVALID_VALUE, AuthMessages.INVALID_RESET_TOKEN);
       }
       if (!(await this.userService.setPasswordHash(manager, userId, passwordHash, now))) {
-        throw new BadRequestException(AuthMessages.INVALID_RESET_TOKEN);
+        throw applicationError(ErrorMetadata.INVALID_VALUE, AuthMessages.INVALID_RESET_TOKEN);
       }
       await this.resetTokenRepo.invalidatePending(manager, userId, now);
     });
 
-    return {
-      statusCode: HttpStatus.ACCEPTED,
-      message: AuthMessages.PASSWORD_RESET,
-    };
+    return null;
   }
 }

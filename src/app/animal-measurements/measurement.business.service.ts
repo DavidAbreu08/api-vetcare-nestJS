@@ -1,14 +1,17 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { applicationError } from "../core/exceptions/application-error";
+import { ErrorMetadata } from "../core/enums/error-metadata.enum";
+import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { EntityManager, IsNull, Repository } from "typeorm";
 import { AnimalEntity } from "../animal/entities/animal.entity";
-import { Actor, isStaff, requireAdmin, requireAnimalAccess, requireStaff } from "../core/authorization";
+import { Actor, isStaff, requireAdmin, requireStaff } from "../core/authorization";
+import { activeTutorExists, AnimalAccessService } from "../animal-owners/animal-access.service";
 import { MeasurementTypeService } from "../measurement-types/measurement-type.service";
 import { MeasurementTypeCode } from "../measurement-types/enums/measurement-type-code.enum";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { AnimalMeasurementEntity } from "./entities/animal-measurement.entity";
 import { CreateMeasurementDto, DeleteMeasurementDto, ListMeasurementsQueryDto, UpdateMeasurementDto } from "./dto/create-measurement.dto";
-import { MeasurementMessage, MeasurementRelation } from "./measurement.messages";
+import { MeasurementMessage, MeasurementErrorMessages } from "./measurement.messages";
 import { ClinicalVisitService } from "../clinical-visits/clinical-visit.service";
 import { ClinicalVisitStatus } from "../clinical-visits/enums/clinical-visit-status.enum";
 import { projectMeasurement, projectMeasurements } from "./measurement.projection";
@@ -24,25 +27,26 @@ export class MeasurementBusinessService {
     private readonly persistence: PersistenceService,
     private readonly types: MeasurementTypeService,
     private readonly visits: ClinicalVisitService,
+    private readonly access: AnimalAccessService,
   ) {}
 
+  /** Active (not soft-deleted) animal readable by the actor: staff or an active tutor (former tutors: 403). */
   private async animal(id: string, actor: Actor) {
-    const animal = await this.persistence.execute(() => this.animals.findOne({ where: { id }, relations: [MeasurementRelation.Owner] }));
-    if (!animal) throw new NotFoundException(MeasurementMessage.AnimalNotFound);
-    if (animal.owner) requireAnimalAccess(actor, animal.owner.id);
-    else if (!isStaff(actor)) throw new ForbiddenException(MeasurementMessage.MissingOwner);
+    const animal = await this.persistence.execute(() => this.animals.findOne({ where: { id } }));
+    if (!animal) throw applicationError(ErrorMetadata.NOT_FOUND, MeasurementMessage.AnimalNotFound);
+    if (!(await this.access.canReadAnimal(actor, animal.id))) throw applicationError(ErrorMetadata.FORBIDDEN, MeasurementErrorMessages[ErrorMetadata.FORBIDDEN]);
     return animal;
   }
 
   private value(value: number, code: string): string {
-    if (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value) > 999999999.999999 || !/^-?\d+(?:\.\d{1,6})?$/.test(String(value))) throw new BadRequestException(MeasurementMessage.InvalidValue);
-    if (value < 0 && [MeasurementTypeCode.Weight, MeasurementTypeCode.Height, MeasurementTypeCode.HeartRate, MeasurementTypeCode.RespiratoryRate].includes(code as MeasurementTypeCode)) throw new BadRequestException(MeasurementMessage.NonNegative);
+    if (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value) > 999999999.999999 || !/^-?\d+(?:\.\d{1,6})?$/.test(String(value))) throw applicationError(ErrorMetadata.INVALID_VALUE, MeasurementErrorMessages[ErrorMetadata.INVALID_VALUE]);
+    if (value < 0 && [MeasurementTypeCode.Weight, MeasurementTypeCode.Height, MeasurementTypeCode.HeartRate, MeasurementTypeCode.RespiratoryRate].includes(code as MeasurementTypeCode)) throw applicationError(ErrorMetadata.INVALID_VALUE, MeasurementMessage.NonNegative);
     return value.toFixed(6);
   }
 
   private time(value: string | undefined): Date {
     const date = value === undefined ? new Date() : new Date(value);
-    if (value === null || (value !== undefined && !/T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value)) || !Number.isFinite(date.getTime()) || date.getTime() > Date.now()) throw new BadRequestException(MeasurementMessage.InvalidTime);
+    if (value === null || (value !== undefined && !/T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value)) || !Number.isFinite(date.getTime()) || date.getTime() > Date.now()) throw applicationError(ErrorMetadata.INVALID_VALUE, MeasurementMessage.InvalidTime);
     return date;
   }
 
@@ -58,7 +62,8 @@ export class MeasurementBusinessService {
   async list(query: ListMeasurementsQueryDto, actor: Actor) {
     if (query.animalId) await this.animal(query.animalId, actor);
     const builder = this.reader().innerJoin("measurement.animal", "animal", "animal.deleted_at IS NULL");
-    if (!isStaff(actor)) builder.innerJoin("animal.owner", "owner").andWhere("owner.id = :ownerId", { ownerId: actor.id });
+    // Non-staff: measurements of animals of which the caller is an active tutor (primary or secondary).
+    if (!isStaff(actor)) builder.andWhere(activeTutorExists("measurement.animalId", "tutorId"), { tutorId: actor.id });
     if (query.animalId) builder.andWhere("measurement.animalId = :animalId", { animalId: query.animalId });
     if (query.measurementTypeId) builder.andWhere("measurement.measurementTypeId = :typeId", { typeId: query.measurementTypeId });
     if (query.clinicalVisitId) builder.andWhere("measurement.clinicalVisitId = :visitId", { visitId: query.clinicalVisitId });
@@ -68,7 +73,7 @@ export class MeasurementBusinessService {
 
   private async load(id: string) {
     const row = await this.persistence.execute(() => this.reader().andWhere("measurement.id = :id", { id }).getOne());
-    if (!row) throw new NotFoundException(MeasurementMessage.NotFound);
+    if (!row) throw applicationError(ErrorMetadata.NOT_FOUND, MeasurementErrorMessages[ErrorMetadata.NOT_FOUND]);
     return row;
   }
 
@@ -99,7 +104,7 @@ export class MeasurementBusinessService {
   /** Reads the row under an update lock inside the caller's transaction; soft-deleted rows are not found. */
   private async locked(manager: EntityManager, id: string) {
     const row = await manager.findOne(AnimalMeasurementEntity, { where: { id, deletedAt: IsNull() }, lock: WRITE_LOCK });
-    if (!row) throw new NotFoundException(MeasurementMessage.NotFound);
+    if (!row) throw applicationError(ErrorMetadata.NOT_FOUND, MeasurementErrorMessages[ErrorMetadata.NOT_FOUND]);
     return row;
   }
 
@@ -132,16 +137,16 @@ export class MeasurementBusinessService {
   async delete(id: string, dto: DeleteMeasurementDto, actor: Actor) {
     requireAdmin(actor, MeasurementMessage.AdminOnly);
     const current = await this.readable(id, actor);
-    if (current.clinicalVisitId) throw new ConflictException(MeasurementMessage.ClinicalMeasurementNotDeletable);
+    if (current.clinicalVisitId) throw applicationError(ErrorMetadata.CONFLICT, MeasurementErrorMessages[ErrorMetadata.CONFLICT]);
     await this.persistence.execute(() => this.measurements.manager.transaction(async manager => {
       const row = await this.locked(manager, id);
-      if (row.clinicalVisitId) throw new ConflictException(MeasurementMessage.ClinicalMeasurementNotDeletable);
+      if (row.clinicalVisitId) throw applicationError(ErrorMetadata.CONFLICT, MeasurementErrorMessages[ErrorMetadata.CONFLICT]);
       row.deletedAt = new Date();
       row.deletedBy = actor.id;
       row.deleteReason = dto.reason.trim();
       await manager.save(row);
     }));
-    return { message: MeasurementMessage.Deleted };
+    return null;
   }
 
   /**

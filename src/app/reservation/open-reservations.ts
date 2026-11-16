@@ -1,4 +1,6 @@
 import { ConflictException } from "@nestjs/common";
+import { applicationError } from "../core/exceptions/application-error";
+import { ErrorMetadata } from "../core/enums/error-metadata.enum";
 import { EntityManager } from "typeorm";
 import { ReservationStatus } from "../core/enums/reservation-status.enum";
 import { toDbUtc } from "../core/persistence/utc-datetime";
@@ -31,8 +33,8 @@ export async function findOpenReservations(manager: EntityManager, filter: OpenR
 
 /** 409 whose body lists the affected reservations, so the caller can cancel or reassign them first. */
 export function openReservationsConflict(code: string, message: string, reservations: OpenReservation[]): ConflictException {
-  return new ConflictException({
-    statusCode: 409, code, message,
+  return applicationError(ErrorMetadata.IN_USE, message, undefined, {
+    code,
     reservationIds: reservations.map(reservation => reservation.id),
     reservations: reservations.map(({ id, status, startAt }) => ({ id, status, startAt: startAt.toISOString() })),
   });

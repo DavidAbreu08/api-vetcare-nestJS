@@ -1,6 +1,8 @@
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
 import { BlockedTimeMessages } from "./blocked-time.messages";
 import { PersistenceService } from "../core/persistence/persistence.service";
-import { Injectable, ConflictException, NotFoundException } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { BlockedTimeEntity } from "./entities/bloked-times.entity";
@@ -22,7 +24,7 @@ export class BlockedTimeBusinessService {
 
   async getById(id: string) {
     const blocked = await this.blockedTimeRepository.findOne({ where: { id } });
-    if (!blocked) throw new NotFoundException(BlockedTimeMessages.NOT_FOUND);
+    if (!blocked) throw applicationError(ErrorMetadata.NOT_FOUND, BlockedTimeMessages.NOT_FOUND);
     return blocked;
   }
 
@@ -35,7 +37,7 @@ export class BlockedTimeBusinessService {
     if (minutes(timeEnd) <= minutes(timeStart)) policyError('INVALID_INTERVAL', BlockedTimeMessages.INVALID_INTERVAL);
     const existing = await this.blockedTimeRepository.find({ where: { date: new Date(dateKey(date) + "T00:00:00Z") } });
     if (existing.some(other => other.id !== id && overlaps(timeStart, timeEnd, other.timeStart, other.timeEnd))) {
-      throw new ConflictException(BlockedTimeMessages.TIME_ALREADY_BLOCKED);
+      throw applicationError(ErrorMetadata.ALREADY_EXISTS, BlockedTimeMessages.TIME_ALREADY_BLOCKED);
     }
     for (const field of ["name", "description", "notes"] as const) {
       if (dto[field] !== undefined) blocked[field] = dto[field];
@@ -100,7 +102,7 @@ export class BlockedTimeBusinessService {
     );
 
     if (hasReservation) {
-      throw new ConflictException(BlockedTimeMessages.TIME_ALREADY_BLOCKED);
+      throw applicationError(ErrorMetadata.ALREADY_EXISTS, BlockedTimeMessages.TIME_ALREADY_BLOCKED);
     }
 
     return this.persistence.execute(() => this.blockedTimeRepository.save({

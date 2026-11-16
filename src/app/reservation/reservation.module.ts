@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AnimalAccessModule } from "../animal-owners/animal-access.module";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { EmailModule } from "src/email/email.module";
 import { AnimalEntity } from "../animal/entities/animal.entity";
@@ -18,6 +19,7 @@ import { ReservationService } from "./reservation.service";
     EmailModule,
     RolesModule,
     ReservationHistoryModule,
+    AnimalAccessModule,
   ],
   providers: [ReservationService, ReservationBusinessService],
   controllers: [ReservationController, ClinicController],

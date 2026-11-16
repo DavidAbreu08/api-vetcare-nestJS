@@ -1,6 +1,8 @@
 import { TimeUtilsMessages } from "./time-utils.messages";
 import { Injectable } from "@nestjs/common";
 import { clinicDateTime, CLINIC_POLICY } from "../reservation/reservation-policy";
+import { applicationError } from "../core/exceptions/application-error";
+import { ErrorMetadata } from "../core/enums/error-metadata.enum";
 
 @Injectable()
 export class TimeUtilsService {
@@ -64,7 +66,7 @@ export class TimeUtilsService {
 
       // Validate the Date object
     if (isNaN(dateObj.getTime())) {
-      throw new Error(TimeUtilsMessages.INVALID_DATE);
+      throw applicationError(ErrorMetadata.INVALID_VALUE, TimeUtilsMessages.INVALID_DATE);
     }
     // Check day of week
     const dayOfWeek = dateObj.getDay();

@@ -25,6 +25,8 @@ import { RolesGuard } from "../core/guards/roles/roles.guard";
 import { CreateClientDto } from "./dto/create-client.dto";
 import { ListUsersQueryDto } from "./dto/list-users-query.dto";
 import { ReplaceUserRolesDto } from "./dto/replace-user-roles.dto";
+import { ResponseMessage } from "../core/decorators/response-message.decorator";
+import { UsersMessages } from "./users.messages";
 
 /** Account data only; employee profiles live in /api/employees. */
 @Controller("api/users")
@@ -58,6 +60,7 @@ export class UsersController {
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(SystemRole.ADMIN)
   @Post("create-clients")
+  @ResponseMessage(UsersMessages.CLIENT_CREATED)
   async storeClients(@Body() body: CreateClientDto, @CurrentUser() actor: Actor) {
     return await this.usersService.storeClient(body, actor);
   }
@@ -86,6 +89,7 @@ export class UsersController {
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Patch(":id")
+  @ResponseMessage(UsersMessages.OK)
   async update(
     @Param("id", new ParseUUIDPipe()) id: string,
     @Body() body: UpdateUserDto,
@@ -96,6 +100,7 @@ export class UsersController {
   }
 
   @Put(":id")
+  @ResponseMessage(UsersMessages.OK)
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   async replace(@Param("id", new ParseUUIDPipe()) id: string, @Body() body: UpdateUserDto, @CurrentUser() actor: Actor) {
     requireOwnerOrAdmin(actor, id);
@@ -106,7 +111,7 @@ export class UsersController {
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(SystemRole.ADMIN)
   @Delete(":id")
-  async destroy(@Param("id", new ParseUUIDPipe()) id: string) {
-    await this.usersService.delete(id);
+  async destroy(@Param("id", new ParseUUIDPipe()) id: string, @CurrentUser() actor: Actor) {
+    await this.usersService.delete(id, actor);
   }
 }

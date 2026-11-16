@@ -1,4 +1,6 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
+import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, EntityManager, Repository } from "typeorm";
 import { catalogAttributes } from "../core/catalog";
@@ -27,14 +29,14 @@ export class JobTitlesBusinessService {
   }
 
   async getById(id: string) {
-    if (typeof id !== "string" || !id.trim()) throw new BadRequestException(JobTitleMessage.Invalid);
+    if (typeof id !== "string" || !id.trim()) throw applicationError(ErrorMetadata.INVALID_VALUE, JobTitleMessage.Invalid);
     const row = await this.persistence.execute(() => this.repository.findOneBy({ id }));
-    if (!row) throw new NotFoundException(JobTitleMessage.NotFound);
+    if (!row) throw applicationError(ErrorMetadata.NOT_FOUND, JobTitleMessage.NotFound);
     return row;
   }
 
   create(dto: CreateJobTitleDto) {
-    const attributes = catalogAttributes(dto, () => new BadRequestException(JobTitleMessage.Invalid));
+    const attributes = catalogAttributes(dto, () => applicationError(ErrorMetadata.INVALID_VALUE, JobTitleMessage.Invalid));
     return this.persistence.execute(() => this.repository.save(this.repository.create({ ...attributes, isActive: dto.isActive ?? true })));
   }
 
@@ -44,9 +46,9 @@ export class JobTitlesBusinessService {
    * deactivation; this side only reads the settings afterwards (no setting lock), so no cycle is formed.
    */
   private async lockJobTitle(manager: EntityManager, id: string): Promise<JobTitleEntity> {
-    if (typeof id !== "string" || !id.trim()) throw new BadRequestException(JobTitleMessage.Invalid);
+    if (typeof id !== "string" || !id.trim()) throw applicationError(ErrorMetadata.INVALID_VALUE, JobTitleMessage.Invalid);
     const row = await manager.findOne(JobTitleEntity, { where: { id }, lock: LOCK });
-    if (!row) throw new NotFoundException(JobTitleMessage.NotFound);
+    if (!row) throw applicationError(ErrorMetadata.NOT_FOUND, JobTitleMessage.NotFound);
     return row;
   }
 
@@ -58,13 +60,13 @@ export class JobTitlesBusinessService {
   }
 
   async update(id: string, dto: UpdateJobTitleDto) {
-    const attributes = catalogAttributes(dto, () => new BadRequestException(JobTitleMessage.Invalid));
+    const attributes = catalogAttributes(dto, () => applicationError(ErrorMetadata.INVALID_VALUE, JobTitleMessage.Invalid));
     return this.persistence.execute(() => this.dataSource.transaction(async manager => {
       const row = await this.lockJobTitle(manager, id);
-      if (attributes.code !== undefined && attributes.code !== row.code) throw new ConflictException(JobTitleMessage.ImmutableCode);
+      if (attributes.code !== undefined && attributes.code !== row.code) throw applicationError(ErrorMetadata.CONFLICT, JobTitleMessage.ImmutableCode);
       // A job title referenced by a *_JOB_TITLE_ID setting can be neither deactivated nor deleted (as roles).
       if (attributes.isActive === false && row.isActive && await this.isReferencedBySetting(manager, row.id)) {
-        throw new ConflictException(JobTitleMessage.SystemJobTitle);
+        throw applicationError(ErrorMetadata.CONFLICT, JobTitleMessage.SystemJobTitle);
       }
       Object.assign(row, attributes);
       return manager.save(row);
@@ -74,8 +76,8 @@ export class JobTitlesBusinessService {
   async delete(id: string) {
     await this.persistence.execute(() => this.dataSource.transaction(async manager => {
       const row = await this.lockJobTitle(manager, id);
-      if (await this.isReferencedBySetting(manager, row.id)) throw new ConflictException(JobTitleMessage.SystemJobTitle);
-      if (await manager.count(EmployeeJobTitleEntity, { where: { jobTitleId: row.id } })) throw new ConflictException(JobTitleMessage.InUse);
+      if (await this.isReferencedBySetting(manager, row.id)) throw applicationError(ErrorMetadata.CONFLICT, JobTitleMessage.SystemJobTitle);
+      if (await manager.count(EmployeeJobTitleEntity, { where: { jobTitleId: row.id } })) throw applicationError(ErrorMetadata.IN_USE, JobTitleMessage.InUse);
       await manager.remove(row);
     }));
   }

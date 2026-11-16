@@ -21,6 +21,7 @@ import { ClinicalVisitEntity } from "../clinical-visits/entities/clinical-visit.
 import { ClinicalVisitService } from "../clinical-visits/clinical-visit.service";
 import { ReservationEntity } from "../reservation/entities/reservation.entity";
 import { ReservationHistoryEntity } from "../reservation-history/entities/reservation-history.entity";
+import { AnimalOwnerEntity } from "../animal-owners/entities/animal-owner.entity";
 
 @Global()
 @Module({ providers: [{ provide: DataSource, useValue: {} }], exports: [DataSource] })
@@ -28,7 +29,7 @@ class FakeDataSourceModule {}
 
 it("resolves the integrated animal/catalog/measurement dependency graph without a database", async () => {
   const builder = Test.createTestingModule({ imports: [FakeDataSourceModule, PersistenceModule, SystemSettingsModule, AnimalModule] });
-  for (const entity of [AnimalEntity, UsersEntity, SpeciesEntity, BreedEntity, AnimalMeasurementEntity, MeasurementTypeEntity, SystemSettingEntity, RoleEntity, UserRoleEntity, EmployeeEntity, ClinicalVisitEntity, ReservationEntity, ReservationHistoryEntity]) {
+  for (const entity of [AnimalEntity, UsersEntity, SpeciesEntity, BreedEntity, AnimalMeasurementEntity, MeasurementTypeEntity, SystemSettingEntity, RoleEntity, UserRoleEntity, EmployeeEntity, ClinicalVisitEntity, ReservationEntity, ReservationHistoryEntity, AnimalOwnerEntity]) {
     builder.overrideProvider(getRepositoryToken(entity)).useValue({});
   }
   const module = await builder.compile();

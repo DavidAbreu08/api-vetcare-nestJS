@@ -19,8 +19,9 @@ export function projectEmployee(employee: EmployeeEntity | null | undefined, act
 
 /**
  * Reservation response for the actor. Non-administrators see the employee as { id, name, profilePictureUrl }
- * and the client as { id, name, email, phone }; the animal's owner is the client and is only repeated (full)
- * for administrators. Administrators see full accounts, never password hashes.
+ * and the client (the responsible tutor, client_id) as { id, name, email, phone }; the animal's owner (its current
+ * primary tutor, which may differ from the client) is only shown (full) to administrators. Administrators see full
+ * accounts, never password hashes.
  */
 export function serializeReservation<R extends ReservationEntity>(reservation: R, actor: Actor) {
   const view = { ...reservation } as unknown as Record<string, unknown>;

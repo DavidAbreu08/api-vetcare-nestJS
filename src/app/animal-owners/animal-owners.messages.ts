@@ -1,0 +1,20 @@
+/** Public messages of tutorship management (vc_animal_owners). */
+export enum AnimalOwnersMessage {
+  AnimalNotFound = "Animal not found",
+  AccessDenied = "Access denied",
+  HistoryForbidden = "Only staff and the primary tutor can see former tutors",
+  ManageForbidden = "Only staff and the primary tutor can manage the animal's tutors",
+  TransferForbidden = "Only an administrator can transfer the primary tutor",
+  InvalidTutor = "A tutor must be an active client account",
+  AlreadyTutor = "The account is already an active tutor of this animal",
+  AlreadyPrimary = "The account is already the primary tutor of this animal",
+  NotTutor = "The account is not an active tutor of this animal",
+  PrimaryNotRemovable = "The primary tutor cannot be removed; transfer the animal to another primary tutor first",
+  NoPrimary = "The animal has no primary tutor; an administrator must assign one through POST /api/animal/:id/transfer",
+  PrimaryInactive = "The primary tutor's account is inactive or deleted; reservations cannot be moved to it",
+  PreviousTutorUnavailable = "The previous primary tutor's account no longer exists; it cannot be kept as a secondary tutor",
+  FutureReservations = "The tutor is the client of pending or confirmed reservations of this animal not yet finished; send transferFutureReservations: true to move them, or cancel them first",
+  ConcurrentReservations = "The animal's reservations changed while the request was running; retry",
+  TutorsChanged = "The animal's tutors changed while the request was running; retry",
+  Removed = "Tutor removed",
+}

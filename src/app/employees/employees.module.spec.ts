@@ -1,3 +1,4 @@
+import { AnimalOwnerEntity } from "../animal-owners/entities/animal-owner.entity";
 import { Global, Module } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
@@ -32,7 +33,7 @@ it("resolves the users/roles/employees/reservation dependency graph without a da
   const builder = Test.createTestingModule({
     imports: [FakeDataSourceModule, PersistenceModule, SystemSettingsModule, RolesModule, JobTitlesModule, UsersModule, EmployeesModule, ReservationModule],
   });
-  for (const entity of [SystemSettingEntity, RoleEntity, UserRoleEntity, JobTitleEntity, UsersEntity, EmployeeEntity, EmployeeJobTitleEntity, ReservationEntity, BlockedTimeEntity, AnimalEntity, ReservationHistoryEntity, ClinicalVisitEntity]) {
+  for (const entity of [SystemSettingEntity, RoleEntity, UserRoleEntity, JobTitleEntity, UsersEntity, EmployeeEntity, EmployeeJobTitleEntity, ReservationEntity, BlockedTimeEntity, AnimalEntity, ReservationHistoryEntity, ClinicalVisitEntity, AnimalOwnerEntity]) {
     builder.overrideProvider(getRepositoryToken(entity)).useValue({});
   }
   const module = await builder.compile();

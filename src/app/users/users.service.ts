@@ -14,7 +14,7 @@ export class UsersService {
   getAll(query: ListUsersQueryDto = new ListUsersQueryDto()) { return this.business.getAll(query); }
   getById(id: string) { return this.business.findOneOrFail({ id }); }
   create(data: CreateUserDto) { return this.business.create(data); }
-  delete(id: string) { return this.business.delete(id); }
+  delete(id: string, actor?: Actor) { return this.business.delete(id, actor); }
   findAllClients() { return this.business.findAllClients(); }
   checkEmailExists(email: string) { return this.business.checkEmailExists(email); }
   findForAuthentication(where: FindOptionsWhere<UsersEntity>) { return this.business.findForAuthentication(where); }

@@ -1,3 +1,4 @@
+import { AnimalOwnerEntity } from "src/app/animal-owners/entities/animal-owner.entity";
 import { Global, Module } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
@@ -25,7 +26,7 @@ it("resolves AuthModule (route throttler guard, cleanup cron, users) without a d
   const builder = Test.createTestingModule({
     imports: [FakeDataSourceModule, ThrottlerModule.forRoot([]), PersistenceModule, SystemSettingsModule, AuthModule],
   });
-  for (const entity of [SystemSettingEntity, RoleEntity, UserRoleEntity, UsersEntity, EmployeeEntity, ResetTokenEntity]) {
+  for (const entity of [SystemSettingEntity, RoleEntity, UserRoleEntity, UsersEntity, EmployeeEntity, ResetTokenEntity, AnimalOwnerEntity]) {
     builder.overrideProvider(getRepositoryToken(entity)).useValue({});
   }
   const module = await builder.compile();

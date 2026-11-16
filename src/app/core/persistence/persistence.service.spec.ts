@@ -2,6 +2,8 @@ import { BadRequestException, ConflictException } from "@nestjs/common";
 import { QueryFailedError } from "typeorm";
 import { PersistenceMessage } from "./persistence.messages";
 import { PersistenceService } from "./persistence.service";
+import { ErrorMetadata } from "../enums/error-metadata.enum";
+import { ApplicationException } from "../exceptions/application.exception";
 
 const sqlError = (number: number, message: string) =>
   new QueryFailedError("INSERT ...", [], Object.assign(new Error(message), { number }));
@@ -31,5 +33,31 @@ describe("PersistenceService deadlocks", () => {
     const error = sqlError(1205, "Transaction (Process ID 52) was deadlocked on lock resources with another process.");
     await expect(new PersistenceService().execute(() => Promise.reject(error))).rejects.toThrow(PersistenceMessage.Deadlock);
     await expect(new PersistenceService().execute(() => Promise.reject(error))).rejects.toBeInstanceOf(ConflictException);
+  });
+});
+
+describe("PersistenceService translation", () => {
+  const persistence = new PersistenceService();
+
+  it("keeps already translated HTTP errors and unrelated failures unchanged", () => {
+    const error = new ConflictException("Domain conflict");
+    expect(persistence.translate(error)).toBe(error);
+    expect(persistence.translate(null)).toBeNull();
+    expect(persistence.translate("failure")).toBe("failure");
+  });
+
+  it("retains the original SQL cause with a shared duplicate category", () => {
+    const source = sqlError(2627, "private SQL detail");
+    const error = persistence.translate(source) as ConflictException;
+    expect(error.getResponse()).toMatchObject({ errorMetadata: ErrorMetadata.ALREADY_EXISTS });
+    expect(error.cause).toBe(source);
+  });
+
+  it("uses a safe message for unknown SQL errors", () => {
+    const source = sqlError(123456, "private SQL detail");
+    const error = persistence.translate(source) as ApplicationException;
+    expect(error.getStatus()).toBe(500);
+    expect(error.getResponse()).toEqual({ errorMetadata: ErrorMetadata.INTERNAL_ERROR, friendlyMessage: PersistenceMessage.Unavailable });
+    expect(error.cause).toBe(source);
   });
 });

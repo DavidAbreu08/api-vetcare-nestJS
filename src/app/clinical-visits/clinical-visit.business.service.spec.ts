@@ -64,13 +64,16 @@ function setup() {
       : null)),
   };
   const reservationRepository = { createQueryBuilder: reservationQueryBuilder };
-  const business = new ClinicalVisitBusinessService(new PersistenceService(), dataSource as any, history as any, visitRepository as any, reservationRepository as any);
+  /** Active tutors per animal (AnimalAccessService double); OWNER tutors every animal. */
+  const tutors: Record<string, string[]> = { CAT: ["OWNER"], DOG: ["OWNER"] };
+  const access = { isActiveTutor: jest.fn(async (animalId: string, userId: string) => (tutors[animalId] ?? []).some(id => sameId(id, userId))) };
+  const business = new ClinicalVisitBusinessService(new PersistenceService(), dataSource as any, history as any, visitRepository as any, reservationRepository as any, access as any);
   const addReservation = (row: any) => reservations.set(row.id, { animalId: "CAT", clientId: "OWNER", employeeId: "E-1", status: ReservationStatus.CONFIRMED, confirmedAt: new Date(), ...row });
   const addVisit = (row: any) => visits.set(row.id, {
     reservationId: null, animalId: "CAT", employeeId: "E-1", status: ClinicalVisitStatus.IN_PROGRESS,
     startedAt: new Date(Date.now() - 60_000), endedAt: null, clinicalNotes: "secret notes", voidReason: null, voidedBy: null, ...row,
   });
-  return { business, manager, history, reservations, visits, addReservation, addVisit, reservationQueryBuilder };
+  return { business, manager, history, reservations, visits, addReservation, addVisit, reservationQueryBuilder, tutors, access };
 }
 
 describe("ClinicalVisitBusinessService.start", () => {
@@ -243,5 +246,20 @@ describe("Clinical access (A.6)", () => {
     expect(view).toMatchObject({ id: "V-1", status: ClinicalVisitStatus.IN_PROGRESS });
     expect(view).not.toHaveProperty("clinicalNotes");
     await expect(read(stranger)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+describe("Clinical record follows the animal across tutors (decision 13)", () => {
+  it("shows the visit (without clinical notes) to a secondary tutor and to a new tutor, and denies a former tutor", async () => {
+    const t = setup();
+    t.addVisit({ id: "V-1", employeeId: "E-1", clinicalNotes: "secret notes" });
+    const carla = actor({ id: "CARLA", isClient: true });
+    t.tutors.CAT = ["CARLA"];
+    const view = await t.business.get("V-1", carla) as Record<string, unknown>;
+    expect(view).toMatchObject({ id: "V-1" });
+    expect(view).not.toHaveProperty("clinicalNotes");
+    expect(t.access.isActiveTutor).toHaveBeenCalledWith("CAT", "CARLA");
+    // OWNER stopped being a tutor of CAT: no access to its clinical history any more.
+    await expect(t.business.get("V-1", owner)).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

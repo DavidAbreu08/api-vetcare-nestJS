@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AnimalAccessModule } from "../animal-owners/animal-access.module";
 import { UsersController } from "./users.controller";
 import { UsersService } from "./users.service";
 import { UsersBusinessService } from "./users.business.service";
@@ -13,6 +14,7 @@ import { RolesModule } from "../roles/roles.module";
     TypeOrmModule.forFeature([UsersEntity, EmployeeEntity]),
     EmailModule,
     RolesModule,
+    AnimalAccessModule,
   ],
   controllers: [UsersController],
   providers: [UsersService, UsersBusinessService],

@@ -1,6 +1,8 @@
 import { EmailMessages } from "./email.messages";
 import { Injectable, Logger } from "@nestjs/common";
 import * as nodemailer from "nodemailer";
+import { applicationError } from "../app/core/exceptions/application-error";
+import { ErrorMetadata } from "../app/core/enums/error-metadata.enum";
 
 const HTML_ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 
@@ -157,9 +159,9 @@ export class EmailService {
     try {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(EmailMessages.RESERVATION_CREATED_SENT);
-    } catch {
+    } catch (cause: unknown) {
       this.logger.error(EmailMessages.RESERVATION_CREATED_SEND_ERROR);
-      throw new Error(EmailMessages.RESERVATION_CREATED_FAILED);
+      throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, EmailMessages.RESERVATION_CREATED_FAILED, cause);
     }
   }
 
@@ -187,9 +189,9 @@ export class EmailService {
     try {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(EmailMessages.RESERVATION_CONFIRMED_SENT);
-    } catch {
+    } catch (cause: unknown) {
       this.logger.error(EmailMessages.RESERVATION_CONFIRMED_SEND_ERROR);
-      throw new Error(EmailMessages.RESERVATION_CONFIRMED_FAILED);
+      throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, EmailMessages.RESERVATION_CONFIRMED_FAILED, cause);
     }
   }
 
@@ -208,9 +210,9 @@ export class EmailService {
       // Send the email using the transporter
       await this.transporter.sendMail(mailOptions);
       this.logger.log(EmailMessages.PASSWORD_RESET_SENT);
-    } catch {
+    } catch (cause: unknown) {
       this.logger.error(EmailMessages.PASSWORD_RESET_SEND_ERROR);
-      throw new Error(EmailMessages.PASSWORD_RESET_FAILED);
+      throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, EmailMessages.PASSWORD_RESET_FAILED, cause);
     }
   }
 
@@ -227,9 +229,9 @@ export class EmailService {
     try {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(EmailMessages.EMPLOYEE_WELCOME_SENT);
-    } catch {
+    } catch (cause: unknown) {
       this.logger.error(EmailMessages.EMPLOYEE_WELCOME_SEND_ERROR);
-      throw new Error(EmailMessages.WELCOME_FAILED);
+      throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, EmailMessages.WELCOME_FAILED, cause);
     }
   }
 
@@ -246,9 +248,9 @@ export class EmailService {
     try {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(EmailMessages.CLIENT_WELCOME_SENT);
-    } catch {
+    } catch (cause: unknown) {
       this.logger.error(EmailMessages.CLIENT_WELCOME_SEND_ERROR);
-      throw new Error(EmailMessages.WELCOME_FAILED);
+      throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, EmailMessages.WELCOME_FAILED, cause);
     }
   }
 
@@ -281,9 +283,9 @@ export class EmailService {
     try {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(EmailMessages.RESERVATION_RESCHEDULED_SENT);
-    } catch {
+    } catch (cause: unknown) {
       this.logger.error(EmailMessages.RESERVATION_RESCHEDULED_SEND_ERROR);
-      throw new Error(EmailMessages.RESERVATION_RESCHEDULED_FAILED);
+      throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, EmailMessages.RESERVATION_RESCHEDULED_FAILED, cause);
     }
   }
 
@@ -302,9 +304,9 @@ export class EmailService {
     try {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(EmailMessages.RESERVATION_CANCELLED_SENT);
-    } catch {
+    } catch (cause: unknown) {
       this.logger.error(EmailMessages.RESERVATION_CANCELLED_SEND_ERROR);
-      throw new Error(EmailMessages.RESERVATION_CANCELLED_FAILED);
+      throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, EmailMessages.RESERVATION_CANCELLED_FAILED, cause);
     }
   }
 }

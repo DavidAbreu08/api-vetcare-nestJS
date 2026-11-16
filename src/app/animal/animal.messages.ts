@@ -2,7 +2,9 @@
 export enum AnimalMessage {
   NotFound = "Animal not found",
   InvalidOwner = "Owner must be a client",
-  MissingOwner = "Animal has no owner",
+  AccessDenied = "Access denied",
+  EditForbidden = "Only staff and the primary tutor can edit this animal",
+  OwnerChangeForbidden = "Only an administrator can change the primary tutor (POST /api/animal/:id/transfer)",
   NullRequiredField = "A required animal field cannot be null",
   FutureBirthDate = "Birth date cannot be in the future",
   SexAliasConflict = "sex conflicts with gender",

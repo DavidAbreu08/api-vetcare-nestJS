@@ -1,16 +1,10 @@
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from "@nestjs/common";
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
+import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, EntityManager, In, Repository } from "typeorm";
 import { EmailService } from "src/email/email.service";
 import { AnimalEntity } from "../animal/entities/animal.entity";
-import { AnimalRelation } from "../animal/enums/animal-relation.enum";
 import { ClinicalVisitEntity } from "../clinical-visits/entities/clinical-visit.entity";
 import { ClinicalVisitStatus } from "../clinical-visits/enums/clinical-visit-status.enum";
 import { Actor, isStaff, sameId } from "../core/authorization";
@@ -37,6 +31,7 @@ import { ReservationMessages } from "./reservation.messages";
 import { assertTransition, clinicParts, overlaps, policyError, validateReservationWindow } from "./reservation-policy";
 import { ReservationRelation } from "./enums/reservation-relations.enum";
 import { serializeReservation, serializeReservations } from "./reservation.serializer";
+import { activeTutorExists, AnimalAccessService } from "../animal-owners/animal-access.service";
 
 type NotificationStatus = "sent" | "failed" | "not_requested";
 const WRITE_LOCK = { mode: "pessimistic_write" } as const;
@@ -57,7 +52,9 @@ const ACTIVE_VISIT_STATUSES = [ClinicalVisitStatus.IN_PROGRESS, ClinicalVisitSta
  * the employee's open reservations. Those readers never lock reservations, so no cycle can form.
  *
  * Access: administrators see and manage everything; an active employee sees the reservations assigned to them;
- * a client sees and may cancel their own reservations. Responses are projected per actor (serializeReservation).
+ * the reservation's client (the responsible tutor, client_id) sees it and may cancel it; every active tutor (primary
+ * or secondary) of the animal sees the animal's reservations (read only). A client_id keeps seeing that reservation
+ * after leaving the animal (they remain its responsible client). Responses are projected per actor (serializeReservation).
  */
 @Injectable()
 export class ReservationBusinessService {
@@ -73,6 +70,7 @@ export class ReservationBusinessService {
     @InjectRepository(ReservationEntity) private readonly reservationRepository: Repository<ReservationEntity>,
     @InjectRepository(UsersEntity) private readonly usersRepository: Repository<UsersEntity>,
     @InjectRepository(AnimalEntity) private readonly animalRepository: Repository<AnimalEntity>,
+    private readonly access: AnimalAccessService,
   ) {}
 
   private transaction<T>(work: (manager: EntityManager) => Promise<T>): Promise<T> {
@@ -90,7 +88,7 @@ export class ReservationBusinessService {
       .leftJoinAndSelect("employee.user", "employeeUser")
       .leftJoinAndSelect("reservation.animal", "animal");
     if (!actor.isAdmin) {
-      const scopes = ["reservation.clientId = :actorId"];
+      const scopes = ["reservation.clientId = :actorId", activeTutorExists("reservation.animalId", "actorId")];
       if (actor.isEmployee && actor.employeeId) scopes.push("reservation.employeeId = :actorEmployeeId");
       builder.andWhere(`(${scopes.join(" OR ")})`, { actorId: actor.id, actorEmployeeId: actor.employeeId });
     }
@@ -108,34 +106,34 @@ export class ReservationBusinessService {
 
   async getById(id: string, actor: Actor) {
     const reservation = await this.load(id);
-    this.requireReadAccess(actor, reservation);
+    await this.requireReadAccess(actor, reservation);
     return serializeReservation(reservation, actor);
   }
 
   /** History is readable by whoever can read the reservation; third-party user ids are hidden from non-admins. */
   async getHistory(id: string, query: ListQueryDto, actor: Actor) {
     const reservation = await this.persistence.execute(() => this.reservationRepository.findOne({ where: { id } }));
-    if (!reservation) throw new NotFoundException(ReservationMessages.RESERVATION_NOT_FOUND);
-    this.requireReadAccess(actor, reservation);
+    if (!reservation) throw applicationError(ErrorMetadata.NOT_FOUND, ReservationMessages.RESERVATION_NOT_FOUND);
+    await this.requireReadAccess(actor, reservation);
     return this.history.list(reservation.id, query, actor);
   }
 
-  /** Administrator; the client of the reservation; the active employee it is assigned to. */
-  canRead(actor: Actor, reservation: Pick<ReservationEntity, "clientId" | "employeeId">): boolean {
+  /** Administrator; the client of the reservation; the active employee it is assigned to; an active tutor of the animal. */
+  async canRead(actor: Actor, reservation: Pick<ReservationEntity, "clientId" | "employeeId" | "animalId">): Promise<boolean> {
     return actor.isAdmin || sameId(reservation.clientId, actor.id)
-      || (actor.isEmployee && !!actor.employeeId && sameId(reservation.employeeId, actor.employeeId));
+      || (actor.isEmployee && !!actor.employeeId && sameId(reservation.employeeId, actor.employeeId))
+      || this.access.isActiveTutor(reservation.animalId, actor.id);
   }
 
-  private requireReadAccess(actor: Actor, reservation: Pick<ReservationEntity, "clientId" | "employeeId">) {
-    if (!this.canRead(actor, reservation)) throw new ForbiddenException("Access denied");
+  private async requireReadAccess(actor: Actor, reservation: Pick<ReservationEntity, "clientId" | "employeeId" | "animalId">) {
+    if (!(await this.canRead(actor, reservation))) throw applicationError(ErrorMetadata.FORBIDDEN, "Access denied");
   }
 
   private async load(id: string): Promise<ReservationEntity> {
     const reservation = await this.persistence.execute(() => this.reservationRepository.findOne({
       where: { id }, withDeleted: true,
-      relations: { [ReservationRelation.CLIENT]: true, [ReservationRelation.EMPLOYEE]: { user: true }, [ReservationRelation.ANIMAL]: true },
-    }));
-    if (!reservation) throw new NotFoundException(ReservationMessages.RESERVATION_NOT_FOUND);
+      relations: { [ReservationRelation.CLIENT]: true, [ReservationRelation.EMPLOYEE]: { user: true }, [ReservationRelation.ANIMAL]: true } }));
+    if (!reservation) throw applicationError(ErrorMetadata.NOT_FOUND, ReservationMessages.RESERVATION_NOT_FOUND);
     return reservation;
   }
 
@@ -150,10 +148,10 @@ export class ReservationBusinessService {
     const { startAt, endAt } = this.window(dto.startAt, dto.endAt);
     validateReservationWindow(startAt, endAt);
     const user = await this.persistence.execute(() => this.usersRepository.findOne({ where: { id: actor.id } }));
-    if (!user) throw new NotFoundException(ReservationMessages.USER_NOT_FOUND);
+    if (!user) throw applicationError(ErrorMetadata.NOT_FOUND, ReservationMessages.USER_NOT_FOUND);
     const client = await this.validateAndGetClient(actor, user, dto.ownerId);
     const animal = await this.validateAnimalOwnership(dto.animalId, client);
-    if (dto.employeeId && !actor.isAdmin) throw new ForbiddenException(ReservationMessages.EMPLOYEE_ASSIGNMENT_FORBIDDEN);
+    if (dto.employeeId && !actor.isAdmin) throw applicationError(ErrorMetadata.FORBIDDEN, ReservationMessages.EMPLOYEE_ASSIGNMENT_FORBIDDEN);
 
     const saved = await this.transaction(async manager => {
       await this.requireBookingParties(manager, animal.id, client.id, { requireOwnership: true });
@@ -188,9 +186,9 @@ export class ReservationBusinessService {
     await this.transaction(async manager => {
       const reservation = await this.lockReservation(manager, id);
       if (reservation.status !== ReservationStatus.PENDING) {
-        throw new ConflictException({ statusCode: 409, code: "INVALID_TRANSITION", message: ReservationMessages.ASSIGN_REQUIRES_PENDING });
+        throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.ASSIGN_REQUIRES_PENDING, undefined, { code: "INVALID_TRANSITION" });
       }
-      if (sameId(reservation.employeeId, dto.employeeId)) throw new ConflictException(ReservationMessages.EMPLOYEE_ALREADY_ASSIGNED);
+      if (sameId(reservation.employeeId, dto.employeeId)) throw applicationError(ErrorMetadata.ALREADY_EXISTS, ReservationMessages.EMPLOYEE_ALREADY_ASSIGNED);
       const employee = await this.requireBookableEmployee(manager, dto.employeeId, reservation.startAt);
       await this.reserveEmployeeSlot(manager, employee.id, reservation.startAt, reservation.endAt, reservation.id);
       const previous = reservation.employeeId;
@@ -209,7 +207,7 @@ export class ReservationBusinessService {
     const confirmed = await this.transaction(async manager => {
       const reservation = await this.lockReservation(manager, id);
       assertTransition(reservation.status, ReservationStatus.CONFIRMED);
-      if (!reservation.employeeId) throw new ConflictException({ statusCode: 409, code: "EMPLOYEE_REQUIRED", message: ReservationMessages.EMPLOYEE_REQUIRED });
+      if (!reservation.employeeId) throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.EMPLOYEE_REQUIRED, undefined, { code: "EMPLOYEE_REQUIRED" });
       validateReservationWindow(reservation.startAt, reservation.endAt);
       await this.requireBookingParties(manager, reservation.animalId, reservation.clientId);
       const employee = await this.requireBookableEmployee(manager, reservation.employeeId, reservation.startAt);
@@ -239,9 +237,9 @@ export class ReservationBusinessService {
     const previous = await this.transaction(async manager => {
       const reservation = await this.lockReservation(manager, id);
       if (![ReservationStatus.PENDING, ReservationStatus.CONFIRMED].includes(reservation.status)) {
-        throw new ConflictException({ statusCode: 409, code: "INVALID_TRANSITION", message: `Cannot reschedule a ${reservation.status} reservation` });
+        throw applicationError(ErrorMetadata.CONFLICT, `Cannot reschedule a ${reservation.status} reservation`, undefined, { code: "INVALID_TRANSITION" });
       }
-      if (await this.hasActiveVisit(manager, reservation.id)) throw new ConflictException(ReservationMessages.VISIT_STARTED);
+      if (await this.hasActiveVisit(manager, reservation.id)) throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.VISIT_STARTED);
       if (reservation.startAt.getTime() === startAt.getTime() && reservation.endAt.getTime() === endAt.getTime()) {
         policyError("RESCHEDULE_UNCHANGED", ReservationMessages.RESCHEDULE_UNCHANGED);
       }
@@ -272,12 +270,12 @@ export class ReservationBusinessService {
   async cancel(id: string, dto: ReservationReasonDto, actor: Actor) {
     const cancelled = await this.transaction(async manager => {
       const reservation = await this.lockReservation(manager, id);
-      if (!actor.isAdmin && !sameId(reservation.clientId, actor.id)) throw new ForbiddenException("Access denied");
+      if (!actor.isAdmin && !sameId(reservation.clientId, actor.id)) throw applicationError(ErrorMetadata.FORBIDDEN, "Access denied");
       assertTransition(reservation.status, ReservationStatus.CANCELLED);
       if (!actor.isAdmin && Date.now() >= reservation.startAt.getTime()) {
-        throw new ConflictException({ statusCode: 409, code: "CANCEL_AFTER_START", message: ReservationMessages.CANCEL_AFTER_START });
+        throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.CANCEL_AFTER_START, undefined, { code: "CANCEL_AFTER_START" });
       }
-      if (await this.hasActiveVisit(manager, reservation.id)) throw new ConflictException(ReservationMessages.VISIT_STARTED);
+      if (await this.hasActiveVisit(manager, reservation.id)) throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.VISIT_STARTED);
       const before = reservationSnapshot(reservation);
       const cancelledAt = new Date();
       await manager.update(ReservationEntity, { id: reservation.id }, { status: ReservationStatus.CANCELLED, cancelledAt });
@@ -298,9 +296,9 @@ export class ReservationBusinessService {
       assertTransition(reservation.status, ReservationStatus.NO_SHOW);
       const tolerance = await this.settings.getNonNegativeInteger(SystemSettingCode.RESERVATION_NO_SHOW_TOLERANCE_MINUTES);
       if (Date.now() < reservation.startAt.getTime() + tolerance * 60_000) {
-        throw new ConflictException({ statusCode: 409, code: "NO_SHOW_TOO_EARLY", message: ReservationMessages.NO_SHOW_TOO_EARLY });
+        throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.NO_SHOW_TOO_EARLY, undefined, { code: "NO_SHOW_TOO_EARLY" });
       }
-      if (await this.hasActiveVisit(manager, reservation.id)) throw new ConflictException(ReservationMessages.VISIT_STARTED);
+      if (await this.hasActiveVisit(manager, reservation.id)) throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.VISIT_STARTED);
       const before = reservationSnapshot(reservation);
       await manager.update(ReservationEntity, { id: reservation.id }, { status: ReservationStatus.NO_SHOW });
       await this.history.record(manager, {
@@ -326,7 +324,7 @@ export class ReservationBusinessService {
   /** Reads and locks the reservation row (UPDLOCK) for the rest of the transaction; relations are not locked. */
   private async lockReservation(manager: EntityManager, id: string): Promise<ReservationEntity> {
     const reservation = await manager.findOne(ReservationEntity, { where: { id }, lock: WRITE_LOCK });
-    if (!reservation) throw new NotFoundException(ReservationMessages.RESERVATION_NOT_FOUND);
+    if (!reservation) throw applicationError(ErrorMetadata.NOT_FOUND, ReservationMessages.RESERVATION_NOT_FOUND);
     return reservation;
   }
 
@@ -340,25 +338,24 @@ export class ReservationBusinessService {
     const employee = await manager.findOne(EmployeeEntity, { where: { id: employeeId }, lock: WRITE_LOCK });
     const user = employee ? await manager.findOne(UsersEntity, { where: { id: employee.userId } }) : null;
     const candidate = employee && user ? Object.assign(employee, { user }) : null;
-    if (!isBookableEmployee(candidate, clinicParts(startAt).date)) throw new BadRequestException(ReservationMessages.INVALID_EMPLOYEE);
+    if (!isBookableEmployee(candidate, clinicParts(startAt).date)) throw applicationError(ErrorMetadata.INVALID_VALUE, ReservationMessages.INVALID_EMPLOYEE);
     return candidate;
   }
 
   /**
    * Locks (UPDLOCK) and re-checks, inside the transaction, the animal (exists, not soft-deleted) and the client
    * account (active, not soft-deleted): 409 ANIMAL_UNAVAILABLE / CLIENT_INACTIVE otherwise. Soft-deleted rows are
-   * excluded by findOne.
+   * excluded by findOne. On creation (requireOwnership) the client must also still be an active tutor of the animal.
    */
   private async requireBookingParties(manager: EntityManager, animalId: string, clientId: string, options: { requireOwnership?: boolean } = {}) {
     const animal = await manager.findOne(AnimalEntity, { where: { id: animalId }, lock: WRITE_LOCK });
-    if (!animal) throw new ConflictException({ statusCode: 409, code: "ANIMAL_UNAVAILABLE", message: ReservationMessages.ANIMAL_UNAVAILABLE });
+    if (!animal) throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.ANIMAL_UNAVAILABLE, undefined, { code: "ANIMAL_UNAVAILABLE" });
     const client = await manager.findOne(UsersEntity, { where: { id: clientId }, lock: WRITE_LOCK });
-    if (!client?.isActive) throw new ConflictException({ statusCode: 409, code: "CLIENT_INACTIVE", message: ReservationMessages.CLIENT_INACTIVE });
+    if (!client?.isActive) throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.CLIENT_INACTIVE, undefined, { code: "CLIENT_INACTIVE" });
     if (options.requireOwnership) {
-      // Creation: the ownership pre-check ran before the transaction. With the animal row locked (owner changes
-      // lock it too), re-read owner_id; a plain read after the existing locks keeps the lock order unchanged.
-      const owned = await manager.findOne(AnimalEntity, { select: { id: true }, where: { id: animalId, owner: { id: clientId } } });
-      if (!owned) throw new ConflictException({ statusCode: 409, code: "ANIMAL_OWNER_MISMATCH", message: ReservationMessages.ANIMAL_OWNER_MISMATCH });
+      // Creation: the tutorship pre-check ran before the transaction. With the animal row locked (every tutorship
+      // change locks it first), re-read vc_animal_owners; a plain read after the existing locks keeps the lock order.
+      if (!(await this.access.isActiveTutor(animalId, clientId, manager))) throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.ANIMAL_OWNER_MISMATCH, undefined, { code: "ANIMAL_OWNER_MISMATCH" });
     }
   }
 
@@ -388,7 +385,7 @@ export class ReservationBusinessService {
       .andWhere("r.endAt > :earliestEnd", { earliestEnd: toDbUtc(new Date(startAt.getTime() - buffer)) });
     if (excludeId) query.andWhere("r.id <> :excludeId", { excludeId });
     if ((await query.getCount()) > 0) {
-      throw new ConflictException({ statusCode: 409, code: "EMPLOYEE_UNAVAILABLE", message: ReservationMessages.EMPLOYEE_UNAVAILABLE });
+      throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.EMPLOYEE_UNAVAILABLE, undefined, { code: "EMPLOYEE_UNAVAILABLE" });
     }
   }
 
@@ -407,18 +404,19 @@ export class ReservationBusinessService {
     if (isStaff(actor) && ownerId && !sameId(ownerId, actor.id)) {
       const owner = await this.persistence.execute(() => this.usersRepository.findOne({ where: { id: ownerId } }));
       if (!owner || !owner.isActive || !(await this.membership.hasSystemRole(owner.id, SystemRole.CLIENT))) {
-        throw new BadRequestException(ReservationMessages.INVALID_CLIENT);
+        throw applicationError(ErrorMetadata.INVALID_VALUE, ReservationMessages.INVALID_CLIENT);
       }
       return owner;
     }
-    if (!actor.isClient) throw new BadRequestException(ReservationMessages.INVALID_CLIENT);
+    if (!actor.isClient) throw applicationError(ErrorMetadata.INVALID_VALUE, ReservationMessages.INVALID_CLIENT);
     return user;
   }
 
+  /** Pre-check (400): the client (the responsible tutor) must be an active tutor, primary or secondary, of the animal. */
   private async validateAnimalOwnership(animalId: string, client: UsersEntity): Promise<AnimalEntity> {
-    const animal = await this.persistence.execute(() => this.animalRepository.findOne({ where: { id: animalId }, relations: [AnimalRelation.Owner] }));
-    if (!animal) throw new NotFoundException(ReservationMessages.ANIMAL_NOT_FOUND);
-    if (!animal.owner || !sameId(animal.owner.id, client.id)) throw new BadRequestException(ReservationMessages.ANIMAL_OWNER_MISMATCH);
+    const animal = await this.persistence.execute(() => this.animalRepository.findOne({ where: { id: animalId } }));
+    if (!animal) throw applicationError(ErrorMetadata.NOT_FOUND, ReservationMessages.ANIMAL_NOT_FOUND);
+    if (!(await this.access.isActiveTutor(animal.id, client.id))) throw applicationError(ErrorMetadata.INVALID_VALUE, ReservationMessages.ANIMAL_OWNER_MISMATCH);
     return animal;
   }
 

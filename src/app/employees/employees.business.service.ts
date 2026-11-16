@@ -1,4 +1,6 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
+import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, EntityManager, In, IsNull, MoreThan, Repository } from "typeorm";
 import { Actor, sameId } from "../core/authorization";
@@ -44,7 +46,7 @@ export class EmployeesBusinessService {
 
   private async load(id: string) {
     const employee = await this.persistence.execute(() => this.employees.findOne({ where: { id }, relations: RELATIONS }));
-    if (!employee) throw new NotFoundException(EmployeeMessage.NotFound);
+    if (!employee) throw applicationError(ErrorMetadata.NOT_FOUND, EmployeeMessage.NotFound);
     return employee;
   }
 
@@ -62,22 +64,22 @@ export class EmployeesBusinessService {
 
   async getById(id: string, actor: Actor) {
     const employee = await this.load(id);
-    if (!actor.isAdmin && !sameId(employee.userId, actor.id)) throw new ForbiddenException(EmployeeMessage.Forbidden);
+    if (!actor.isAdmin && !sameId(employee.userId, actor.id)) throw applicationError(ErrorMetadata.FORBIDDEN, EmployeeMessage.Forbidden);
     return serializeEmployee(employee);
   }
 
   async getMine(actor: Actor) {
     const employee = await this.persistence.execute(() => this.employees.findOne({ where: { userId: actor.id }, relations: RELATIONS }));
-    if (!employee) throw new NotFoundException(EmployeeMessage.NotFound);
+    if (!employee) throw applicationError(ErrorMetadata.NOT_FOUND, EmployeeMessage.NotFound);
     return serializeEmployee(employee);
   }
 
   private assertDates(hireDate: string | null | undefined, terminationDate: string | null | undefined) {
-    if (hireDate && terminationDate && terminationDate < hireDate) throw new BadRequestException(EmployeeMessage.InvalidDates);
+    if (hireDate && terminationDate && terminationDate < hireDate) throw applicationError(ErrorMetadata.INVALID_VALUE, EmployeeMessage.InvalidDates);
   }
 
   private fields(dto: EmployeeFieldsDto): Partial<EmployeeEntity> {
-    if (dto.isAvailableForBookings === null || (dto.jobTitleIds as unknown) === null) throw new BadRequestException(EmployeeMessage.NullField);
+    if (dto.isAvailableForBookings === null || (dto.jobTitleIds as unknown) === null) throw applicationError(ErrorMetadata.INVALID_VALUE, EmployeeMessage.NullField);
     const result: Partial<EmployeeEntity> = {};
     for (const key of ["employeeNumber", "licenseNumber", "hireDate", "terminationDate", "description", "notes"] as const) {
       if (dto[key] !== undefined) result[key] = dto[key] ?? null;
@@ -92,7 +94,7 @@ export class EmployeesBusinessService {
     const current = new Set((await manager.find(EmployeeJobTitleEntity, { where: { employeeId } })).map(row => normalizeId(row.jobTitleId)));
     const titles = ids.length ? await manager.find(JobTitleEntity, { where: { id: In(ids) } }) : [];
     if (titles.length !== ids.length || titles.some(title => !title.isActive && !current.has(normalizeId(title.id)))) {
-      throw new BadRequestException(EmployeeMessage.InvalidJobTitles);
+      throw applicationError(ErrorMetadata.INVALID_VALUE, EmployeeMessage.InvalidJobTitles);
     }
     await manager.delete(EmployeeJobTitleEntity, { employeeId });
     if (ids.length) await manager.insert(EmployeeJobTitleEntity, ids.map(jobTitleId => ({ employeeId, jobTitleId })));
@@ -106,7 +108,7 @@ export class EmployeesBusinessService {
     const roleId = await this.settings.resolveRoleId(SystemRole.EMPLOYEE);
     if (!(await manager.count(UserRoleEntity, { where: { userId, roleId } }))) {
       const account = await manager.findOne(UsersEntity, { where: { id: userId } });
-      if (!account?.isActive) throw new ConflictException(EmployeeMessage.InactiveAccount);
+      if (!account?.isActive) throw applicationError(ErrorMetadata.CONFLICT, EmployeeMessage.InactiveAccount);
       await manager.insert(UserRoleEntity, { userId, roleId, assignedBy });
     }
   }
@@ -141,7 +143,7 @@ export class EmployeesBusinessService {
   /** A terminated employee (termination today or earlier) is never available for new bookings. */
   private applyAvailabilityRule(employee: Partial<EmployeeEntity>, requestedAvailability: boolean | undefined) {
     if (isEmploymentActive(employee.terminationDate)) return;
-    if (requestedAvailability === true) throw new BadRequestException(EmployeeMessage.TerminatedUnavailable);
+    if (requestedAvailability === true) throw applicationError(ErrorMetadata.INVALID_VALUE, EmployeeMessage.TerminatedUnavailable);
     employee.isAvailableForBookings = false;
   }
 
@@ -151,7 +153,7 @@ export class EmployeesBusinessService {
    * (a new account is then created without roles).
    */
   async create(dto: CreateEmployeeDto, actor: Actor) {
-    if (!!dto.userId === !!dto.user) throw new BadRequestException(EmployeeMessage.UserSource);
+    if (!!dto.userId === !!dto.user) throw applicationError(ErrorMetadata.INVALID_VALUE, EmployeeMessage.UserSource);
     const attributes = this.fields(dto);
     this.assertDates(attributes.hireDate, attributes.terminationDate);
     this.applyAvailabilityRule(attributes, dto.isAvailableForBookings);
@@ -163,9 +165,9 @@ export class EmployeesBusinessService {
         ({ user, resetToken } = await this.users.createAccount(manager, dto.user, active ? [SystemRole.EMPLOYEE] : [], actor.id));
       } else {
         user = await manager.findOne(UsersEntity, { where: { id: dto.userId }, lock: { mode: "pessimistic_write" } });
-        if (!user) throw new BadRequestException(EmployeeMessage.InvalidUser);
-        if (!user.isActive) throw new ConflictException(EmployeeMessage.InactiveAccount);
-        if (await manager.count(EmployeeEntity, { where: { userId: user.id } })) throw new ConflictException(EmployeeMessage.AlreadyEmployee);
+        if (!user) throw applicationError(ErrorMetadata.INVALID_VALUE, EmployeeMessage.InvalidUser);
+        if (!user.isActive) throw applicationError(ErrorMetadata.CONFLICT, EmployeeMessage.InactiveAccount);
+        if (await manager.count(EmployeeEntity, { where: { userId: user.id } })) throw applicationError(ErrorMetadata.ALREADY_EXISTS, EmployeeMessage.AlreadyEmployee);
         if (active) await this.ensureEmployeeRole(manager, user.id, actor.id);
       }
       const employee = await manager.save(manager.create(EmployeeEntity, { ...attributes, userId: user.id }));
@@ -186,7 +188,7 @@ export class EmployeesBusinessService {
     const attributes = this.fields(dto);
     const revokedFrom = await this.transaction(async manager => {
       const employee = await manager.findOne(EmployeeEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
-      if (!employee) throw new NotFoundException(EmployeeMessage.NotFound);
+      if (!employee) throw applicationError(ErrorMetadata.NOT_FOUND, EmployeeMessage.NotFound);
       const before = { ...employee };
       Object.assign(employee, attributes);
       this.assertDates(employee.hireDate, employee.terminationDate);
@@ -215,11 +217,11 @@ export class EmployeesBusinessService {
   async delete(id: string) {
     await this.transaction(async manager => {
       const employee = await manager.findOne(EmployeeEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
-      if (!employee) throw new NotFoundException(EmployeeMessage.NotFound);
+      if (!employee) throw applicationError(ErrorMetadata.NOT_FOUND, EmployeeMessage.NotFound);
       const reservationCount = await manager.count(ReservationEntity, { where: { employeeId: employee.id } });
       const clinicalVisitCount = await manager.count(ClinicalVisitEntity, { where: { employeeId: employee.id } });
       if (reservationCount || clinicalVisitCount) {
-        throw new ConflictException({ statusCode: 409, code: "EMPLOYEE_HAS_HISTORY", message: EmployeeMessage.HasHistory, reservationCount, clinicalVisitCount });
+        throw applicationError(ErrorMetadata.IN_USE, EmployeeMessage.HasHistory, undefined, { code: "EMPLOYEE_HAS_HISTORY", reservationCount, clinicalVisitCount });
       }
       const employeeRoleId = await this.settings.resolveRoleId(SystemRole.EMPLOYEE);
       await manager.delete(EmployeeJobTitleEntity, { employeeId: employee.id });

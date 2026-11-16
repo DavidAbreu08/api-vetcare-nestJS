@@ -1,5 +1,7 @@
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
 import { jwtSecret } from './jwt-secret';
-import { HttpStatus, Injectable, NestMiddleware } from "@nestjs/common";
+import { Injectable, NestMiddleware } from "@nestjs/common";
 import { Request, Response, NextFunction } from "express";
 
 @Injectable()
@@ -8,12 +10,7 @@ export class AuthenticateJWT implements NestMiddleware {
     const token = req.header("Authorization")?.split(" ")[1]; // Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI...
 
     if (!token) {
-      return res
-        .status(401)
-        .json({
-          statusCode: HttpStatus.UNAUTHORIZED,
-          message: "Acesso negado",
-        });
+      throw applicationError(ErrorMetadata.UNAUTHORIZED, "Acesso negado");
     }
 
     try {
@@ -23,11 +20,10 @@ export class AuthenticateJWT implements NestMiddleware {
         jwtSecret()
       );
       req.user = decoded;
-      next();
     } catch (err) {
-      res
-        .status(403)
-        .json({ statusCode: HttpStatus.FORBIDDEN, message: "Token inválido" });
+      throw applicationError(ErrorMetadata.FORBIDDEN, "Token inválido");
     }
+    // Downstream failures must reach the global filter with their original status.
+    next();
   }
 }

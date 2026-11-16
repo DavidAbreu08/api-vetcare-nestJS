@@ -3,7 +3,7 @@ import { Reflector } from "@nestjs/core";
 import { instanceToPlain } from "class-transformer";
 import { validate } from "class-validator";
 import { IsNull } from "typeorm";
-import { Actor } from "../core/authorization";
+import { Actor, isStaff } from "../core/authorization";
 import { RolesGuard } from "../core/guards/roles/roles.guard";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { ClinicalVisitStatus } from "../clinical-visits/enums/clinical-visit-status.enum";
@@ -30,6 +30,8 @@ function queryBuilder() {
 
 describe("Typed measurement policies", () => {
   let repo: any, animals: any, types: any, visits: any, manager: any, q: any, business: MeasurementBusinessService;
+  /** Active tutors of the animal (AnimalAccessService double). */
+  let tutors: string[], access: any;
   const stored = (row: Partial<AnimalMeasurementEntity>) => Object.assign(new AnimalMeasurementEntity(), {
     id: "m", animalId: "animal", measurementTypeId: "type", measurementType: { id: "type", code: "WEIGHT", isActive: false },
     value: "12.000000", recordedBy: "author", updatedBy: null, clinicalVisitId: null, measuredAt: null, ...row,
@@ -44,7 +46,9 @@ describe("Typed measurement policies", () => {
     animals = { findOne: jest.fn().mockResolvedValue({ owner: { id: "owner" } }) };
     types = { requireActive: jest.fn().mockResolvedValue({ id: "type", code: "TEMPERATURE" }) };
     visits = { withWritableVisit: jest.fn((_visit, _animal, _actor, work) => work(manager)) };
-    business = new MeasurementBusinessService(repo, animals, new PersistenceService(), types, visits);
+    tutors = ["owner"];
+    access = { canReadAnimal: jest.fn(async (who: Actor) => isStaff(who) || tutors.includes(who.id)) };
+    business = new MeasurementBusinessService(repo, animals, new PersistenceService(), types, visits, access);
   });
 
   it("records signed temperature with the authenticated staff author and ignores spoofed properties", async () => {
@@ -141,7 +145,7 @@ describe("Typed measurement policies", () => {
   it("soft-deletes for administrators with reason and author, and hides deleted rows from reads", async () => {
     q.getOne.mockResolvedValue(stored({}));
     manager.findOne.mockResolvedValue(stored({}));
-    await expect(business.delete("m", { reason: "  duplicate entry " }, admin)).resolves.toEqual({ message: expect.any(String) });
+    await expect(business.delete("m", { reason: "  duplicate entry " }, admin)).resolves.toBeNull();
     expect(manager.findOne).toHaveBeenCalledWith(AnimalMeasurementEntity, { where: { id: "m", deletedAt: IsNull() }, lock: LOCK });
     const saved = manager.save.mock.calls[0][0];
     expect(saved).toMatchObject({ deletedBy: "admin", deleteReason: "duplicate entry", recordedBy: "author" });
@@ -170,7 +174,8 @@ describe("Typed measurement policies", () => {
 
   it("prevents access to another owner and soft-deleted animals", async () => {
     q.getOne.mockResolvedValue(stored({}));
-    animals.findOne.mockResolvedValueOnce({ owner: { id: "other" } }).mockResolvedValueOnce(null);
+    tutors = ["other"];
+    animals.findOne.mockResolvedValueOnce({ id: "animal" }).mockResolvedValueOnce(null);
     await expect(business.get("m", client)).rejects.toBeInstanceOf(ForbiddenException);
     await expect(business.get("m", client)).rejects.toBeInstanceOf(NotFoundException);
   });
@@ -207,7 +212,9 @@ describe("Typed measurement policies", () => {
     expect(q.leftJoin).toHaveBeenCalledWith("measurement.clinicalVisit", "clinicalVisit");
     expect(q.addSelect).toHaveBeenCalledWith(["clinicalVisit.id", "clinicalVisit.status"]);
     expect(q.where).toHaveBeenCalledWith("measurement.deletedAt IS NULL");
-    expect(q.andWhere).toHaveBeenCalledWith("owner.id = :ownerId", { ownerId: "owner" });
+    // Active tutors (primary or secondary), not vc_animals.owner_id.
+    expect(q.andWhere).toHaveBeenCalledWith(expect.stringMatching(/^EXISTS \(SELECT 1 FROM vc_animal_owners ao_tutor WHERE ao_tutor\.animal_id = measurement\.animalId AND ao_tutor\.user_id = :tutorId AND ao_tutor\.ended_at IS NULL\)$/), { tutorId: "owner" });
+    expect(q.innerJoin).not.toHaveBeenCalledWith("animal.owner", "owner");
   });
 
   it("ranks all types independently in one batch, preserves inactive history and ignores VOIDED visits and deleted rows", async () => {

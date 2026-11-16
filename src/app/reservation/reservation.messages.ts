@@ -3,7 +3,7 @@ export const ReservationMessages = {
   EMPLOYEE_UNAVAILABLE: "Employee already has a confirmed reservation overlapping this time (including the buffer)",
   INVALID_CLIENT: "Invalid client provided",
   ANIMAL_NOT_FOUND: "Animal not found",
-  ANIMAL_OWNER_MISMATCH: "Animal does not belong to the specified client",
+  ANIMAL_OWNER_MISMATCH: "The client is not an active tutor of the animal",
   INVALID_EMPLOYEE: "The employee is not available for bookings on this date",
   USER_NOT_FOUND: "User not found",
   RESERVATION_NOT_FOUND: "Reservation not found",

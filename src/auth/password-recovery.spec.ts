@@ -121,7 +121,7 @@ describe("Password recovery", () => {
     const employees = { findOne: jest.fn(async () => null) };
     const settings = { systemRoleFlags: jest.fn(async () => ({ isAdmin: false, isEmployee: false, isClient: true })) };
     const membership = { activeRolesOf: jest.fn(async () => []) };
-    const business = new UsersBusinessService(new PersistenceService(), fake.dataSource as any, fake.usersRepository as any, employees as any, {} as any, settings as any, membership as any);
+    const business = new UsersBusinessService(new PersistenceService(), fake.dataSource as any, fake.usersRepository as any, employees as any, {} as any, settings as any, membership as any, {} as any);
     const repository = new ResetTokenEntityRepository({ createEntityManager: () => ({}) } as any);
     // Same signing options as AuthModule (JwtModule.registerAsync).
     process.env.JWT_SECRET_KEY ??= "test-secret-for-password-recovery-spec";
@@ -136,7 +136,7 @@ describe("Password recovery", () => {
   afterEach(() => jest.restoreAllMocks());
 
   describe("forgotPassword", () => {
-    const answer = { message: AuthMessages.PASSWORD_RESET_REQUESTED };
+    const answer = null;
 
     it("issues a hashed token and emails the plain one for an active account", async () => {
       addUser();
@@ -235,7 +235,7 @@ describe("Password recovery", () => {
       addToken(TOKEN);
       addToken("d".repeat(64));
       const before = Date.now();
-      await expect(auth.resetPassword(TOKEN, PASSWORD, PASSWORD)).resolves.toMatchObject({ message: AuthMessages.PASSWORD_RESET });
+      await expect(auth.resetPassword(TOKEN, PASSWORD, PASSWORD)).resolves.toBeNull();
       expect(fake.db.tokens.every(t => t.usedAt instanceof Date)).toBe(true);
       const stored = fake.db.users.find(u => u.id === user.id)!;
       expect(require("bcrypt").compareSync(PASSWORD, stored.passwordHash)).toBe(true);
@@ -300,10 +300,10 @@ describe("Password recovery", () => {
       it("issues the token after the commit, like login, accepted by JwtStrategy in the same second", async () => {
         addUser();
         const response = await auth.changePassword("U-1", "Old#12345", PASSWORD, PASSWORD);
-        expect(response).toEqual({ statusCode: 202, message: AuthMessages.PASSWORD_CHANGED, token: expect.any(String) });
+        expect(response).toEqual({ token: expect.any(String) });
         const changedAt = fake.db.users[0].passwordChangedAt!;
         expect(changedAt).toEqual(CHANGE_AT);
-        const payload = jwt.verify(response.token!);
+        const payload = jwt.verify(response!.token);
         expect(payload).toMatchObject({ sub: "U-1", email: "ana@x.pt", name: "Ana" });
         expect(payload.iat).toBe(Math.floor(changedAt.getTime() / 1000));
         expect(payload.exp - payload.iat).toBe(3600);
@@ -329,7 +329,7 @@ describe("Password recovery", () => {
           jest.setSystemTime(new Date(CHANGE_AT.getTime() - 2000));
           return result;
         });
-        const token = (await auth.changePassword("U-1", "Old#12345", PASSWORD, PASSWORD)).token!;
+        const token = (await auth.changePassword("U-1", "Old#12345", PASSWORD, PASSWORD))!.token;
         jest.setSystemTime(CHANGE_AT);
         const payload = jwt.verify(token);
         expect(payload.iat).toBe(Math.floor(CHANGE_AT.getTime() / 1000));
@@ -354,12 +354,11 @@ describe("Password recovery", () => {
         expect(sign).toHaveBeenCalledTimes(1);
       });
 
-      it("still answers 202 without a token when signing fails after the commit", async () => {
+      it("still succeeds without a token when signing fails after the commit", async () => {
         addUser();
         jest.spyOn(jwt, "sign").mockImplementation(() => { throw new Error("secret=leak"); });
         const response = await auth.changePassword("U-1", "Old#12345", PASSWORD, PASSWORD);
-        expect(response).toEqual({ statusCode: 202, message: AuthMessages.PASSWORD_CHANGED });
-        expect(response).not.toHaveProperty("token");
+        expect(response).toBeNull();
         expect(fake.db.users[0].passwordChangedAt).toEqual(CHANGE_AT);
         expect(compareSync(PASSWORD, fake.db.users[0].passwordHash)).toBe(true);
         expect(loggedText()).toContain(AuthMessages.SESSION_TOKEN_AFTER_PASSWORD_CHANGE_FAILED);

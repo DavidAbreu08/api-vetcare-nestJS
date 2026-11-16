@@ -1,4 +1,6 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
+import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { SpeciesEntity } from "./entities/species.entity";
@@ -25,12 +27,12 @@ export class SpeciesBusinessService {
 
   async getById(id: string) {
     const species = await this.persistence.execute(() => this.repository.findOneBy({ id }));
-    if (!species) throw new NotFoundException(SpeciesMessage.NotFound);
+    if (!species) throw applicationError(ErrorMetadata.NOT_FOUND, SpeciesMessage.NotFound);
     return species;
   }
 
   private validateName(name: string) {
-    if (typeof name !== "string" || !name.trim()) throw new BadRequestException(SpeciesMessage.InvalidName);
+    if (typeof name !== "string" || !name.trim()) throw applicationError(ErrorMetadata.INVALID_VALUE, SpeciesMessage.InvalidName);
     return name.trim();
   }
 
