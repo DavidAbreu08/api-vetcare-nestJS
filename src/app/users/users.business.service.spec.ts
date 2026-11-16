@@ -9,7 +9,8 @@ import { UserRoleEntity } from "../roles/entities/user-role.entity";
 import { EmployeeEntity } from "../employees/entities/employee.entity";
 import { UsersEntity } from "./entities/users.entity";
 import { ResetTokenEntity } from "src/auth/entities/reset-token.entity";
-import { UsersBusinessService } from "./users.business.service";
+import { isIssuedAfterPasswordChange, UsersBusinessService } from "./users.business.service";
+import { createHash } from "crypto";
 
 const ADMIN_ID = "20000000-0000-4000-8000-000000000001";
 const EMPLOYEE_ID = "20000000-0000-4000-8000-000000000002";
@@ -81,6 +82,8 @@ describe("User role management", () => {
       expect(manager.save).not.toHaveBeenCalled();
       otherAdmins = 2;
       await business.delete("U-1");
+      // Account row locked before the reset tokens are deleted (users -> tokens, as in AuthService).
+      expect(manager.findOne).toHaveBeenCalledWith(UsersEntity, { where: { id: "U-1" }, lock: { mode: "pessimistic_write" } });
       expect(manager.delete).toHaveBeenCalledWith(ResetTokenEntity, { user: { id: "U-1" } });
       expect(manager.softDelete).toHaveBeenCalledWith(UsersEntity, { id: "U-1" });
     });
@@ -230,5 +233,52 @@ describe("User role management", () => {
     const client: Actor = { ...admin, id: "U-1", isAdmin: false, isClient: true, roleIds: [CLIENT_ID] };
     await expect(business.update("U-1", { isActive: false }, client)).rejects.toBeInstanceOf(ForbiddenException);
     await expect(business.update("U-1", { email: "x@y.pt" }, client)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+describe("Welcome tokens of accounts created without a password", () => {
+  it("stores only the SHA-256 of the token and sends the plain token by email", async () => {
+    const manager = {
+      findOne: jest.fn(async () => null),
+      create: jest.fn((_entity: unknown, row: unknown) => row),
+      save: jest.fn(async (row: any) => ({ id: "U-NEW", ...row })),
+      insert: jest.fn(),
+    };
+    const dataSource = { transaction: jest.fn(async (work: (m: unknown) => unknown) => work(manager)) };
+    const settings = new SystemSettingsService({ loadAll: async () => [{ code: SystemSettingCode.CLIENT_ROLE_ID, value: CLIENT_ID }] } as any);
+    const email = { sendClientWelcomeEmail: jest.fn(async () => undefined) };
+    const business = new UsersBusinessService(new PersistenceService(), dataSource as any, {} as any, {} as any, email as any, settings, {} as any);
+
+    await business.createClient({ name: "Ana", email: "ana@x.pt" } as any, admin);
+
+    const [, token] = email.sendClientWelcomeEmail.mock.calls[0] as unknown as [string, string];
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    const tokenRow = manager.insert.mock.calls.find(([entity]) => entity === ResetTokenEntity)?.[1];
+    expect(tokenRow).toMatchObject({ userId: "U-NEW", usedAt: null });
+    expect(tokenRow.tokenHash).toEqual(createHash("sha256").update(token, "utf8").digest());
+    expect(tokenRow.createdAt).toBeInstanceOf(Date);
+    expect(tokenRow.expiresAt.getTime() - tokenRow.createdAt.getTime()).toBe(60 * 60 * 1000);
+    for (const call of [...manager.insert.mock.calls, ...manager.save.mock.calls, ...manager.create.mock.calls]) {
+      expect(JSON.stringify(call)).not.toContain(token);
+    }
+  });
+});
+
+describe("isIssuedAfterPasswordChange (JWT iat in seconds)", () => {
+  const changedAt = new Date("2026-11-16T10:00:05.700Z");
+  const at = (iso: string) => Math.floor(new Date(iso).getTime() / 1000);
+
+  it("rejects tokens issued in an earlier second and accepts the same or a later second", () => {
+    expect(isIssuedAfterPasswordChange(at("2026-11-16T10:00:04.999Z"), changedAt)).toBe(false);
+    expect(isIssuedAfterPasswordChange(at("2026-11-16T09:00:00Z"), changedAt)).toBe(false);
+    // Login right after the change, within the same second, must keep working.
+    expect(isIssuedAfterPasswordChange(at("2026-11-16T10:00:05.900Z"), changedAt)).toBe(true);
+    expect(isIssuedAfterPasswordChange(at("2026-11-16T10:30:00Z"), changedAt)).toBe(true);
+  });
+
+  it("accepts any token when the password never changed, and rejects a token without iat otherwise", () => {
+    expect(isIssuedAfterPasswordChange(at("2000-01-01T00:00:00Z"), null)).toBe(true);
+    expect(isIssuedAfterPasswordChange(undefined, null)).toBe(true);
+    expect(isIssuedAfterPasswordChange(undefined, changedAt)).toBe(false);
   });
 });

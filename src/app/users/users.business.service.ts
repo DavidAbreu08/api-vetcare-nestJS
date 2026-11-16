@@ -9,7 +9,7 @@ import {
   Logger,
   NotFoundException,
 } from "@nestjs/common";
-import { DataSource, EntityManager, FindOptionsWhere, In, Not, Repository } from "typeorm";
+import { DataSource, EntityManager, FindOptionsWhere, In, MssqlParameter, Not, Repository } from "typeorm";
 import { UsersEntity } from "./entities/users.entity";
 import { InjectRepository } from "@nestjs/typeorm";
 import { UpdateUserDto } from "./dto/update-user.dto";
@@ -33,6 +33,16 @@ import { catalogSummary, normalizeEmail, normalizeId, todayKey } from "../core/c
 import { serializeAccount, serializeEmployee } from "../employees/employee.serializer";
 import { CLINIC_POLICY } from "../reservation/reservation-policy";
 import { isEmploymentActive } from "../employees/employee-status";
+import { utcInstantParam, uuidParam } from "../core/persistence/sql-params";
+
+/**
+ * JWT iat is in whole seconds: a token is valid when issued in the same second as the password change or later,
+ * so the login right after a change is never rejected. Without password_changed_at every token is accepted.
+ */
+export function isIssuedAfterPasswordChange(issuedAt: number | undefined, passwordChangedAt: Date | null | undefined): boolean {
+  if (!passwordChangedAt) return true;
+  return typeof issuedAt === "number" && issuedAt >= Math.floor(passwordChangedAt.getTime() / 1000);
+}
 
 /** Roles assignable while creating an account; the administrator role is only granted through PUT roles or the seed. */
 export type AccountSystemRole = typeof SystemRole.EMPLOYEE | typeof SystemRole.CLIENT;
@@ -107,9 +117,10 @@ export class UsersBusinessService {
    * termination date that passes without any save takes effect immediately; in that case the EMPLOYEE
    * role id is also left out of roleIds so @Roles(EMPLOYEE) denies access.
    */
-  async loadActor(id: string): Promise<(Actor & { email: string; name: string }) | null> {
+  async loadActor(id: string, issuedAt?: number): Promise<(Actor & { email: string; name: string }) | null> {
     const user = await this.persistence.execute(() => this.usersRepository.findOne({ where: { id } }));
     if (!user || !user.isActive) return null;
+    if (!isIssuedAfterPasswordChange(issuedAt, user.passwordChangedAt)) return null;
     const heldRoleIds = (await this.membership.activeRolesOf(user.id)).map(role => normalizeId(role.id));
     const flags = await this.settings.systemRoleFlags(heldRoleIds);
     const employee = await this.persistence.execute(() => this.employeesRepository.findOne({
@@ -166,9 +177,11 @@ export class UsersBusinessService {
     if (roleIds.length) await manager.insert(UserRoleEntity, roleIds.map(roleId => ({ userId: user.id, roleId, assignedBy })));
     let resetToken: string | null = null;
     if (data.password === undefined) {
-      const generated = generateResetToken();
+      // Only the hash is stored; the plain token is returned for the welcome email.
+      const now = new Date();
+      const generated = generateResetToken(now);
       resetToken = generated.token;
-      await manager.save(manager.create(ResetTokenEntity, { resetToken: generated.token, user, expiresAt: generated.expiresAt }));
+      await manager.insert(ResetTokenEntity, { userId: user.id, tokenHash: generated.tokenHash, expiresAt: generated.expiresAt, createdAt: now, usedAt: null });
     }
     return { user, resetToken };
   }
@@ -208,8 +221,29 @@ export class UsersBusinessService {
     return { statusCode: HttpStatus.OK, message: UsersMessages.OK };
   }
 
-  async updatePasswordHash(id: string, passwordHash: string) {
-    await this.persistence.execute(() => this.usersRepository.update({ id }, { passwordHash }));
+  /**
+   * Locks the account row (UPDLOCK, ROWLOCK) until the caller's transaction ends. Lock order for every flow that
+   * writes vc_reset_tokens: vc_users row first, then vc_reset_tokens (see AuthService).
+   */
+  async lockForUpdate(manager: EntityManager, id: string): Promise<boolean> {
+    const rows: unknown[] = await manager.query(
+      "SELECT 1 AS [locked] FROM [dbo].[vc_users] WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0",
+      [uuidParam(id)],
+    );
+    return rows?.length === 1;
+  }
+
+  /**
+   * Sets the password hash and password_changed_at (which revokes JWTs issued before it) inside the caller's
+   * transaction, only for an active, non-deleted account. Returns false when no row was updated.
+   */
+  async setPasswordHash(manager: EntityManager, id: string, passwordHash: string, now: Date): Promise<boolean> {
+    const rows: unknown[] = await manager.query(
+      "UPDATE [dbo].[vc_users] SET [password_hash] = @0, [password_changed_at] = @1, [updated_at] = @1 OUTPUT inserted.[id] " +
+      "WHERE [id] = @2 AND [deleted_at] IS NULL AND [is_active] = 1",
+      [new MssqlParameter(passwordHash, "nvarchar", 255), utcInstantParam(now), uuidParam(id)],
+    );
+    return rows?.length === 1;
   }
 
   /**
@@ -218,7 +252,8 @@ export class UsersBusinessService {
    */
   async delete(id: string) {
     await this.transaction(async manager => {
-      const user = await manager.findOne(UsersEntity, { where: { id } });
+      // Account row locked first (UPDLOCK): same users -> reset tokens order as the password flows.
+      const user = await manager.findOne(UsersEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
       if (!user) throw new NotFoundException(UsersMessages.USER_NOT_FOUND);
       const profile = await manager.findOne(EmployeeEntity, { where: { userId: user.id }, lock: { mode: "pessimistic_write" } });
       if (profile && isEmploymentActive(profile.terminationDate)) throw new ConflictException(UsersMessages.ACTIVE_EMPLOYEE_PROFILE);

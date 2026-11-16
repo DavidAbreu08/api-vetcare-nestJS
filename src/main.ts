@@ -7,9 +7,13 @@ import { join } from "path";
 import { ClassSerializerInterceptor, ValidationPipe } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { setupSwagger } from "./swagger";
+import { NestExpressApplication } from "@nestjs/platform-express";
+import { parseTrustProxy } from "./trust-proxy";
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // Client IP (req.ip) used by the password recovery rate limits; off unless TRUST_PROXY is set.
+  app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY));
 
   app.use(express.static(join(__dirname, "..", "public")));
 

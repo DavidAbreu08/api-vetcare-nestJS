@@ -135,3 +135,26 @@ Steps:
 `measured_at` keeps its type; the entity now uses the UTC transformer. Because the Node process is forced to UTC (`src/force-utc.ts`), the transformer is the identity and existing values need no conversion. The entities declare the same index, check and foreign-key names. Measurements are no longer physically deleted by the application.
 
 ORM mapping of composite FKs: `fk_vc_animal_measurements_clinical_visit` (clinical_visit_id, animal_id) and `fk_vc_clinical_visits_reservation_animal` (reservation_id, animal_id) exist only in the database. The entities map `clinicalVisit` and `reservation` on the single id column with `createForeignKeyConstraints: false`, because a composite join column sharing `animal_id` with the `animal` relation makes TypeORM 0.3 overwrite that column's metadata and generate wrong joins. `measurement.sql.spec.ts` checks the generated SQL.
+
+# SQL Server schema: hashed reset tokens
+
+`HashedResetTokens1795262400000` follows `MeasurementsHardening1795176000000` and must ship in the same deploy as the code that reads `token_hash` (the previous code reads `reset_token`, which this migration removes). It was not executed against any database during this work. It requires an active transaction (default `--transaction all`) and `down` rejects rollback (plain-text tokens cannot be restored from their hashes; restore a backup).
+
+Preconditions (exclusive lock on `vc_reset_tokens` held until commit; THROW codes 51040–51049):
+
+- 51040: `pk_vc_reset_tokens`, `fk_vc_reset_tokens_user` and `ix_vc_reset_tokens_user_id` exist.
+- 51041: no other index on `vc_reset_tokens` and no user-created statistics on `reset_token`, `user_id` or `expires_at`.
+- 51042: no foreign key references `vc_reset_tokens`, no check constraint, computed column or schema-bound object depends on it, no default on the changed columns and no foreign key other than `fk_vc_reset_tokens_user`.
+- 51043: `uq_vc_reset_tokens_token_hash`, `df_vc_reset_tokens_id` and `df_vc_reset_tokens_created_at` do not exist yet (the new columns and `vc_users.password_changed_at` are also checked before any DDL).
+
+Steps:
+
+1. Delete unusable rows: `user_id` or `expires_at` NULL, `user_id` without a `vc_users` row (orphans; soft-deleted accounts still have one), `expires_at <= SYSUTCDATETIME()`, or a `reset_token` that is not 64 lowercase hexadecimal characters (`DATALENGTH` and a `Latin1_General_100_BIN2` pattern, so trailing spaces and uppercase are caught). Then 51044 verifies that no remaining token references a missing user (the foreign key is recreated `WITH CHECK`).
+2. Add `id` uniqueidentifier NOT NULL (`df_vc_reset_tokens_id` DEFAULT NEWSEQUENTIALID()), `token_hash` binary(32) NULL, `used_at` datetime2 NULL and `created_at` datetime2 NOT NULL (`df_vc_reset_tokens_created_at` DEFAULT SYSUTCDATETIME(); the process runs in UTC).
+3. Convert in place: `token_hash = HASHBYTES('SHA2_256', CONVERT(varchar(255), reset_token))` (varchar, so the bytes hashed equal the utf8 text hashed by the application); `created_at` is estimated as `expires_at - 1 hour` (capped at now).
+4. Drop `fk_vc_reset_tokens_user` and `ix_vc_reset_tokens_user_id`; `user_id`, `expires_at` and `token_hash` become NOT NULL; drop `pk_vc_reset_tokens` and the column `reset_token`.
+5. `pk_vc_reset_tokens` on `id`, unique index `uq_vc_reset_tokens_token_hash`, `ix_vc_reset_tokens_user_id`, and `fk_vc_reset_tokens_user` -> `vc_users` recreated `WITH CHECK` (trusted), without cascade.
+6. `vc_users.password_changed_at` datetime2 NULL (UTC instant of the last password reset or change).
+7. Final verification (51048: every row has a 32-byte `token_hash`; 51049: final columns, nullability, key, indexes and trusted non-cascading FK are as expected).
+
+Resulting `vc_reset_tokens`: `id` (PK), `token_hash` binary(32) unique, `user_id` NOT NULL, `expires_at` NOT NULL, `used_at` NULL, `created_at` NOT NULL, plus `name`/`description`/`notes`. Only the SHA-256 of a token is stored; the plain token exists only in the email link. Pending tokens are rows with `used_at` NULL and `expires_at` in the future; a token is consumed or invalidated by setting `used_at`. The hourly cleanup deletes expired rows and rows used more than 24 hours ago. The entities declare the same key, index and foreign-key names; instants use the UTC transformer.

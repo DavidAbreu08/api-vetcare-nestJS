@@ -2,6 +2,7 @@ import "./database/environment";
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
+import { ThrottlerModule } from "@nestjs/throttler";
 import { databaseOptions, databaseEnvFile } from "./database/database.config";
 import { UsersModule } from "./app/users/users.module";
 import { AuthModule } from "./auth/auth.module";
@@ -20,6 +21,8 @@ import { ClinicalVisitModule } from "./app/clinical-visits/clinical-visit.module
   imports: [
     ConfigModule.forRoot({ envFilePath: databaseEnvFile(), isGlobal: true }),
     TypeOrmModule.forRoot(databaseOptions()),
+    // In-memory store. No APP_GUARD: ThrottlerGuard + @Throttle only on the password recovery routes.
+    ThrottlerModule.forRoot([{ name: "default", ttl: 15 * 60 * 1000, limit: 5 }]),
     PersistenceModule,
     SystemSettingsModule,
     RolesModule,

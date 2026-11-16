@@ -11,7 +11,7 @@ describe("AuthService rejects inactive or deleted accounts", () => {
   beforeEach(() => {
     usersRepository = { findOne: jest.fn() };
     const business = new UsersBusinessService(new PersistenceService(), {} as any, usersRepository as any, {} as any, {} as any, {} as any, {} as any);
-    auth = new AuthService(new UsersService(business), {} as any, {} as any, {} as any);
+    auth = new AuthService(new UsersService(business), {} as any, {} as any, {} as any, {} as any, new PersistenceService());
   });
 
   it("rejects a token of an account deactivated after issue, on every request", async () => {

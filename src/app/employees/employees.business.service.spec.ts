@@ -13,6 +13,8 @@ import { UsersEntity } from "../users/entities/users.entity";
 
 const EMPLOYEE_ROLE = "20000000-0000-4000-8000-000000000002";
 const PAST = "2000-01-01";
+/** Plain welcome token as returned by createAccount (only its hash is persisted there). */
+const WELCOME_TOKEN = "ab".repeat(32);
 const admin: Actor = { id: "u-admin", roleIds: [], isAdmin: true, isEmployee: false, isClient: false, employeeId: null };
 
 describe("Employee profile rules", () => {
@@ -34,7 +36,7 @@ describe("Employee profile rules", () => {
     employees = { findOne: jest.fn(async () => ({ ...stored, jobTitleLinks: [] })) };
     const dataSource = { transaction: jest.fn(async (work: (m: unknown) => unknown) => work(manager)) };
     const settings = new SystemSettingsService({ loadAll: async () => [{ code: SystemSettingCode.EMPLOYEE_ROLE_ID, value: EMPLOYEE_ROLE }] } as any);
-    users = { createAccount: jest.fn(async (_m: unknown, data: any) => ({ user: { id: "U-NEW", email: data.email }, resetToken: "token" })) };
+    users = { createAccount: jest.fn(async (_m: unknown, data: any) => ({ user: { id: "U-NEW", email: data.email }, resetToken: WELCOME_TOKEN })) };
     email = { sendEmployeeWelcomeEmail: jest.fn(async () => undefined) };
     business = new EmployeesBusinessService(employees, dataSource as any, new PersistenceService(), users, settings, email);
   });
@@ -79,6 +81,11 @@ describe("Employee profile rules", () => {
     expect(users.createAccount).toHaveBeenLastCalledWith(manager, expect.objectContaining({ email: "rui@x.pt" }), [], "u-admin");
     expect(manager.create).toHaveBeenLastCalledWith(EmployeeEntity, expect.objectContaining({ userId: "U-NEW", isAvailableForBookings: false }));
     expect(email.sendEmployeeWelcomeEmail).toHaveBeenCalledTimes(2);
+    expect(email.sendEmployeeWelcomeEmail).toHaveBeenLastCalledWith("rui@x.pt", WELCOME_TOKEN);
+    // The plain token never reaches the employee transaction's writes.
+    for (const call of [...manager.save.mock.calls, ...manager.insert.mock.calls, ...manager.create.mock.calls]) {
+      expect(JSON.stringify(call)).not.toContain(WELCOME_TOKEN);
+    }
   });
 
   it("removes EMPLOYEE in the same transaction when an update terminates the profile, locking the row, and logs after commit", async () => {
