@@ -20,11 +20,14 @@ export class ClinicalVisitEntity {
   @PrimaryGeneratedColumn("uuid") id: string;
 
   @Column({ name: "reservation_id", type: "uniqueidentifier", nullable: true }) reservationId: string | null;
-  @ManyToOne(() => ReservationEntity, { nullable: true })
-  @JoinColumn([
-    { name: "reservation_id", referencedColumnName: "id" },
-    { name: "animal_id", referencedColumnName: "animalId" },
-  ])
+  /**
+   * Mapped on reservation_id only: a composite join column sharing animal_id with `animal` makes TypeORM 0.3
+   * reuse/overwrite that column's metadata and generate wrong joins. The composite FK
+   * fk_vc_clinical_visits_reservation_animal (reservation_id, animal_id) -> vc_reservations (id, animal_id)
+   * exists only in the database (migration 1795089600000), hence createForeignKeyConstraints: false.
+   */
+  @ManyToOne(() => ReservationEntity, { nullable: true, createForeignKeyConstraints: false })
+  @JoinColumn({ name: "reservation_id", referencedColumnName: "id" })
   reservation: ReservationEntity | null;
 
   @Column({ name: "animal_id", type: "uniqueidentifier" }) animalId: string;

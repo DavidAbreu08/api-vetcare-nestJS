@@ -16,8 +16,15 @@ export class CreateMeasurementDto {
   @ApiPropertyOptional({ format: "uuid", description: "IN_PROGRESS clinical visit of the same animal (staff with clinical access). Immutable after creation." })
   @IsOptional() @IsUUID() clinicalVisitId?: string;
 }
-/** PATCH semantics: omitted fields retain their values; animal, clinical visit and original author cannot change. */
-export class UpdateMeasurementDto extends PartialType(OmitType(CreateMeasurementDto, ["animalId", "clinicalVisitId"] as const)) {}
+/**
+ * PATCH semantics: omitted fields retain their values. Animal, type, clinical visit and original author are immutable;
+ * sending measurementTypeId (or any other unknown property) is rejected with 400 by the global ValidationPipe.
+ */
+export class UpdateMeasurementDto extends PartialType(OmitType(CreateMeasurementDto, ["animalId", "measurementTypeId", "clinicalVisitId"] as const)) {}
+/** Soft-delete (administrators): the reason is mandatory and kept for audit. */
+export class DeleteMeasurementDto {
+  @ApiProperty({ maxLength: 500 }) @IsString() @Matches(/\S/) @MaxLength(500) reason: string;
+}
 export class ListMeasurementsQueryDto extends ListQueryDto {
   @ApiPropertyOptional({ format: "uuid" }) @IsOptional() @IsUUID() animalId?: string;
   @ApiPropertyOptional({ format: "uuid" }) @IsOptional() @IsUUID() measurementTypeId?: string;

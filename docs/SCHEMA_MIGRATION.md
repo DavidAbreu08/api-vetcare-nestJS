@@ -111,3 +111,27 @@ Rules kept in the backend (not expressible as row checks): COMPLETED only throug
 A VOIDED visit does not hold its reservation (it can still be rescheduled, cancelled or marked as no-show), but `uq_vc_clinical_visits_reservation_id` also covers VOIDED rows, so no new visit can be started for that reservation; a new attendance needs a new reservation or a visit without reservation.
 
 Pending (not implemented): audit trail of `clinical_notes` changes on IN_PROGRESS visits (only the final state and void metadata are kept).
+
+# SQL Server schema: measurement hardening
+
+`MeasurementsHardening1795176000000` follows `ReservationsAndClinicalVisits1795089600000`. It was not executed against any database during this work. It requires an active transaction (default `--transaction all`) and `down` rejects rollback (restore a backup).
+
+Preconditions (exclusive table locks held until commit; THROW codes 51030–51034):
+
+- 51030: no `vc_animal_measurements` row without `recorded_by`.
+- 51031: every `vc_measurement_types.code` matches `[A-Z][A-Z0-9_]*` (binary collation).
+- 51032: `fk_vc_animal_measurements_recorder` and `ix_vc_animal_measurements_recorded_by` exist.
+- 51033: no other index or user-created statistics depend on `recorded_by`.
+- 51034: the new check constraints do not exist yet (the new columns are also checked before any DDL).
+
+Steps:
+
+1. `recorded_by` becomes NOT NULL: drop `fk_vc_animal_measurements_recorder` and `ix_vc_animal_measurements_recorded_by`, `ALTER COLUMN`, recreate both (FK `WITH CHECK`, trusted).
+2. Add `updated_by` uniqueidentifier NULL (last editor; `recorded_by` stays the original author), `deleted_at` datetime2(3) NULL (UTC instant), `deleted_by` uniqueidentifier NULL and `delete_reason` nvarchar(500) NULL.
+3. `fk_vc_animal_measurements_updated_by` and `fk_vc_animal_measurements_deleted_by` -> `vc_users` (no cascade), indexes `ix_vc_animal_measurements_updated_by` and `ix_vc_animal_measurements_deleted_by`.
+4. `ck_vc_animal_measurements_deleted`: the three soft-delete columns are all NULL or all set with a non-blank reason. `ck_vc_animal_measurements_clinical_not_deleted`: a measurement with `clinical_visit_id` cannot be soft-deleted.
+5. `ck_vc_measurement_types_code`, the same pattern as `ck_vc_roles_code`, `ck_vc_job_titles_code` and `ck_vc_system_settings_code`.
+
+`measured_at` keeps its type; the entity now uses the UTC transformer. Because the Node process is forced to UTC (`src/force-utc.ts`), the transformer is the identity and existing values need no conversion. The entities declare the same index, check and foreign-key names. Measurements are no longer physically deleted by the application.
+
+ORM mapping of composite FKs: `fk_vc_animal_measurements_clinical_visit` (clinical_visit_id, animal_id) and `fk_vc_clinical_visits_reservation_animal` (reservation_id, animal_id) exist only in the database. The entities map `clinicalVisit` and `reservation` on the single id column with `createForeignKeyConstraints: false`, because a composite join column sharing `animal_id` with the `animal` relation makes TypeORM 0.3 overwrite that column's metadata and generate wrong joins. `measurement.sql.spec.ts` checks the generated SQL.

@@ -26,6 +26,15 @@ export function isStaff(actor: Actor): boolean {
   return actor.isAdmin || actor.isEmployee;
 }
 
+/** Administrators and active employees (the EMPLOYEE flag already requires an active employee profile). */
+export function requireStaff(actor: Actor, message = "Access denied"): void {
+  if (!isStaff(actor)) throw new ForbiddenException(message);
+}
+
+export function requireAdmin(actor: Actor, message = "Access denied"): void {
+  if (!actor.isAdmin) throw new ForbiddenException(message);
+}
+
 export function requireOwnerOrAdmin(actor: Actor, ownerId: string): void {
   if (!actor.isAdmin && !sameId(actor.id, ownerId)) {
     throw new ForbiddenException("Access denied");
