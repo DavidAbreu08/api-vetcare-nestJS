@@ -182,6 +182,12 @@ describe("API routing and published OpenAPI contract", () => {
     expect(document.paths["/api/vetcare/auth/login"].post.requestBody.content["application/json"].schema.required).toEqual(["email", "password"]);
     expect(document.paths["/api/vetcare/animal/{id}/owners/{userId}"].delete.requestBody.required).toBe(false);
     expect(document.paths["/api/vetcare/animal/{id}/owners/{userId}"].delete.requestBody.content["application/json"].schema).toBeDefined();
+    // Owner removal response: movedReservationIds (uuid strings, empty when none) under the common envelope.
+    const removeOwner = document.paths["/api/vetcare/animal/{id}/owners/{userId}"].delete;
+    expect(removeOwner.responses["200"]).toBeDefined();
+    expect(removeOwner.responses["200"].content["application/json"].schema.allOf[1].properties.result).toEqual({ $ref: "#/components/schemas/RemoveAnimalOwnerResponseDto" });
+    expect(document.components.schemas.RemoveAnimalOwnerResponseDto.properties.movedReservationIds).toMatchObject({ type: "array", items: { type: "string" } });
+    expect(document.components.schemas.RemoveAnimalOwnerResponseDto.required).toEqual(["movedReservationIds"]);
     expect(document.paths["/api/vetcare/auth/forgot-password"].post.responses["202"]).toBeDefined();
     expect(document.paths["/api/vetcare/users/{id}"].delete.responses["204"].content).toBeUndefined();
     // Reservation authorship: response fields and the createdBy filter.

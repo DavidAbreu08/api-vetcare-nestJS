@@ -1,4 +1,4 @@
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiBody } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiBody, ApiOkResponse } from "@nestjs/swagger";
 import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query, UseGuards } from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
 import { Actor } from "../core/authorization";
@@ -7,7 +7,7 @@ import { Roles } from "../core/decorators/roles.decorator";
 import { SystemRole } from "../core/enums/system-role.enum";
 import { RolesGuard } from "../core/guards/roles/roles.guard";
 import { AnimalOwnersBusinessService } from "./animal-owners.business.service";
-import { AddAnimalOwnerDto, ListAnimalOwnersQueryDto, RemoveAnimalOwnerDto, TransferAnimalDto } from "./dto/animal-owners.dto";
+import { AddAnimalOwnerDto, ListAnimalOwnersQueryDto, RemoveAnimalOwnerDto, RemoveAnimalOwnerResponseDto, TransferAnimalDto } from "./dto/animal-owners.dto";
 import { ResponseMessage } from "../core/decorators/response-message.decorator";
 import { AnimalOwnersMessage } from "./animal-owners.messages";
 
@@ -40,15 +40,16 @@ export class AnimalOwnersController {
    * in the body or the query string (the body wins).
    */
   @Delete(":id/owners/:userId")
-  @ApiOperation({ summary: "Remove a secondary animal owner", description: "Staff, the primary owner, or the departing owner may perform this operation. Send transferFutureReservations in the query or body; the body takes precedence. The result may include IDs of moved reservations." })
+  @ApiOperation({ summary: "Remove a secondary animal owner", description: "Staff, the primary owner, or the departing owner may perform this operation. Send transferFutureReservations in the query or body; the body takes precedence. The result lists the IDs of moved reservations (movedReservationIds, empty when none)." })
   @ApiParam({ name: "id", description: "UUID identifier", schema: { type: "string", format: "uuid" } })
   @ApiParam({ name: "userId", description: "UUID identifier", schema: { type: "string", format: "uuid" } })
   @ApiBody({ type: RemoveAnimalOwnerDto, required: false })
+  @ApiOkResponse({ description: "Tutorship ended; lists the reservations moved to the primary tutor (empty when none).", type: RemoveAnimalOwnerResponseDto })
   @ResponseMessage(AnimalOwnersMessage.Removed)
   remove(
     @Param("id", ParseUUIDPipe) id: string, @Param("userId", ParseUUIDPipe) userId: string,
     @Query() query: RemoveAnimalOwnerDto, @Body() body: RemoveAnimalOwnerDto, @CurrentUser() actor: Actor,
-  ) {
+  ): Promise<RemoveAnimalOwnerResponseDto> {
     return this.business.remove(id, userId, { transferFutureReservations: body?.transferFutureReservations ?? query.transferFutureReservations }, actor);
   }
 

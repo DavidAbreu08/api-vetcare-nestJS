@@ -190,7 +190,7 @@ describe("Ending a secondary tutorship (decisions 4, 12)", () => {
     expect(t.active()).toEqual(["ANA:P"]);
   });
 
-  it("refuses (409 with the list) while the tutor is the client of open reservations of the animal, unless transferFutureReservations", async () => {
+  it("refuses (409, message only, no id list) while the tutor is the client of open reservations of the animal, unless transferFutureReservations", async () => {
     const t = setup();
     t.addSecondary("BOB");
     t.addReservation("R-2", "BOB");

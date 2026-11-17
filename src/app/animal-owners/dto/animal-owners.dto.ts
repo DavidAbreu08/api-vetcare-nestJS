@@ -28,6 +28,12 @@ export class RemoveAnimalOwnerDto {
   transferFutureReservations?: boolean;
 }
 
+/** Result of DELETE /api/vetcare/animal/:id/owners/:userId (wrapped in the common success envelope). */
+export class RemoveAnimalOwnerResponseDto {
+  @ApiProperty({ type: [String], format: "uuid", description: "IDs of the animal's open reservations (PENDING or CONFIRMED, not yet finished) whose client was the departing tutor and that were moved to the primary tutor (transferFutureReservations=true). Empty when none were moved." })
+  movedReservationIds: string[];
+}
+
 export class TransferAnimalDto {
   @ApiProperty({ description: "Active client account that becomes the primary tutor", format: "uuid" })
   @IsUUID()
