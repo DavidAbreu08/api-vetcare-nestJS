@@ -4,6 +4,7 @@ import { ErrorMetadata } from "../core/enums/error-metadata.enum";
 import { EntityManager } from "typeorm";
 import { ReservationStatus } from "../core/enums/reservation-status.enum";
 import { toDbUtc } from "../core/persistence/utc-datetime";
+import { utcInstantParam, uuidParam } from "../core/persistence/sql-params";
 import { ReservationEntity } from "./entities/reservation.entity";
 
 /** States that still commit a client, an animal and an employee to a future appointment. */
@@ -29,6 +30,23 @@ export async function findOpenReservations(manager: EntityManager, filter: OpenR
     .andWhere("r.endAt > :now", { now: toDbUtc(now) })
     .orderBy("r.startAt", "ASC").addOrderBy("r.id", "ASC")
     .getMany();
+}
+
+/**
+ * CONFIRMED reservations intersecting [from, to) (start_at < @to AND end_at > @from, UTC), optionally only of the given
+ * employee profiles, oldest first. Plain read without lock hints: block writes call it under the closures applock
+ * (Exclusive) or the employee applock, which every confirmation also holds; schedule replacement under the employee
+ * applock; availability reads are indicative. PENDING reservations do not occupy time.
+ */
+export function findConfirmedReservationsBetween(manager: EntityManager, from: Date, to: Date, employeeIds?: string[]): Promise<OpenReservation[]> {
+  if (employeeIds && !employeeIds.length) return Promise.resolve([]);
+  const query = manager.createQueryBuilder(ReservationEntity, "r")
+    .select(["r.id", "r.status", "r.startAt", "r.endAt", "r.employeeId", "r.clientId", "r.animalId", "r.serviceId"])
+    .where("r.status = :confirmed", { confirmed: ReservationStatus.CONFIRMED })
+    .andWhere("r.startAt < :to", { to: utcInstantParam(to) })
+    .andWhere("r.endAt > :from", { from: utcInstantParam(from) });
+  if (employeeIds) query.andWhere("r.employeeId IN (:...confirmedEmployeeIds)", { confirmedEmployeeIds: employeeIds.map(uuidParam) });
+  return query.orderBy("r.startAt", "ASC").addOrderBy("r.id", "ASC").getMany();
 }
 
 /**

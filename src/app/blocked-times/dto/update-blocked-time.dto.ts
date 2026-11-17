@@ -1,5 +1,5 @@
 import { PartialType } from "@nestjs/swagger";
 import { CreateBlockedTimeDto } from "./create-blocked-time.dto";
 
-/** Update selected fields of a global clinic time block. */
+/** Partial update of a blocked time; omitted fields stay unchanged, `employeeId: null` turns it into a clinic-wide closure. */
 export class UpdateBlockedTimeDto extends PartialType(CreateBlockedTimeDto) {}

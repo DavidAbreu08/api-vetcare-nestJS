@@ -3,11 +3,13 @@ import { Actor } from "../core/authorization";
 import { CreateEmployeeDto, ListEmployeesQueryDto, UpdateEmployeeDto } from "./dto/create-employee.dto";
 import { EmployeesBusinessService } from "./employees.business.service";
 import { ReplaceEmployeeServicesDto } from "../clinic-services/dto/clinic-service.dto";
+import { EmployeeSchedulesBusinessService } from "../employee-schedules/employee-schedules.business.service";
+import { ReplaceEmployeeSchedulesDto } from "../employee-schedules/dto/employee-schedule.dto";
 
 /** Application entry points for the employees resource. */
 @Injectable()
 export class EmployeesService {
-  constructor(private readonly business: EmployeesBusinessService) {}
+  constructor(private readonly business: EmployeesBusinessService, private readonly schedules: EmployeeSchedulesBusinessService) {}
   getAll(query: ListEmployeesQueryDto) { return this.business.getAll(query); }
   getById(id: string, actor: Actor) { return this.business.getById(id, actor); }
   getMine(actor: Actor) { return this.business.getMine(actor); }
@@ -17,4 +19,6 @@ export class EmployeesService {
   getAvailableByDate(date: string) { return this.business.getAvailableByDate(date); }
   getServices(id: string, actor: Actor) { return this.business.getServices(id, actor); }
   replaceServices(id: string, dto: ReplaceEmployeeServicesDto) { return this.business.replaceServices(id, dto); }
+  getSchedules(id: string, actor: Actor) { return this.schedules.list(id, actor); }
+  replaceSchedules(id: string, dto: ReplaceEmployeeSchedulesDto) { return this.schedules.replace(id, dto); }
 }

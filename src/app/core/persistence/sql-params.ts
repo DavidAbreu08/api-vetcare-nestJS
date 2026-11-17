@@ -1,4 +1,5 @@
 import { MssqlParameter } from "typeorm";
+import { dateKey } from "../../reservation/reservation-policy";
 import { toDbUtc } from "./utc-datetime";
 
 /**
@@ -7,3 +8,5 @@ import { toDbUtc } from "./utc-datetime";
  */
 export const utcInstantParam = (instant: Date) => new MssqlParameter(toDbUtc(instant), "datetime2", 7);
 export const uuidParam = (id: string) => new MssqlParameter(id, "uniqueidentifier");
+/** Clinic calendar date (YYYY-MM-DD, validated) as a SQL date; the driver parses it at UTC midnight (process TZ is UTC). */
+export const clinicDateParam = (date: string) => new MssqlParameter(dateKey(date), "date");

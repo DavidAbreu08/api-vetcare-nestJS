@@ -94,9 +94,18 @@ describe("Public DTO OpenAPI schemas", () => {
     expect(schemas.UpdateMeasurementDto.required ?? []).toEqual([]);
   });
 
-  it("documents blocked calendar dates as date strings and includes the date query filter", () => {
-    expect(schemas.CreateBlockedTimeDto.properties!.date).toMatchObject({ type: "string", format: "date" });
-    expect(schemas.ListBlockedTimesQueryDto.properties).toHaveProperty("date");
+  it("documents blocked times as UTC instants with an optional employee and instant range filters (no legacy date/time fields)", () => {
+    const create = schemas.CreateBlockedTimeDto;
+    expect(create.properties!.startAt).toMatchObject({ type: "string", format: "date-time" });
+    expect(create.properties!.endAt).toMatchObject({ type: "string", format: "date-time" });
+    expect(create.properties!.employeeId).toMatchObject({ type: "string", format: "uuid", nullable: true });
+    expect(create.required).toEqual(expect.arrayContaining(["startAt", "endAt"]));
+    expect(create.required).not.toContain("employeeId");
+    for (const legacy of ["date", "timeStart", "timeEnd"]) expect(create.properties).not.toHaveProperty(legacy);
+    expect(schemas.ListBlockedTimesQueryDto.properties!.from).toMatchObject({ type: "string", format: "date-time" });
+    expect(schemas.ListBlockedTimesQueryDto.properties!.to).toMatchObject({ type: "string", format: "date-time" });
+    expect(schemas.ListBlockedTimesQueryDto.properties!.employeeId).toMatchObject({ type: "string", format: "uuid" });
+    expect(schemas.ListBlockedTimesQueryDto.properties).not.toHaveProperty("date");
     expect(schemas.ListBlockedTimesQueryDto.properties).toHaveProperty("skip");
     expect(schemas.ListBlockedTimesQueryDto.properties).toHaveProperty("take");
   });

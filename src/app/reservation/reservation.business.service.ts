@@ -22,13 +22,14 @@ import { UsersEntity } from "../users/entities/users.entity";
 import { AssignReservationEmployeeDto, ReservationReasonDto, RescheduleReservationDto } from "./dto/reservation-actions.dto";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
 import { ListReservationsQueryDto } from "./dto/list-reservations-query.dto";
-import { acquireEmployeeScheduleLock } from "./employee-schedule-lock";
-import { BlockedTimeEntity } from "../blocked-times/entities/bloked-times.entity";
+import { acquireClinicClosuresLock, acquireEmployeeScheduleLock } from "./employee-schedule-lock";
+import { overlappingBlocks } from "../blocked-times/blocked-time.queries";
+import { assertFitsSchedule, findSchedulesValidOn } from "../employee-schedules/employee-schedule-policy";
 import { ReservationEntity } from "./entities/reservation.entity";
 import { ReservationHistoryAction } from "../reservation-history/enums/reservation-history-action.enum";
 import { ReservationHistoryService, reservationSnapshot } from "../reservation-history/reservation-history.service";
 import { ReservationMessages } from "./reservation.messages";
-import { assertTransition, clinicParts, overlaps, policyError, validateReservationWindow } from "./reservation-policy";
+import { assertTransition, clinicParts, policyError, validateReservationWindow } from "./reservation-policy";
 import { ReservationRelation } from "./enums/reservation-relations.enum";
 import { serializeReservation, serializeReservations } from "./reservation.serializer";
 import { activeTutorExists, AnimalAccessService } from "../animal-owners/animal-access.service";
@@ -47,9 +48,13 @@ const ACTIVE_VISIT_STATUSES = [ClinicalVisitStatus.IN_PROGRESS, ClinicalVisitSta
  * history event; operations that can make an employee's time occupied take the employee schedule applock
  * (sp_getapplock) before checking overlaps. Notifications are sent after commit.
  *
- * Lock order (UPDLOCK rows, then the applock), never inverted by any flow:
+ * Lock order (UPDLOCK rows, then the applocks), never inverted by any flow:
  *   vc_reservations -> vc_animals -> vc_users (client) -> vc_services (shared, creation only) -> vc_employees
- *   -> [vc_employee_services read] -> employee schedule applock.
+ *   -> [vc_employee_services read] -> clinic closures applock (Shared) -> employee schedule applock (Exclusive)
+ *   -> [vc_employee_schedules, vc_blocked_times and overlapping vc_reservations reads] -> writes.
+ * Block writes take the closures applock Exclusive (global block) or the profile and then the employee applock
+ * (individual block); PUT /employees/:id/schedules takes the profile and then the employee applock. Applocks are always
+ * the last locks of a chain and the closures applock always precedes an employee applock, so no cycle can form.
  * PUT /employees/:id/services follows the same order: the services it adds (shared, by id) -> vc_employees -> writes;
  * PATCH/DELETE /services/:id lock only the service row, so no cycle forms with either flow.
  * Creation, confirmation and reschedule lock the animal and the client account and re-check them (not deleted,
@@ -177,9 +182,9 @@ export class ReservationBusinessService {
       const service = await this.requireBookableService(manager, dto.serviceId, actor);
       const endAt = this.serviceEnd(startAt, service, requestedEnd, actor);
       validateReservationWindow(startAt, endAt);
-      await this.assertNotBlocked(manager, startAt, endAt);
       const employee = dto.employeeId ? await this.requireBookableEmployee(manager, dto.employeeId, startAt, service.id) : null;
-      if (employee) await this.reserveEmployeeSlot(manager, employee.id, startAt, endAt);
+      if (employee) await this.occupyEmployeeTime(manager, employee.id, startAt, endAt);
+      else await this.assertNotBlocked(manager, startAt, endAt, null);
       const reservation = await manager.save(manager.create(ReservationEntity, {
         // Author = the authenticated actor (never from the body); differs from clientId when staff book for a client.
         animalId: animal.id, clientId: client.id, createdBy: actor.id, serviceId: service.id, employeeId: employee?.id ?? null, startAt, endAt,
@@ -204,7 +209,10 @@ export class ReservationBusinessService {
       client.email, client.name, start.date, start.time, clinicParts(saved.endAt).time));
   }
 
-  /** PENDING only; the employee must be bookable on the reservation date and free (applock + overlap check). */
+  /**
+   * PENDING only; the employee must be bookable on the reservation date, qualified, and free under the applocks: within
+   * their schedule, not blocked (clinic closure or individual block) and without an overlapping CONFIRMED reservation.
+   */
   async assignEmployee(id: string, dto: AssignReservationEmployeeDto, actor: Actor) {
     await this.transaction(async manager => {
       const reservation = await this.lockReservation(manager, id);
@@ -213,7 +221,7 @@ export class ReservationBusinessService {
       }
       if (sameId(reservation.employeeId, dto.employeeId)) throw applicationError(ErrorMetadata.ALREADY_EXISTS, ReservationMessages.EMPLOYEE_ALREADY_ASSIGNED);
       const employee = await this.requireBookableEmployee(manager, dto.employeeId, reservation.startAt, reservation.serviceId);
-      await this.reserveEmployeeSlot(manager, employee.id, reservation.startAt, reservation.endAt, reservation.id);
+      await this.occupyEmployeeTime(manager, employee.id, reservation.startAt, reservation.endAt, reservation.id);
       const previous = reservation.employeeId;
       await manager.update(ReservationEntity, { id: reservation.id }, { employeeId: employee.id });
       await this.history.record(manager, {
@@ -225,7 +233,7 @@ export class ReservationBusinessService {
     return this.respond(id, actor);
   }
 
-  /** PENDING -> CONFIRMED: requires a bookable employee, a future slot, no block and no overlap under the applock. */
+  /** PENDING -> CONFIRMED: a bookable employee, a future slot inside their schedule, no block and no overlap under the applocks. */
   async confirm(id: string, dto: ReservationReasonDto, actor: Actor) {
     const confirmed = await this.transaction(async manager => {
       const reservation = await this.lockReservation(manager, id);
@@ -234,8 +242,7 @@ export class ReservationBusinessService {
       validateReservationWindow(reservation.startAt, reservation.endAt);
       await this.requireBookingParties(manager, reservation.animalId, reservation.clientId);
       const employee = await this.requireBookableEmployee(manager, reservation.employeeId, reservation.startAt, reservation.serviceId);
-      await this.assertNotBlocked(manager, reservation.startAt, reservation.endAt);
-      await this.reserveEmployeeSlot(manager, employee.id, reservation.startAt, reservation.endAt, reservation.id);
+      await this.occupyEmployeeTime(manager, employee.id, reservation.startAt, reservation.endAt, reservation.id);
       const before = reservationSnapshot(reservation);
       const confirmedAt = new Date();
       await manager.update(ReservationEntity, { id: reservation.id }, { status: ReservationStatus.CONFIRMED, confirmedAt });
@@ -273,10 +280,11 @@ export class ReservationBusinessService {
         policyError("RESCHEDULE_UNCHANGED", ReservationMessages.RESCHEDULE_UNCHANGED);
       }
       await this.requireBookingParties(manager, reservation.animalId, reservation.clientId);
-      await this.assertNotBlocked(manager, startAt, endAt);
       if (reservation.employeeId) {
         const employee = await this.requireBookableEmployee(manager, reservation.employeeId, startAt, reservation.serviceId);
-        await this.reserveEmployeeSlot(manager, employee.id, startAt, endAt, reservation.id);
+        await this.occupyEmployeeTime(manager, employee.id, startAt, endAt, reservation.id);
+      } else {
+        await this.assertNotBlocked(manager, startAt, endAt, null);
       }
       const before = reservationSnapshot(reservation);
       const changes = { startAt, endAt, status: ReservationStatus.PENDING, confirmedAt: null };
@@ -415,24 +423,34 @@ export class ReservationBusinessService {
     }
   }
 
-  /** Global clinic blocks (vc_blocked_times, clinic-local date and HH:mm) overlapping the interval. */
-  private async assertNotBlocked(manager: EntityManager, startAt: Date, endAt: Date) {
-    const start = clinicParts(startAt);
-    const end = clinicParts(endAt);
-    const blocks = await manager.find(BlockedTimeEntity, { where: { date: new Date(`${start.date}T00:00:00Z`) } });
-    if (blocks.some(block => overlaps(start.time, end.time, block.timeStart, block.timeEnd))) {
-      policyError("TIME_BLOCKED", ReservationMessages.TIME_BLOCKED);
+  /**
+   * 409 TIME_BLOCKED when a block intersects the interval: start_at < end AND end_at > start AND (employee_id IS NULL OR
+   * employee_id = employeeId); without an employee only clinic-wide closures count. Flows that occupy an employee's time
+   * call it under the closures (Shared) and employee applocks (occupyEmployeeTime), so a concurrent block write either
+   * committed before (and is seen) or waits for this transaction. Without an employee (a PENDING reservation that occupies
+   * nothing) it is an early, unlocked check; confirmation checks again under the locks.
+   */
+  private async assertNotBlocked(manager: EntityManager, startAt: Date, endAt: Date, employeeId: string | null) {
+    if ((await overlappingBlocks(manager, startAt, endAt, employeeId ? [employeeId] : []).getCount()) > 0) {
+      throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.TIME_BLOCKED, undefined, { code: "TIME_BLOCKED" });
     }
   }
 
   /**
-   * Under the employee's schedule applock, rejects an overlap with another CONFIRMED reservation of the same
-   * employee, widened by RESERVATION_BUFFER_MINUTES on both sides:
+   * Makes [startAt, endAt) occupied time of the employee (create with employee, assign, confirm, reschedule). Locks, in the
+   * fixed order: clinic closures applock (Shared; a global block holds it Exclusive) -> employee schedule applock
+   * (Exclusive). Then, under both: the interval must fit one period of the employee's schedule valid on that date (or
+   * CLINIC_POLICY when the employee has no schedule valid on it; 409 OUTSIDE_EMPLOYEE_SCHEDULE), must not intersect a
+   * block (409 TIME_BLOCKED) and must not overlap another CONFIRMED reservation of the employee, widened by
+   * RESERVATION_BUFFER_MINUTES on both sides:
    * existing.start_at < end + buffer AND existing.end_at > start - buffer (i.e. existing.end_at + buffer > start).
    * PENDING, CANCELLED, NO_SHOW and COMPLETED reservations do not occupy time.
    */
-  private async reserveEmployeeSlot(manager: EntityManager, employeeId: string, startAt: Date, endAt: Date, excludeId?: string) {
+  private async occupyEmployeeTime(manager: EntityManager, employeeId: string, startAt: Date, endAt: Date, excludeId?: string) {
+    await acquireClinicClosuresLock(manager, "Shared");
     await acquireEmployeeScheduleLock(manager, employeeId);
+    assertFitsSchedule(await findSchedulesValidOn(manager, [employeeId], clinicParts(startAt).date), startAt, endAt);
+    await this.assertNotBlocked(manager, startAt, endAt, employeeId);
     const buffer = (await this.settings.getNonNegativeInteger(SystemSettingCode.RESERVATION_BUFFER_MINUTES)) * 60_000;
     const query = manager.createQueryBuilder(ReservationEntity, "r")
       .where("r.employeeId = :employeeId", { employeeId })

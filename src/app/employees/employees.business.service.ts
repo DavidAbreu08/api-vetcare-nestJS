@@ -28,6 +28,11 @@ import { EmployeeServiceEntity } from "../clinic-services/entities/employee-serv
 import { serializeClinicService } from "../clinic-services/clinic-service.projection";
 import { ClinicServiceConflictMessages, ClinicServiceMessage } from "../clinic-services/clinic-services.messages";
 import { ReplaceEmployeeServicesDto } from "../clinic-services/dto/clinic-service.dto";
+import { EmployeeScheduleEntity } from "../employee-schedules/entities/employee-schedule.entity";
+import { findSchedulesValidOn, workingInstants } from "../employee-schedules/employee-schedule-policy";
+import { BlockedTimeEntity } from "../blocked-times/entities/bloked-times.entity";
+import { overlappingBlocks } from "../blocked-times/blocked-time.queries";
+import { clinicDayWindow, subtractIntervals } from "../availability/availability-policy";
 
 const RELATIONS = { user: true, jobTitleLinks: { jobTitle: true } } as const;
 
@@ -214,7 +219,8 @@ export class EmployeesBusinessService {
   }
 
   /**
-   * Removes the profile, its job titles and the EMPLOYEE role together; the account remains. A profile referenced
+   * Removes the profile, its job titles, service qualifications, weekly schedule, individual blocked times and the
+   * EMPLOYEE role together; the account remains. A profile referenced
    * by any reservation or clinical visit (any state) is never deleted (409, counts in the message only): terminate it instead.
    * The row is locked (UPDLOCK) first, so no assignment or visit (which lock or read it) appears meanwhile; the
    * foreign keys remain the final arbiter.
@@ -231,6 +237,8 @@ export class EmployeesBusinessService {
       const employeeRoleId = await this.settings.resolveRoleId(SystemRole.EMPLOYEE);
       await manager.delete(EmployeeJobTitleEntity, { employeeId: employee.id });
       await manager.delete(EmployeeServiceEntity, { employeeId: employee.id });
+      await manager.delete(EmployeeScheduleEntity, { employeeId: employee.id });
+      await manager.delete(BlockedTimeEntity, { employeeId: employee.id });
       await manager.delete(EmployeeEntity, { id: employee.id });
       await manager.delete(UserRoleEntity, { userId: employee.userId, roleId: employeeRoleId });
     });
@@ -313,9 +321,17 @@ export class EmployeesBusinessService {
     return isBookableEmployee(employee, date);
   }
 
-  /** Bookable employees for a clinic date. TODO: also consider existing reservations or shifts. */
+  /**
+   * Employees who can be booked on a clinic date: bookable profile (available, active account, not terminated by then)
+   * that works that day (a period of their schedule valid on the date, or the clinic hours when they have no schedule
+   * valid on it, always inside CLINIC_POLICY; nobody on clinic closed days) and is not blocked for the whole of it (clinic
+   * closures and their own blocks). Reservations are not considered: GET /availability lists free slots per service.
+   * Plain reads, indicative only.
+   */
   async getAvailableByDate(date: string) {
     const key = dateKey(date);
+    const window = clinicDayWindow(key);
+    if (!window) return [];
     const rows = await this.persistence.execute(() => this.employees.createQueryBuilder("employee")
       .innerJoinAndSelect("employee.user", "user")
       .leftJoinAndSelect("employee.jobTitleLinks", "link")
@@ -325,6 +341,19 @@ export class EmployeesBusinessService {
       .andWhere("(employee.terminationDate IS NULL OR employee.terminationDate > :date)", { date: key })
       .orderBy("user.name", "ASC")
       .getMany());
-    return rows.filter(row => this.isBookable(row, key)).map(serializeEmployee);
+    const bookable = rows.filter(row => this.isBookable(row, key));
+    if (!bookable.length) return [];
+    const ids = bookable.map(row => row.id);
+    const manager = this.employees.manager;
+    const [schedules, blocks] = await this.persistence.execute(async () => [
+      await findSchedulesValidOn(manager, ids, key),
+      await overlappingBlocks(manager, window.start, window.end, ids).getMany(),
+    ] as const);
+    return bookable.filter(employee => {
+      const own = (employeeId: string | null) => !!employeeId && sameId(employeeId, employee.id);
+      const periods = workingInstants(schedules.filter(row => own(row.employeeId)), key);
+      const busy = blocks.filter(block => !block.employeeId || own(block.employeeId)).map(block => ({ start: block.startAt, end: block.endAt }));
+      return subtractIntervals(periods, busy).length > 0;
+    }).map(serializeEmployee);
   }
 }

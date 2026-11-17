@@ -11,6 +11,8 @@ import { SystemSettingCode } from "../system-settings/enums/system-setting-code.
 import { ReservationEntity } from "./entities/reservation.entity";
 import { ClinicServiceEntity } from "../clinic-services/entities/clinic-service.entity";
 import { EmployeeServiceEntity } from "../clinic-services/entities/employee-service.entity";
+import { BlockedTimeEntity } from "../blocked-times/entities/bloked-times.entity";
+import { EmployeeScheduleEntity } from "../employee-schedules/entities/employee-schedule.entity";
 import { ReservationHistoryAction } from "../reservation-history/enums/reservation-history-action.enum";
 import { serializeHistoryEvent } from "../reservation-history/reservation-history.service";
 import { assertTransition } from "./reservation-policy";
@@ -43,7 +45,8 @@ function setup() {
   const employees = new Map<string, any>([["E-1", bookable("E-1")], ["E-2", bookable("E-2")]]);
   const visits: any[] = [];
   const queryBuilders: any[] = [];
-  const state = { overlaps: 0 };
+  const otherBuilders: any[] = [];
+  const state = { overlaps: 0, blocks: 0, schedules: [] as any[] };
   // Clinic services (30 min by default) and qualifications "employeeId:serviceId" (every employee qualified for SVC).
   const services: Record<string, any> = { SVC: { id: "SVC", code: "CONSULTATION", name: "Consultation", durationMinutes: 30, isActive: true } };
   const qualifications = new Set<string>(["E-1:SVC", "E-2:SVC", "E-ANA:SVC"]);
@@ -82,12 +85,16 @@ function setup() {
       ? Number(qualifications.has(`${where.employeeId}:${where.serviceId}`))
       : visits.filter(visit => sameId(visit.reservationId, where.reservationId)
       && (!where.status || where.status.value.includes(visit.status))).length),
-    createQueryBuilder: jest.fn(() => {
-      const qb: any = { params: {} };
-      qb.where = jest.fn((_sql: string, params?: object) => (Object.assign(qb.params, params), qb));
+    // Reservation overlap queries go to queryBuilders; block and schedule reads to otherBuilders.
+    createQueryBuilder: jest.fn((entity?: unknown) => {
+      const qb: any = { entity, params: {}, sql: [] as string[] };
+      qb.where = jest.fn((sql: string, params?: object) => (qb.sql.push(sql), Object.assign(qb.params, params), qb));
       qb.andWhere = qb.where;
-      qb.getCount = jest.fn(async () => state.overlaps);
-      queryBuilders.push(qb);
+      qb.orderBy = jest.fn(() => qb);
+      qb.addOrderBy = qb.orderBy;
+      qb.getCount = jest.fn(async () => (entity === BlockedTimeEntity ? state.blocks : state.overlaps));
+      qb.getMany = jest.fn(async () => (entity === EmployeeScheduleEntity ? state.schedules : []));
+      (entity === ReservationEntity ? queryBuilders : otherBuilders).push(qb);
       return qb;
     }),
   };
@@ -120,7 +127,7 @@ function setup() {
     });
   };
   const actions = () => history.record.mock.calls.map((call: any[]) => call[1].action);
-  return { business, manager, history, settings, membership, reservations, visits, queryBuilders, state, addReservation, actions, accounts, pets, employees, access, secondary, services, qualifications };
+  return { business, manager, history, settings, membership, reservations, visits, queryBuilders, otherBuilders, state, addReservation, actions, accounts, pets, employees, access, secondary, services, qualifications };
 }
 
 afterEach(() => jest.restoreAllMocks());

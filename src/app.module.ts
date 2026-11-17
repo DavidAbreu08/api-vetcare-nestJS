@@ -18,6 +18,7 @@ import { JobTitlesModule } from "./app/job-titles/job-titles.module";
 import { EmployeesModule } from "./app/employees/employees.module";
 import { ClinicalVisitModule } from "./app/clinical-visits/clinical-visit.module";
 import { ClinicServicesModule } from "./app/clinic-services/clinic-services.module";
+import { AvailabilityModule } from "./app/availability/availability.module";
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { ClinicServicesModule } from "./app/clinic-services/clinic-services.modu
     BlockedTimeModule,
     ClinicalVisitModule,
     ClinicServicesModule,
+    AvailabilityModule,
   ],
   controllers: [],
   providers: [],
