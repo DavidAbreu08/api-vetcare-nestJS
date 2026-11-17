@@ -48,13 +48,14 @@ const ACTIVE_VISIT_STATUSES = [ClinicalVisitStatus.IN_PROGRESS, ClinicalVisitSta
  * history event; operations that can make an employee's time occupied take the employee schedule applock
  * (sp_getapplock) before checking overlaps. Notifications are sent after commit.
  *
- * Lock order (UPDLOCK rows, then the applocks), never inverted by any flow:
+ * Lock order of the occupying flows (UPDLOCK rows, then the applocks), never inverted by any flow:
  *   vc_reservations -> vc_animals -> vc_users (client) -> vc_services (shared, creation only) -> vc_employees
  *   -> [vc_employee_services read] -> clinic closures applock (Shared) -> employee schedule applock (Exclusive)
  *   -> [vc_employee_schedules, vc_blocked_times and overlapping vc_reservations reads] -> writes.
  * Block writes take the closures applock Exclusive (global block) or the profile and then the employee applock
- * (individual block); PUT /employees/:id/schedules takes the profile and then the employee applock. Applocks are always
- * the last locks of a chain and the closures applock always precedes an employee applock, so no cycle can form.
+ * (individual block); PUT /employees/:id/schedules takes the profile and then the employee applock. The closures
+ * applock always precedes an employee applock and no flow waits for an applock while holding a row locked after them
+ * (only a block PATCH locks its vc_blocked_times row after its applocks), so no cycle can form.
  * PUT /employees/:id/services follows the same order: the services it adds (shared, by id) -> vc_employees -> writes;
  * PATCH/DELETE /services/:id lock only the service row, so no cycle forms with either flow.
  * Creation, confirmation and reschedule lock the animal and the client account and re-check them (not deleted,

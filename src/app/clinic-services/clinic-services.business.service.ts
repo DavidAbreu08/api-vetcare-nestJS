@@ -118,7 +118,7 @@ export class ClinicServicesBusinessService {
   /**
    * Staff only: employees qualified for the service that are bookable today (available profile, active account, not
    * terminated). Projected like reservation employees (non-administrators: { id, name, profilePictureUrl }). It does not
-   * consider schedules or occupied time (phase 5B).
+   * consider schedules or occupied time (use GET /api/vetcare/availability for free slots).
    */
   async getEmployees(id: string, actor: Actor) {
     requireStaff(actor, ClinicServiceMessage.Forbidden);

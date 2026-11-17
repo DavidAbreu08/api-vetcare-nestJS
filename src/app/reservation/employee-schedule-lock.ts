@@ -51,8 +51,9 @@ export function acquireEmployeeScheduleLock(manager: EntityManager, employeeId: 
 
 /**
  * Clinic-closure applock (CLINIC_CLOSURES_RESOURCE): Exclusive for creating/changing a global block, Shared for every
- * flow that occupies an employee's time. Always taken before any employee applock (fixed order global -> employee), and
- * applocks are the last locks of every chain, so no cycle can form.
+ * flow that occupies an employee's time. Always taken before any employee applock (fixed order global -> employee); the
+ * only row lock taken after the applocks is the vc_blocked_times row of a block PATCH, and no flow waits for an applock
+ * while holding such a row, so no cycle can form.
  */
 export function acquireClinicClosuresLock(manager: EntityManager, mode: AppLockMode, timeoutMs = EMPLOYEE_SCHEDULE_LOCK_TIMEOUT_MS): Promise<void> {
   return acquireAppLock(manager, CLINIC_CLOSURES_RESOURCE, mode, timeoutMs, ReservationMessages.CLOSURES_BUSY);
