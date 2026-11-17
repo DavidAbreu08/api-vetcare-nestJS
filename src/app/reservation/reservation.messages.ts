@@ -14,6 +14,7 @@ export const ReservationMessages = {
   ASSIGN_REQUIRES_PENDING: "Employees can only be assigned to pending reservations",
   RESCHEDULE_UNCHANGED: "The new interval is identical to the current one",
   VISIT_STARTED: "The reservation has an active clinical visit; it cannot be cancelled, rescheduled or marked as no-show",
+  HAS_CLINICAL_VISIT: "The reservation already has a clinical visit (voided visits included); it cannot be confirmed or rescheduled",
   NO_SHOW_TOO_EARLY: "A reservation can only be marked as no-show after its start plus the configured tolerance",
   SCHEDULE_BUSY: "The employee's schedule is being changed by another request; retry",
   SCHEDULE_LOCK_UNAVAILABLE: "The schedule lock could not be acquired",

@@ -57,7 +57,10 @@ function setup() {
     findOne: jest.fn(async (entity: unknown, { where }: Row) => (entity === BlockedTimeEntity ? copy(blocks.get(where.id)) : null)),
   };
 
+  // Connection of the open transaction: withLockTimeout sends its SET LOCK_TIMEOUT batches here.
+  const batch = jest.fn(async (_sql: string) => undefined);
   const manager: Row = {
+    queryRunner: { isTransactionActive: true, databaseConnection: { request: () => ({ batch }) } },
     findOne: jest.fn(async (entity: unknown, options: Row) => {
       if (entity === EmployeeEntity) {
         if (options.lock) order.push("lock:employee");
@@ -101,7 +104,7 @@ function setup() {
 
   const repository = { manager: readManager, createQueryBuilder: jest.fn() };
   const service = new BlockedTimeBusinessService(new PersistenceService(), dataSource as any, repository as any);
-  return { service, manager, dataSource, blocks, employees, users, confirmed };
+  return { service, manager, batch, dataSource, blocks, employees, users, confirmed };
 }
 
 beforeEach(() => {
@@ -239,5 +242,16 @@ describe("BlockedTimeBusinessService.delete", () => {
     expect(acquireEmployeeScheduleLock).not.toHaveBeenCalled();
     expect(order).toEqual(["lock:block", "delete"]);
     expect(t.blocks.has("B-1")).toBe(false);
+  });
+});
+
+describe("Blocked times under withLockTimeout", () => {
+  it("sets LOCK_TIMEOUT 5000 on the transaction connection before the first query of a block, and restores -1 after the save", async () => {
+    const t = setup();
+    await t.service.create(dto({ startAt: START, endAt: END, employeeId: "E-1" }), admin);
+    const queries = Object.values(t.manager).filter(jest.isMockFunction).flatMap(fn => fn.mock.invocationCallOrder);
+    expect(t.batch.mock.calls).toEqual([["SET LOCK_TIMEOUT 5000;"], ["SET LOCK_TIMEOUT -1;"]]);
+    expect(t.batch.mock.invocationCallOrder[0]).toBeLessThan(Math.min(...queries));
+    expect(t.batch.mock.invocationCallOrder[1]).toBeGreaterThan(Math.max(...queries));
   });
 });

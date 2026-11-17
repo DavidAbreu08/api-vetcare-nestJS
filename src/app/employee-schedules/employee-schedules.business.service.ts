@@ -4,6 +4,7 @@ import { Actor, sameId } from "../core/authorization";
 import { ErrorMetadata } from "../core/enums/error-metadata.enum";
 import { ReservationStatus } from "../core/enums/reservation-status.enum";
 import { applicationError } from "../core/exceptions/application-error";
+import { withLockTimeout } from "../core/persistence/lock-timeout";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { EmployeeEntity } from "../employees/entities/employee.entity";
 import { EmployeeMessage } from "../employees/employees.messages";
@@ -53,13 +54,14 @@ export class EmployeeSchedulesBusinessService {
    * the employee's open reservations (plain reads) -> delete + insert. A CONFIRMED reservation not yet finished that fits
    * the current schedule but would not fit the new one makes the request fail with 409 IN_USE (count in the message);
    * nothing is cancelled. PENDING reservations are not checked here: confirmation checks them against the schedule.
+   * Runs under withLockTimeout (lock waits capped at CRITICAL_LOCK_TIMEOUT_MS; 1222 -> 409).
    */
   async replace(employeeId: string, dto: ReplaceEmployeeSchedulesDto) {
     const periods: SchedulePeriod[] = dto.periods.map(period => ({
       dayOfWeek: period.dayOfWeek, startTime: period.startTime, endTime: period.endTime, validFrom: period.validFrom, validUntil: period.validUntil ?? null,
     }));
     validateSchedule(periods);
-    const rows = await this.persistence.execute(() => this.dataSource.transaction(async manager => {
+    const rows = await this.persistence.execute(() => this.dataSource.transaction(transactional => withLockTimeout(transactional, async manager => {
       const employee = await manager.findOne(EmployeeEntity, { where: { id: employeeId }, lock: { mode: "pessimistic_write" } });
       if (!employee) throw applicationError(ErrorMetadata.NOT_FOUND, EmployeeMessage.NotFound);
       await acquireEmployeeScheduleLock(manager, employee.id);
@@ -72,7 +74,7 @@ export class EmployeeSchedulesBusinessService {
       await manager.delete(EmployeeScheduleEntity, { employeeId: employee.id });
       if (periods.length) await manager.insert(EmployeeScheduleEntity, periods.map(period => ({ ...period, employeeId: employee.id })));
       return this.rows(manager, employee.id);
-    }));
+    })));
     return rows.map(serializeSchedule);
   }
 }

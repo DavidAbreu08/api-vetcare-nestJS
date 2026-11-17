@@ -62,7 +62,7 @@ export class ReservationController {
   }
 
   @Post(":id/confirm")
-  @ApiOperation({ summary: "Confirm a reservation", description: "Reads are scoped to the client or assigned employee; administrators can read all reservations. Actions enforce reservation state and user permissions." })
+  @ApiOperation({ summary: "Confirm a reservation", description: "Reads are scoped to the client or assigned employee; administrators can read all reservations. Actions enforce reservation state and user permissions. 409 when the reservation already has a clinical visit (voided included)." })
   @ApiOkResponse({ description: "Reservation projected for the caller (createdBy/createdBySelf included).", type: ReservationResponseDto })
   @ApiParam({ name: "id", description: "UUID identifier", schema: { type: "string", format: "uuid" } })
   @HttpCode(HttpStatus.OK)
@@ -72,7 +72,7 @@ export class ReservationController {
   }
 
   @Post(":id/reschedule")
-  @ApiOperation({ summary: "Reschedule a reservation", description: "Reads are scoped to the client or assigned employee; administrators can read all reservations. Actions enforce reservation state and user permissions. Without endAt the reservation keeps its current duration; an assigned employee must still be qualified for its service." })
+  @ApiOperation({ summary: "Reschedule a reservation", description: "Reads are scoped to the client or assigned employee; administrators can read all reservations. Actions enforce reservation state and user permissions. Without endAt the reservation keeps its current duration; an assigned employee must still be qualified for its service. 409 when the reservation already has a clinical visit (voided included)." })
   @ApiOkResponse({ description: "Reservation projected for the caller (createdBy/createdBySelf included).", type: ReservationResponseDto })
   @ApiParam({ name: "id", description: "UUID identifier", schema: { type: "string", format: "uuid" } })
   @HttpCode(HttpStatus.OK)

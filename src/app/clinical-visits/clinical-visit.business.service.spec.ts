@@ -1,13 +1,16 @@
 import { BadRequestException, ConflictException, ForbiddenException } from "@nestjs/common";
 import { QueryFailedError } from "typeorm";
 import { Actor, sameId } from "../core/authorization";
+import { ErrorMetadata } from "../core/enums/error-metadata.enum";
 import { ReservationStatus } from "../core/enums/reservation-status.enum";
+import { PersistenceMessage } from "../core/persistence/persistence.messages";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { EmployeeEntity } from "../employees/entities/employee.entity";
 import { AnimalEntity } from "../animal/entities/animal.entity";
 import { ReservationEntity } from "../reservation/entities/reservation.entity";
 import { ReservationHistoryAction } from "../reservation-history/enums/reservation-history-action.enum";
 import { ClinicalVisitBusinessService } from "./clinical-visit.business.service";
+import { ClinicalVisitMessage } from "./clinical-visit.messages";
 import { ClinicalVisitEntity } from "./entities/clinical-visit.entity";
 import { ClinicalVisitStatus } from "./enums/clinical-visit-status.enum";
 
@@ -36,7 +39,10 @@ function setup() {
       .map(r => ({ animalId: r.animalId }));
     return qb;
   });
+  // Connection of the open transaction: withLockTimeout sends its SET LOCK_TIMEOUT batches here.
+  const batch = jest.fn(async (_sql: string) => undefined);
   const manager: any = {
+    queryRunner: { isTransactionActive: true, databaseConnection: { request: () => ({ batch }) } },
     findOne: jest.fn(async (entity: unknown, { where }: any) => {
       if (entity === ReservationEntity) return reservations.has(where.id) ? { ...reservations.get(where.id) } : null;
       if (entity === ClinicalVisitEntity) return visits.has(where.id) ? { ...visits.get(where.id) } : null;
@@ -73,7 +79,7 @@ function setup() {
     reservationId: null, animalId: "CAT", employeeId: "E-1", status: ClinicalVisitStatus.IN_PROGRESS,
     startedAt: new Date(Date.now() - 60_000), endedAt: null, clinicalNotes: "secret notes", voidReason: null, voidedBy: null, ...row,
   });
-  return { business, manager, history, reservations, visits, addReservation, addVisit, reservationQueryBuilder, tutors, access };
+  return { business, manager, batch, history, reservations, visits, addReservation, addVisit, reservationQueryBuilder, tutors, access };
 }
 
 describe("ClinicalVisitBusinessService.start", () => {
@@ -158,11 +164,52 @@ describe("One IN_PROGRESS visit per animal (decision 27)", () => {
   it("keeps the generic duplicate message for other unique indexes", async () => {
     const t = setup();
     t.manager.save.mockRejectedValueOnce(Object.assign(new QueryFailedError("INSERT", [], new Error("dup")), {
-      driverError: { number: 2601, message: "Cannot insert duplicate key row in object 'dbo.vc_clinical_visits' with unique index 'uq_vc_clinical_visits_reservation_id'." },
+      driverError: { number: 2601, message: "Cannot insert duplicate key row in object 'dbo.vc_clinical_visits' with unique index 'uq_vc_clinical_visits_id_animal'." },
     }));
     const error = await t.business.start({ animalId: "CAT" }, vet1).catch(e => e);
     expect(error).toBeInstanceOf(ConflictException);
     expect(error.getResponse()).not.toMatchObject({ code: "ANIMAL_VISIT_IN_PROGRESS" });
+    expect(error.getResponse()).toMatchObject({ message: PersistenceMessage.Duplicate });
+    expect(error.getResponse()).not.toHaveProperty("code");
+  });
+});
+
+describe("One clinical visit per reservation (concurrent start)", () => {
+  it("maps a 2601 violation of uq_vc_clinical_visits_reservation_id to 409 with the reservation message", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    t.manager.save.mockRejectedValueOnce({
+      number: 2601,
+      message: "Cannot insert duplicate key row in object 'dbo.vc_clinical_visits' with unique index 'uq_vc_clinical_visits_reservation_id'. The duplicate key value is (R-1).",
+    });
+    const error = await t.business.start({ reservationId: "R-1" }, vet1).catch(e => e);
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getResponse()).toMatchObject({ code: "RESERVATION_HAS_VISIT", message: ClinicalVisitMessage.ReservationHasVisit });
+  });
+
+  it("maps a 2627 violation (UNIQUE KEY wording) of uq_vc_clinical_visits_reservation_id to the same 409", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    t.manager.save.mockRejectedValueOnce({
+      number: 2627,
+      message: "Violation of UNIQUE KEY constraint 'uq_vc_clinical_visits_reservation_id'. Cannot insert duplicate key in object 'dbo.vc_clinical_visits'.",
+    });
+    const error = await t.business.start({ reservationId: "R-1" }, vet1).catch(e => e);
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getResponse()).toMatchObject({ code: "RESERVATION_HAS_VISIT", message: ClinicalVisitMessage.ReservationHasVisit });
+  });
+
+  it("does not map a 2601 violation of another unique index to the reservation message (the original error is rethrown)", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    t.manager.save.mockRejectedValueOnce({
+      number: 2601,
+      message: "Cannot insert duplicate key row in object 'dbo.vc_clinical_visits' with unique index 'uq_outro'. The duplicate key value is (R-1).",
+    });
+    const error = await t.business.start({ reservationId: "R-1" }, vet1).catch(e => e);
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getResponse()).not.toMatchObject({ code: "RESERVATION_HAS_VISIT" });
+    expect(error.getResponse()).toMatchObject({ message: PersistenceMessage.Duplicate, errorMetadata: ErrorMetadata.ALREADY_EXISTS });
   });
 });
 
@@ -194,6 +241,20 @@ describe("ClinicalVisitBusinessService.complete and void", () => {
     expect(t.history.record).toHaveBeenCalledWith(t.manager, expect.objectContaining({
       reservationId: "R-1", action: ReservationHistoryAction.COMPLETED, newData: expect.objectContaining({ clinicalVisitId: "V-1" }),
     }));
+  });
+
+  it("updates the visit before the reservation (the reservation trigger requires a COMPLETED visit)", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    t.addVisit({ id: "V-1", reservationId: "R-1" });
+    await t.business.complete("V-1", {}, vet1);
+    const calls: any[][] = t.manager.update.mock.calls;
+    const order: number[] = t.manager.update.mock.invocationCallOrder;
+    const visitIndex = calls.findIndex(([entity, , changes]) => entity === ClinicalVisitEntity && changes.status === ClinicalVisitStatus.COMPLETED);
+    const reservationIndex = calls.findIndex(([entity, , changes]) => entity === ReservationEntity && changes.status === ReservationStatus.COMPLETED);
+    expect(visitIndex).toBeGreaterThanOrEqual(0);
+    expect(reservationIndex).toBeGreaterThanOrEqual(0);
+    expect(order[visitIndex]).toBeLessThan(order[reservationIndex]);
   });
 
   it("voids only for an admin with a justification", async () => {
@@ -262,5 +323,16 @@ describe("Clinical record follows the animal across tutors (decision 13)", () =>
     expect(t.access.isActiveTutor).toHaveBeenCalledWith("CAT", "CARLA");
     // OWNER stopped being a tutor of CAT: no access to its clinical history any more.
     await expect(t.business.get("V-1", owner)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+describe("Critical transactions run under withLockTimeout", () => {
+  it("sets LOCK_TIMEOUT 5000 on the transaction connection before the first query of a visit start, and restores -1 after the insert", async () => {
+    const t = setup();
+    await t.business.start({ animalId: "DOG" }, vet2);
+    const queries = Object.values(t.manager).filter(jest.isMockFunction).flatMap(fn => fn.mock.invocationCallOrder);
+    expect(t.batch.mock.calls).toEqual([["SET LOCK_TIMEOUT 5000;"], ["SET LOCK_TIMEOUT -1;"]]);
+    expect(t.batch.mock.invocationCallOrder[0]).toBeLessThan(Math.min(...queries));
+    expect(t.batch.mock.invocationCallOrder[1]).toBeGreaterThan(Math.max(...queries));
   });
 });

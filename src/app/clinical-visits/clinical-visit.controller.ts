@@ -29,7 +29,7 @@ export class ClinicalVisitController {
   get(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() actor: Actor) { return this.service.get(id, actor); }
 
   @Post()
-  @ApiOperation({ summary: "Start a clinical visit", description: "The service checks clinical responsibility and animal ownership. Clinical changes require an authorized employee or administrator." })
+  @ApiOperation({ summary: "Start a clinical visit", description: "The service checks clinical responsibility and animal ownership. Clinical changes require an authorized employee or administrator. 409 when the reservation already has a clinical visit (voided included)." })
   @Roles(SystemRole.ADMIN, SystemRole.EMPLOYEE)
   start(@Body() dto: CreateClinicalVisitDto, @CurrentUser() actor: Actor) { return this.service.start(dto, actor); }
 

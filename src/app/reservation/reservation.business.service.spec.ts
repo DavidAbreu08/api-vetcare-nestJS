@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, ValidationPipe } from "@nestjs/common";
+import { ClinicalVisitEntity } from "../clinical-visits/entities/clinical-visit.entity";
 import { ClinicalVisitStatus } from "../clinical-visits/enums/clinical-visit-status.enum";
 import { Actor, sameId } from "../core/authorization";
 import { ReservationStatus } from "../core/enums/reservation-status.enum";
@@ -19,6 +20,7 @@ import { assertTransition } from "./reservation-policy";
 import { ReservationBusinessService } from "./reservation.business.service";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
 import { ListReservationsQueryDto } from "./dto/list-reservations-query.dto";
+import { ReservationMessages } from "./reservation.messages";
 
 // Monday 2030-01-07, 10:00-10:30 in Lisbon (UTC in winter).
 const START = "2030-01-07T10:00:00Z";
@@ -51,8 +53,10 @@ function setup() {
   const services: Record<string, any> = { SVC: { id: "SVC", code: "CONSULTATION", name: "Consultation", durationMinutes: 30, isActive: true } };
   const qualifications = new Set<string>(["E-1:SVC", "E-2:SVC", "E-ANA:SVC"]);
 
+  // Connection of the open transaction: withLockTimeout sends its SET LOCK_TIMEOUT batches here.
+  const batch = jest.fn(async (_sql: string) => undefined);
   const manager: any = {
-    queryRunner: { isTransactionActive: true },
+    queryRunner: { isTransactionActive: true, databaseConnection: { request: () => ({ batch }) } },
     query: jest.fn(async () => [{ result: 0 }]),
     findOne: jest.fn(async (entity: unknown, { where }: any) => {
       if (entity === ReservationEntity) return reservations.has(where.id) ? { ...reservations.get(where.id) } : null;
@@ -127,7 +131,7 @@ function setup() {
     });
   };
   const actions = () => history.record.mock.calls.map((call: any[]) => call[1].action);
-  return { business, manager, history, settings, membership, reservations, visits, queryBuilders, otherBuilders, state, addReservation, actions, accounts, pets, employees, access, secondary, services, qualifications };
+  return { business, manager, batch, history, settings, membership, reservations, visits, queryBuilders, otherBuilders, state, addReservation, actions, accounts, pets, employees, access, secondary, services, qualifications };
 }
 
 afterEach(() => jest.restoreAllMocks());
@@ -142,6 +146,15 @@ describe("ReservationBusinessService.create", () => {
       clientId: "ANA", employeeId: null, status: ReservationStatus.PENDING, startAt, endAt, confirmedAt: null,
     }));
     expect(t.actions()).toEqual([ReservationHistoryAction.CREATED]);
+  });
+
+  it("runs the booking under withLockTimeout: SET LOCK_TIMEOUT 5000 before the first query and -1 after the insert", async () => {
+    const t = setup();
+    await t.business.create(dto, ana);
+    const queries = Object.values(t.manager).filter(jest.isMockFunction).flatMap(fn => fn.mock.invocationCallOrder);
+    expect(t.batch.mock.calls).toEqual([["SET LOCK_TIMEOUT 5000;"], ["SET LOCK_TIMEOUT -1;"]]);
+    expect(t.batch.mock.invocationCallOrder[0]).toBeLessThan(Math.min(...queries));
+    expect(t.batch.mock.invocationCallOrder[1]).toBeGreaterThan(Math.max(...queries));
   });
 
   it("books an employee's own animal through the client path, even with ownerId equal to herself", async () => {
@@ -227,6 +240,20 @@ describe("ReservationBusinessService.confirm", () => {
     expect(t.actions()).toEqual([ReservationHistoryAction.CONFIRMED]);
   });
 
+  it("refuses to confirm when the reservation has a VOIDED visit (409 HAS_CLINICAL_VISIT) without applock or write", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1", employeeId: "E-1" });
+    t.visits.push({ reservationId: "R-1", status: ClinicalVisitStatus.VOIDED });
+    await expect(t.business.confirm("R-1", {}, admin)).rejects.toMatchObject({
+      status: 409, response: { code: "RESERVATION_HAS_VISIT", message: ReservationMessages.HAS_CLINICAL_VISIT },
+    });
+    // Counted without a status filter, so the VOIDED visit is seen.
+    expect(t.manager.count).toHaveBeenCalledWith(ClinicalVisitEntity, { where: { reservationId: "R-1" } });
+    expect(t.manager.query).not.toHaveBeenCalled();
+    expect(t.manager.update).not.toHaveBeenCalled();
+    expect(t.history.record).not.toHaveBeenCalled();
+  });
+
   it("rejects an overlap with another confirmed reservation (409) without writing", async () => {
     const t = setup();
     t.addReservation({ id: "R-1", employeeId: "E-1" });
@@ -248,13 +275,37 @@ describe("ReservationBusinessService.reschedule", () => {
     expect(event).toMatchObject({ action: ReservationHistoryAction.RESCHEDULED, reason: "client asked", oldData: { status: "CONFIRMED", startAt: startAt.toISOString() } });
   });
 
-  it("is blocked by an active visit but not by a VOIDED one", async () => {
+  it("is blocked by an active visit and, under R1, by a VOIDED one too", async () => {
     const t = setup();
     t.addReservation({ id: "R-1", status: ReservationStatus.CONFIRMED, employeeId: "E-1", confirmedAt: new Date() });
     t.visits.push({ reservationId: "R-1", status: ClinicalVisitStatus.IN_PROGRESS });
     await expect(t.business.reschedule("R-1", dto, admin)).rejects.toBeInstanceOf(ConflictException);
     t.visits[0].status = ClinicalVisitStatus.VOIDED;
-    await expect(t.business.reschedule("R-1", dto, admin)).resolves.toBeDefined();
+    await expect(t.business.reschedule("R-1", dto, admin)).rejects.toMatchObject({
+      status: 409, response: { code: "RESERVATION_HAS_VISIT", message: ReservationMessages.HAS_CLINICAL_VISIT },
+    });
+    expect(t.manager.update).not.toHaveBeenCalled();
+  });
+
+  it("refuses to reschedule a CONFIRMED reservation with a VOIDED visit (409 HAS_CLINICAL_VISIT) without writing", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1", status: ReservationStatus.CONFIRMED, employeeId: "E-1", confirmedAt: new Date() });
+    t.visits.push({ reservationId: "R-1", status: ClinicalVisitStatus.VOIDED });
+    await expect(t.business.reschedule("R-1", dto, admin)).rejects.toMatchObject({
+      status: 409, response: { code: "RESERVATION_HAS_VISIT", message: ReservationMessages.HAS_CLINICAL_VISIT },
+    });
+    expect(t.manager.update).not.toHaveBeenCalled();
+    expect(t.history.record).not.toHaveBeenCalled();
+  });
+
+  it("refuses to reschedule a PENDING reservation with a VOIDED visit (409 HAS_CLINICAL_VISIT)", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    t.visits.push({ reservationId: "R-1", status: ClinicalVisitStatus.VOIDED });
+    await expect(t.business.reschedule("R-1", dto, admin)).rejects.toMatchObject({
+      status: 409, response: { code: "RESERVATION_HAS_VISIT", message: ReservationMessages.HAS_CLINICAL_VISIT },
+    });
+    expect(t.manager.update).not.toHaveBeenCalled();
   });
 });
 
@@ -358,6 +409,29 @@ describe("ReservationBusinessService.cancel", () => {
     await expect(t.business.cancel("R-1", {}, admin)).rejects.toBeInstanceOf(ConflictException);
   });
 
+  it("lets a CONFIRMED reservation whose only visit is VOIDED be cancelled (the cancel check counts active visits only)", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1", status: ReservationStatus.CONFIRMED, employeeId: "E-1", confirmedAt: new Date() });
+    t.visits.push({ reservationId: "R-1", status: ClinicalVisitStatus.VOIDED });
+    await t.business.cancel("R-1", {}, admin);
+    expect(t.reservations.get("R-1")).toMatchObject({ status: ReservationStatus.CANCELLED });
+    const visitCounts = t.manager.count.mock.calls.filter(([entity]: any[]) => entity === ClinicalVisitEntity);
+    expect(visitCounts).toHaveLength(1);
+    const [, activeOnly] = visitCounts[0];
+    expect(activeOnly.where.status.value).toEqual([ClinicalVisitStatus.IN_PROGRESS, ClinicalVisitStatus.COMPLETED]);
+    // The count double answers 1 without a status filter and 0 with it, so counting every visit would have blocked this cancel.
+    expect(await t.manager.count(ClinicalVisitEntity, { where: { reservationId: "R-1" } })).toBe(1);
+    expect(await t.manager.count(ClinicalVisitEntity, activeOnly)).toBe(0);
+  });
+
+  it("keeps refusing to cancel during an IN_PROGRESS visit (409 VISIT_STARTED)", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1", status: ReservationStatus.CONFIRMED, employeeId: "E-1", confirmedAt: new Date() });
+    t.visits.push({ reservationId: "R-1", status: ClinicalVisitStatus.IN_PROGRESS });
+    await expect(t.business.cancel("R-1", {}, admin)).rejects.toMatchObject({ status: 409, response: { message: ReservationMessages.VISIT_STARTED } });
+    expect(t.manager.update).not.toHaveBeenCalled();
+  });
+
   it("refuses a non-admin after the start (409) but lets an admin cancel", async () => {
     const t = setup();
     t.addReservation({ id: "R-1" });
@@ -396,6 +470,17 @@ describe("ReservationBusinessService.markNoShow", () => {
     jest.spyOn(Date, "now").mockReturnValue(startAt.getTime() + 16 * MINUTE);
     await t.business.markNoShow("R-1", {}, admin);
     expect(t.reservations.get("R-1").status).toBe(ReservationStatus.NO_SHOW);
+  });
+
+  it("lets a CONFIRMED reservation whose only visit is VOIDED be marked as no-show after the tolerance", async () => {
+    const t = setup();
+    t.addReservation(confirmed);
+    t.visits.push({ reservationId: "R-1", status: ClinicalVisitStatus.VOIDED });
+    jest.spyOn(Date, "now").mockReturnValue(startAt.getTime() + 16 * MINUTE);
+    await t.business.markNoShow("R-1", {}, admin);
+    expect(t.reservations.get("R-1").status).toBe(ReservationStatus.NO_SHOW);
+    // The active-visit check filters by status, so the VOIDED visit is not counted.
+    expect(t.manager.count).toHaveBeenCalledWith(ClinicalVisitEntity, { where: { reservationId: "R-1", status: expect.anything() } });
   });
 });
 

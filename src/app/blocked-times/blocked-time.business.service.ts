@@ -4,6 +4,7 @@ import { DataSource, EntityManager, Repository } from "typeorm";
 import { Actor, sameId } from "../core/authorization";
 import { ErrorMetadata } from "../core/enums/error-metadata.enum";
 import { applicationError } from "../core/exceptions/application-error";
+import { withLockTimeout } from "../core/persistence/lock-timeout";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { utcInstantParam, uuidParam } from "../core/persistence/sql-params";
 import { parseInstant } from "../core/persistence/utc-datetime";
@@ -57,8 +58,9 @@ export class BlockedTimeBusinessService {
     @InjectRepository(BlockedTimeEntity) private readonly blockedTimeRepository: Repository<BlockedTimeEntity>,
   ) {}
 
+  /** Runs under withLockTimeout (lock waits capped at CRITICAL_LOCK_TIMEOUT_MS; 1222 -> 409). */
   private transaction<T>(work: (manager: EntityManager) => Promise<T>): Promise<T> {
-    return this.persistence.execute(() => this.dataSource.transaction(work));
+    return this.persistence.execute(() => this.dataSource.transaction(manager => withLockTimeout(manager, work)));
   }
 
   /** Blocks intersecting [from, to), optionally the individual blocks of one employee; ordered by start. */

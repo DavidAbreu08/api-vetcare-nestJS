@@ -8,6 +8,8 @@ import { ClinicalVisitStatus } from "../enums/clinical-visit-status.enum";
 
 /** Filtered unique index: one IN_PROGRESS visit per animal. */
 export const CLINICAL_VISIT_ANIMAL_IN_PROGRESS_INDEX = "uq_vc_clinical_visits_animal_in_progress";
+/** Filtered unique index: at most one clinical visit per reservation, VOIDED included. */
+export const CLINICAL_VISIT_RESERVATION_INDEX = "uq_vc_clinical_visits_reservation_id";
 
 /**
  * Clinical attendance of an animal, optionally originated by a reservation of the same animal
@@ -15,7 +17,7 @@ export const CLINICAL_VISIT_ANIMAL_IN_PROGRESS_INDEX = "uq_vc_clinical_visits_an
  */
 @Entity("vc_clinical_visits")
 @Unique("uq_vc_clinical_visits_id_animal", ["id", "animalId"])
-@Index("uq_vc_clinical_visits_reservation_id", ["reservationId"], { unique: true, where: "[reservation_id] IS NOT NULL" })
+@Index(CLINICAL_VISIT_RESERVATION_INDEX, ["reservationId"], { unique: true, where: "[reservation_id] IS NOT NULL" })
 @Index("ix_vc_clinical_visits_animal_started", ["animalId", "startedAt"])
 @Index("ix_vc_clinical_visits_employee_started", ["employeeId", "startedAt"])
 @Index("ix_vc_clinical_visits_voided_by", ["voidedBy"])

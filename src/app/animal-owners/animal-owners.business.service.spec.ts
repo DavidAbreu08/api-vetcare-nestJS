@@ -51,7 +51,10 @@ function setup() {
   });
   const sorted = (list: Row[]) => [...list].sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary));
 
+  // Connection of the open transaction: withLockTimeout sends its SET LOCK_TIMEOUT batches here.
+  const batch = jest.fn(async (_sql: string) => undefined);
   const manager: any = {
+    queryRunner: { isTransactionActive: true, databaseConnection: { request: () => ({ batch }) } },
     findOne: jest.fn(async (entity: unknown, { where, lock }: any) => {
       if (lock) log.push(`lock:${(entity as any).name}:${where.id}`);
       if (entity === AnimalEntity) return animals[where.id] && !animals[where.id].deletedAt ? { ...animals[where.id] } : null;
@@ -112,7 +115,7 @@ function setup() {
   });
   const active = () => rows.filter(row => !row.endedAt).map(row => `${row.userId}:${row.isPrimary ? "P" : "S"}`).sort();
   const addSecondary = (userId: string) => rows.push({ id: `O-${userId}`, animalId: "CAT", userId, isPrimary: false, assignedAt: new Date("2020-01-02T00:00:00Z"), endedAt: null, endedBy: null, endReason: null });
-  return { business, access, manager, rows, animals, accounts, clients, reservations, log, history, membership, failNextInsert, addReservation, active, addSecondary };
+  return { business, access, manager, batch, rows, animals, accounts, clients, reservations, log, history, membership, failNextInsert, addReservation, active, addSecondary };
 }
 
 afterEach(() => jest.restoreAllMocks());
@@ -497,5 +500,16 @@ describe("Tutorship DTOs (project ValidationPipe)", () => {
     await expect(parse(TransferAnimalDto, { newPrimaryUserId: id, keepPreviousAsSecondary: true, transferFutureReservations: true, reason: "x" })).resolves.toBeInstanceOf(TransferAnimalDto);
     await expect(parse(TransferAnimalDto, { newPrimaryUserId: "bob" })).rejects.toBeInstanceOf(BadRequestException);
     await expect(parse(TransferAnimalDto, { newPrimaryUserId: id, ownerId: id })).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe("Tutorship changes under withLockTimeout", () => {
+  it("sets LOCK_TIMEOUT 5000 on the transaction connection before the animal lock, and restores -1 after the tutor insert", async () => {
+    const t = setup();
+    await t.business.add("CAT", { userId: "BOB" }, ana);
+    const animalLock = t.manager.findOne.mock.invocationCallOrder[t.manager.findOne.mock.calls.findIndex(([entity, options]: any[]) => entity === AnimalEntity && options.lock)];
+    expect(t.batch.mock.calls).toEqual([["SET LOCK_TIMEOUT 5000;"], ["SET LOCK_TIMEOUT -1;"]]);
+    expect(t.batch.mock.invocationCallOrder[0]).toBeLessThan(animalLock);
+    expect(t.batch.mock.invocationCallOrder[1]).toBeGreaterThan(t.manager.insert.mock.invocationCallOrder[0]);
   });
 });

@@ -108,9 +108,9 @@ Order of operations:
 
 UTC columns: with `useUTC:false` the driver uses the process-local wall clock, so the entities use a transformer that sends and reads the UTC wall clock. **Running the Node process in UTC is mandatory**: `src/force-utc.ts` sets `process.env.TZ = "UTC"` and must remain the first import of `src/main.ts`, `src/database/data-source.ts` and `src/database/seed-admin.ts` (any new entry point must import it first). The transformer then is the identity; if the process ever ran in another timezone, a UTC wall clock inside its spring-forward gap would be rejected (400) instead of shifted. Columns written by the application from a `Date` (outside SQL defaults) are therefore UTC wall clock; `created_at`/`updated_at` keep `SYSDATETIME()` of the SQL Server. Reports must read the UTC columns as UTC.
 
-Rules kept in the backend (not expressible as row checks): COMPLETED only through visit completion, no-show tolerance, overlap with buffer (applock), cancellation/reschedule/no-show blocked by an IN_PROGRESS or COMPLETED visit, the visit's employee being active, notes immutability after completion.
+Rules kept in the backend (not expressible as row checks; the visit-status rules of `ClinicalIntegrity1795780800000` are also enforced by triggers, see its section): COMPLETED only through visit completion, no-show tolerance, overlap with buffer (applock), confirmation and reschedule blocked by any visit (VOIDED included), cancellation and no-show blocked by an IN_PROGRESS or COMPLETED visit, the visit's employee being active, notes immutability after completion.
 
-A VOIDED visit does not hold its reservation (it can still be rescheduled, cancelled or marked as no-show), but `uq_vc_clinical_visits_reservation_id` also covers VOIDED rows, so no new visit can be started for that reservation; a new attendance needs a new reservation or a visit without reservation.
+A VOIDED visit does not block cancellation or no-show (the triggers and the application block those only for IN_PROGRESS and COMPLETED visits), but confirmation and reschedule are blocked by any visit, VOIDED included (application rule). `uq_vc_clinical_visits_reservation_id` also covers VOIDED rows, so no new visit can be started for that reservation; a new attendance needs a new reservation or a visit without reservation.
 
 Pending (not implemented): audit trail of `clinical_notes` changes on IN_PROGRESS visits (only the final state and void metadata are kept).
 
@@ -270,3 +270,36 @@ Steps:
 6. `start_at` and `end_at` become datetime2(3) NOT NULL. The legacy columns become NULL-able through ALTER COLUMN, each re-declared with the type written in the migration and NULL: `date` datetime, `time_start` nvarchar(255), `time_end` nvarchar(255), `start` datetime and `end` datetime. This is non-destructive and drops no data. The legacy columns are deprecated (no longer written or read) and this migration never drops them; dropping them needs a future, approved migration.
 7. `ALTER TABLE ... WITH CHECK` adds `ck_vc_blocked_times_interval` (`end_at` > `start_at`), `fk_vc_blocked_times_employee` (`employee_id`) -> `vc_employees` (`id`) and `fk_vc_blocked_times_created_by` (`created_by`) -> `vc_users` (`id`), with no cascade. In the same batch: `ix_vc_blocked_times_start_end` on (`start_at`, `end_at`) INCLUDE (`employee_id`) and `ix_vc_blocked_times_employee_start` on (`employee_id`, `start_at`) INCLUDE (`end_at`).
 8. Final verification (51099, message `vc_employee_schedules or vc_blocked_times is not in the expected final state.`): the three `vc_employee_schedules` checks exist and are trusted; `fk_vc_employee_schedules_employee` is trusted with no delete action; `ix_vc_employee_schedules_employee_day` exists; `ck_vc_blocked_times_interval` exists and is trusted; `fk_vc_blocked_times_employee` and `fk_vc_blocked_times_created_by` are trusted with no delete action; both `vc_blocked_times` indexes exist; `start_at` and `end_at` disallow NULL; `employee_id`, `created_by` and the five legacy columns allow NULL.
+
+# SQL Server schema: clinical integrity triggers
+
+`ClinicalIntegrity1795780800000` follows `SchedulesAndBlocks1795694400000`. It was not executed against any database during this work. It requires an active transaction (default `--transaction all`). It creates no table, column, row or index: it checks the existing data once and then adds two DML triggers, so reservations and clinical visits stay consistent even when a write does not go through the application's checks. `down` drops only those two triggers (each in its own batch, when they exist); no data is lost, but the guarantee is removed.
+
+Before any SQL, the migration checks in TypeScript (plain errors, without THROW codes) that the query runner has an active transaction and that `vc_reservations` and `vc_clinical_visits` exist (both created by `ReservationsAndClinicalVisits`).
+
+Preconditions (exclusive table locks, `TABLOCKX, HOLDLOCK`, on `vc_reservations` and `vc_clinical_visits` held until commit; THROW codes 51100–51103):
+
+- 51100: `Clinical integrity triggers already exist; review migration state.` It is raised when either trigger name already exists.
+- 51101: `vc_reservations or vc_clinical_visits is missing a required column or uq_vc_clinical_visits_reservation_id; review migration state.` It checks `status` on both tables, `reservation_id` and `animal_id` on `vc_clinical_visits`, and the unique index `uq_vc_clinical_visits_reservation_id`.
+- 51102: `vc_reservations has COMPLETED reservations without a COMPLETED clinical visit; fix them before this migration.`
+- 51103: `vc_reservations has CANCELLED, NO_SHOW or PENDING reservations with an IN_PROGRESS or COMPLETED clinical visit; fix them before this migration.`
+
+51102 and 51103 cover the rows that already exist, because the triggers only check rows inserted or changed after they are created. The migration does not correct such rows.
+
+Steps:
+
+1. `tr_vc_clinical_visits_reservation_integrity` on `vc_clinical_visits`, `AFTER INSERT, UPDATE`, alone in its batch (`CREATE TRIGGER` must be the first statement of a batch). It runs `SET NOCOUNT ON` and works on the whole `inserted` set, so multi-row statements are checked row by row. Its rules:
+   - UPDATE: `id`, `animal_id` and `reservation_id` cannot change (THROW 51104, `vc_clinical_visits.animal_id and reservation_id cannot be changed.`). The comparison is null-safe through `INTERSECT`, so a NULL that stays NULL is not a change, and the rule only runs when one of those columns is in the SET list (`UPDATE()`). An UPDATE of any other column, such as `status`, is not checked here.
+   - INSERT: a visit with a `reservation_id` needs that reservation to be `CONFIRMED` (THROW 51105, `A clinical visit can only be created for a CONFIRMED reservation.`). Walk-in visits (NULL `reservation_id`) are not checked.
+   - The reservation is read `WITH (READCOMMITTEDLOCK)`, so the check sees the latest committed row under READ_COMMITTED_SNAPSHOT (RCSI).
+2. `tr_vc_reservations_visit_integrity` on `vc_reservations`, `AFTER INSERT, UPDATE`, alone in its batch. After `SET NOCOUNT ON`, its first rule is `IF NOT UPDATE([status]) RETURN;`: a statement that does not write `status` skips both rules. This keeps it compatible with the tutor move (`CLIENT_CHANGED` writes only `client_id`) and with `service_id` and `created_by`, which the application never updates. A row is checked when it is inserted or when its status changes (the join with `deleted`). Its rules:
+   - A reservation can only become COMPLETED with a COMPLETED clinical visit (THROW 51106, `A reservation can only become COMPLETED with a COMPLETED clinical visit.`).
+   - A reservation with an IN_PROGRESS or COMPLETED visit cannot become CANCELLED, NO_SHOW or PENDING (THROW 51107, `A reservation with an IN_PROGRESS or COMPLETED clinical visit cannot become CANCELLED, NO_SHOW or PENDING.`). VOIDED visits are not checked by this rule.
+   - Visits are read `WITH (READCOMMITTEDLOCK)`, as in step 1. On INSERT a new reservation has no visit yet, so only an explicit COMPLETED status can fail.
+3. Final verification (THROW 51109, `The clinical integrity triggers are not in the expected final state.`): both triggers exist, are enabled, are not INSTEAD OF triggers, are on the expected tables and have exactly INSERT and UPDATE events, with no DELETE event. DELETE is not covered by design: the application has no DELETE route for reservations or clinical visits.
+
+Write compatibility: the application writes through TypeORM. Its mssql INSERT and UPDATE statements use `OUTPUT ... INTO @OutputTable` (`node_modules/typeorm/query-builder/InsertQueryBuilder.js:95-96`, `UpdateQueryBuilder.js:77-78` and the `INTO @OutputTable` clause in `QueryBuilder.js:638`, TypeORM 0.3.20). SQL Server accepts an OUTPUT clause with INTO on a table with enabled triggers, and rejects one without INTO (Msg 334).
+
+Application order (mandatory, see `API_ORGANIZATION.md`, Lock order): `complete()` updates the visit to COMPLETED before the reservation, because the reservation trigger reads the visit inside the same transaction.
+
+`down` drops `tr_vc_reservations_visit_integrity` and then `tr_vc_clinical_visits_reservation_integrity`, each only when it exists and each in its own batch. Tables, columns, rows and `uq_vc_clinical_visits_reservation_id` are untouched.

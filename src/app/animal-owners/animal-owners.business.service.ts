@@ -5,6 +5,7 @@ import { DataSource, EntityManager, IsNull } from "typeorm";
 import { AnimalEntity } from "../animal/entities/animal.entity";
 import { Actor, isStaff, requireAdmin, sameId } from "../core/authorization";
 import { SystemRole } from "../core/enums/system-role.enum";
+import { withLockTimeout } from "../core/persistence/lock-timeout";
 import { isUniqueViolationOf, PersistenceService } from "../core/persistence/persistence.service";
 import { findOpenReservations, OpenReservation, openReservationsConflict } from "../reservation/open-reservations";
 import { ReservationEntity } from "../reservation/entities/reservation.entity";
@@ -73,8 +74,9 @@ export class AnimalOwnersBusinessService {
     private readonly history: ReservationHistoryService,
   ) {}
 
+  /** Runs under withLockTimeout (lock waits capped at CRITICAL_LOCK_TIMEOUT_MS; 1222 -> 409). */
   private transaction<T>(work: (manager: EntityManager) => Promise<T>): Promise<T> {
-    return this.persistence.execute(() => this.dataSource.transaction(work));
+    return this.persistence.execute(() => this.dataSource.transaction(manager => withLockTimeout(manager, work)));
   }
 
   private async requireAnimal(animalId: string): Promise<void> {

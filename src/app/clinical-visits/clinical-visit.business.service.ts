@@ -6,6 +6,7 @@ import { DataSource, EntityManager, Repository } from "typeorm";
 import { AnimalEntity } from "../animal/entities/animal.entity";
 import { Actor, sameId } from "../core/authorization";
 import { ReservationStatus } from "../core/enums/reservation-status.enum";
+import { withLockTimeout } from "../core/persistence/lock-timeout";
 import { isUniqueViolationOf, PersistenceService } from "../core/persistence/persistence.service";
 import { isActiveEmployee } from "../employees/employee-status";
 import { EmployeeEntity } from "../employees/entities/employee.entity";
@@ -14,7 +15,7 @@ import { ReservationHistoryAction } from "../reservation-history/enums/reservati
 import { ReservationHistoryService, reservationSnapshot } from "../reservation-history/reservation-history.service";
 import { assertTransition } from "../reservation/reservation-policy";
 import { CompleteClinicalVisitDto, CreateClinicalVisitDto, ListClinicalVisitsQueryDto, UpdateClinicalVisitDto, VoidClinicalVisitDto } from "./dto/clinical-visit.dto";
-import { CLINICAL_VISIT_ANIMAL_IN_PROGRESS_INDEX, ClinicalVisitEntity } from "./entities/clinical-visit.entity";
+import { CLINICAL_VISIT_ANIMAL_IN_PROGRESS_INDEX, CLINICAL_VISIT_RESERVATION_INDEX, ClinicalVisitEntity } from "./entities/clinical-visit.entity";
 import { ClinicalVisitStatus } from "./enums/clinical-visit-status.enum";
 import { ClinicalVisitMessage } from "./clinical-visit.messages";
 import { serializeClinicalVisit } from "./clinical-visit.serializer";
@@ -46,8 +47,9 @@ export class ClinicalVisitBusinessService {
     private readonly access: AnimalAccessService,
   ) {}
 
+  /** Runs under withLockTimeout (lock waits capped at CRITICAL_LOCK_TIMEOUT_MS; 1222 -> 409). */
   private transaction<T>(work: (manager: EntityManager) => Promise<T>): Promise<T> {
-    return this.persistence.execute(() => this.dataSource.transaction(work));
+    return this.persistence.execute(() => this.dataSource.transaction(manager => withLockTimeout(manager, work)));
   }
 
   /** Active employee profile of the caller, or null. */
@@ -147,7 +149,8 @@ export class ClinicalVisitBusinessService {
    * Starts a visit. From a reservation: the reservation row is locked, must be CONFIRMED and without a visit,
    * and gives the animal (a different animalId is rejected; the composite FK enforces it in SQL too). Only the
    * employee assigned to the reservation or an administrator (who may name another responsible) can start it.
-   * Any existing visit, VOIDED included, blocks a new one (filtered unique index on reservation_id).
+   * Any existing visit, VOIDED included, blocks a new one (filtered unique index on reservation_id). A concurrent insert
+   * rejected by uq_vc_clinical_visits_reservation_id also returns 409 with the same message.
    * The animal row is then locked (UPDLOCK; not soft-deleted) and an animal may have only one IN_PROGRESS visit:
    * 409 (message only), also when the filtered unique index
    * uq_vc_clinical_visits_animal_in_progress rejects the insert (concurrent start).
@@ -167,7 +170,7 @@ export class ClinicalVisitBusinessService {
         }
         if (dto.animalId && !sameId(dto.animalId, reservation.animalId)) throw applicationError(ErrorMetadata.INVALID_VALUE, ClinicalVisitMessage.AnimalMismatch);
         if ((await manager.count(ClinicalVisitEntity, { where: { reservationId: reservation.id } })) > 0) {
-          throw applicationError(ErrorMetadata.CONFLICT, ClinicalVisitMessage.ReservationHasVisit);
+          throw applicationError(ErrorMetadata.CONFLICT, ClinicalVisitMessage.ReservationHasVisit, undefined, { code: "RESERVATION_HAS_VISIT" });
         }
         animalId = reservation.animalId;
         reservationId = reservation.id;
@@ -185,6 +188,7 @@ export class ClinicalVisitBusinessService {
           voidReason: null, voidedAt: null, voidedBy: null, completedBy: null,
         }));
       } catch (error) {
+        if (isUniqueViolationOf(error, CLINICAL_VISIT_RESERVATION_INDEX)) throw applicationError(ErrorMetadata.CONFLICT, ClinicalVisitMessage.ReservationHasVisit, undefined, { code: "RESERVATION_HAS_VISIT" });
         if (isUniqueViolationOf(error, CLINICAL_VISIT_ANIMAL_IN_PROGRESS_INDEX)) throw this.visitInProgressConflict();
         throw error;
       }

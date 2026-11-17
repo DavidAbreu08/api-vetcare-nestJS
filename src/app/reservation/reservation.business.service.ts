@@ -11,6 +11,7 @@ import { Actor, isStaff, sameId } from "../core/authorization";
 import { ListQueryDto } from "../core/dto/list-query.dto";
 import { ReservationStatus } from "../core/enums/reservation-status.enum";
 import { SystemRole } from "../core/enums/system-role.enum";
+import { withLockTimeout } from "../core/persistence/lock-timeout";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { parseInstant, toDbUtc } from "../core/persistence/utc-datetime";
 import { isBookableEmployee } from "../employees/employee-status";
@@ -88,8 +89,9 @@ export class ReservationBusinessService {
     private readonly access: AnimalAccessService,
   ) {}
 
+  /** Runs under withLockTimeout (lock waits capped at CRITICAL_LOCK_TIMEOUT_MS; 1222 -> 409). */
   private transaction<T>(work: (manager: EntityManager) => Promise<T>): Promise<T> {
-    return this.persistence.execute(() => this.dataSource.transaction(work));
+    return this.persistence.execute(() => this.dataSource.transaction(manager => withLockTimeout(manager, work)));
   }
 
   // ---------------------------------------------------------------- reads
@@ -234,11 +236,12 @@ export class ReservationBusinessService {
     return this.respond(id, actor);
   }
 
-  /** PENDING -> CONFIRMED: a bookable employee, a future slot inside their schedule, no block and no overlap under the applocks. */
+  /** PENDING -> CONFIRMED: a bookable employee, a future slot inside their schedule, no clinical visit (VOIDED included), no block and no overlap under the applocks. */
   async confirm(id: string, dto: ReservationReasonDto, actor: Actor) {
     const confirmed = await this.transaction(async manager => {
       const reservation = await this.lockReservation(manager, id);
       assertTransition(reservation.status, ReservationStatus.CONFIRMED);
+      if (await this.hasAnyVisit(manager, reservation.id)) throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.HAS_CLINICAL_VISIT, undefined, { code: "RESERVATION_HAS_VISIT" });
       if (!reservation.employeeId) throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.EMPLOYEE_REQUIRED, undefined, { code: "EMPLOYEE_REQUIRED" });
       validateReservationWindow(reservation.startAt, reservation.endAt);
       await this.requireBookingParties(manager, reservation.animalId, reservation.clientId);
@@ -259,7 +262,7 @@ export class ReservationBusinessService {
   }
 
   /**
-   * New interval for a PENDING or CONFIRMED reservation without a clinical visit. A CONFIRMED reservation returns to
+   * New interval for a PENDING or CONFIRMED reservation without any clinical visit (VOIDED included). A CONFIRMED reservation returns to
    * PENDING (confirmed_at cleared) and must be confirmed again; one RESCHEDULED event keeps old and new values.
    * Without endAt the reservation keeps its own (frozen) duration, end_at - start_at, not the current catalog duration;
    * the service is not re-read, so an inactive service does not block it. The assigned employee must still be qualified.
@@ -274,7 +277,7 @@ export class ReservationBusinessService {
       if (![ReservationStatus.PENDING, ReservationStatus.CONFIRMED].includes(reservation.status)) {
         throw applicationError(ErrorMetadata.CONFLICT, `Cannot reschedule a ${reservation.status} reservation`, undefined, { code: "INVALID_TRANSITION" });
       }
-      if (await this.hasActiveVisit(manager, reservation.id)) throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.VISIT_STARTED);
+      if (await this.hasAnyVisit(manager, reservation.id)) throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.HAS_CLINICAL_VISIT, undefined, { code: "RESERVATION_HAS_VISIT" });
       endAt = requestedEnd ?? new Date(startAt.getTime() + (reservation.endAt.getTime() - reservation.startAt.getTime()));
       validateReservationWindow(startAt, endAt);
       if (reservation.startAt.getTime() === startAt.getTime() && reservation.endAt.getTime() === endAt.getTime()) {
@@ -464,9 +467,14 @@ export class ReservationBusinessService {
     }
   }
 
-  /** IN_PROGRESS or COMPLETED visit; a VOIDED visit does not hold the reservation (cancel, reschedule, no-show). */
+  /** IN_PROGRESS or COMPLETED visit; a VOIDED visit does not hold the reservation (cancel, no-show). */
   private async hasActiveVisit(manager: EntityManager, reservationId: string) {
     return (await manager.count(ClinicalVisitEntity, { where: { reservationId, status: In(ACTIVE_VISIT_STATUSES) } })) > 0;
+  }
+
+  /** Any visit, VOIDED included (R1: blocks confirm and reschedule; the reservation row is already locked). */
+  private async hasAnyVisit(manager: EntityManager, reservationId: string) {
+    return (await manager.count(ClinicalVisitEntity, { where: { reservationId } })) > 0;
   }
 
   // ---------------------------------------------------------------- clients and animals

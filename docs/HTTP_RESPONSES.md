@@ -35,6 +35,19 @@ Existing Nest exceptions remain supported: their category is inferred from the H
 
 `PersistenceService.translate` centralizes SQL Server translation for both `execute` and the global filter. There is no second filter sending persistence responses separately.
 
+SQL Server errors with a fixed translation, besides the duplicate, reference and invalid-value cases of `API_ORGANIZATION.md` (`src/app/core/persistence/persistence.service.ts`):
+
+| SQL Server error | HTTP | friendlyMessage |
+| --- | --- | --- |
+| 1205 (deadlock victim) | 409 | The operation conflicted with a concurrent change; retry |
+| 1222 (lock request timeout; 5 s in critical transactions) | 409 | The operation waited too long for a concurrent change; retry |
+| 51104 (clinical visit animal or reservation changed) | 409 | The animal and reservation of a clinical visit cannot be changed |
+| 51105 (visit for a reservation that is not CONFIRMED) | 409 | A clinical visit can only be started for a confirmed reservation |
+| 51106 (reservation COMPLETED without a COMPLETED visit) | 409 | A reservation can only be completed through a completed clinical visit |
+| 51107 (reservation cancelled, no-show or pending with an active visit) | 409 | The reservation has an active clinical visit; it cannot be cancelled, marked as no-show or set back to pending |
+
+Msg 3616 can follow a trigger THROW (the migration notes that it may appear), and mssql reports the error before it in `precedingErrors`. The translator therefore classifies the error before 3616: a trigger THROW (51104 to 51107) keeps its own 409 above. A 3616 with no numbered error before it is returned as 500 with `INTERNAL_ERROR` and the generic message "The database could not complete the operation".
+
 ## Successful responses
 
 Services return data and the interceptor places it in `result`. The default message is `Operation completed successfully.`. To provide a specific message:

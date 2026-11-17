@@ -58,7 +58,10 @@ function setup() {
     find,
   };
 
+  // Connection of the open transaction: withLockTimeout sends its SET LOCK_TIMEOUT batches here.
+  const batch = jest.fn(async (_sql: string) => undefined);
   const manager: Row = {
+    queryRunner: { isTransactionActive: true, databaseConnection: { request: () => ({ batch }) } },
     findOne: jest.fn(async (entity: unknown, options: Row) => {
       if (entity !== EmployeeEntity) return null;
       if (options.lock) order.push("lock:employee");
@@ -88,7 +91,7 @@ function setup() {
   });
 
   const service = new EmployeeSchedulesBusinessService(dataSource as any, new PersistenceService());
-  return { service, manager, dataSource, employees, schedules, open };
+  return { service, manager, batch, dataSource, employees, schedules, open };
 }
 
 beforeEach(() => {
@@ -161,5 +164,17 @@ describe("EmployeeSchedulesBusinessService.replace", () => {
     expect(t.manager.delete).not.toHaveBeenCalled();
     expect(t.manager.insert).not.toHaveBeenCalled();
     expect(t.schedules).toEqual([{ id: "S-0", employeeId: "E-1", ...MONDAY_MORNING }]);
+  });
+});
+
+describe("Schedule replacement under withLockTimeout", () => {
+  it("sets LOCK_TIMEOUT 5000 on the transaction connection before the profile lock, and restores -1 after the insert", async () => {
+    const t = setup();
+    const dto: ReplaceEmployeeSchedulesDto = { periods: [{ dayOfWeek: 1, startTime: "08:00", endTime: "13:00", validFrom: "2030-01-01" }] };
+    await t.service.replace("E-1", dto);
+    const profileLock = t.manager.findOne.mock.invocationCallOrder[t.manager.findOne.mock.calls.findIndex(([, options]: any[]) => options.lock)];
+    expect(t.batch.mock.calls).toEqual([["SET LOCK_TIMEOUT 5000;"], ["SET LOCK_TIMEOUT -1;"]]);
+    expect(t.batch.mock.invocationCallOrder[0]).toBeLessThan(profileLock);
+    expect(t.batch.mock.invocationCallOrder[1]).toBeGreaterThan(t.manager.insert.mock.invocationCallOrder[0]);
   });
 });
