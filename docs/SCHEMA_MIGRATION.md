@@ -252,7 +252,7 @@ No services are seeded: the administrator creates the catalog. Deleting a refere
 
 `SchedulesAndBlocks1795694400000` follows `ClinicServices1795608000000`. It was not executed against any database during this work. It requires an active transaction (default `--transaction all`); `down` rejects rollback (it would discard every employee schedule, every per-employee and multi-day blocked time and the block authorship; restore a backup taken before this migration). It creates `vc_employee_schedules` and adds `employee_id`, `start_at`, `end_at`, `created_by` and `created_at` to `vc_blocked_times`. No filtered index is created, so no session option check is needed.
 
-Before any SQL, the migration checks in TypeScript (plain errors, without THROW codes) that `vc_blocked_times` (created by `UniformSchemaAndAnimalCatalog`), `vc_employees` and `vc_users` (`UserRolesAndEmployees`), `vc_reservations` (`ReservationsAndClinicalVisits`) and `vc_services` (`ClinicServices`) exist, that `dbo.vc_employee_schedules` does not exist and that none of the five new `vc_blocked_times` columns exists.
+Before any SQL, the migration checks in TypeScript (plain errors, without THROW codes) that `vc_blocked_times` (created as `blocked_times` by `InitialSqlServer` and renamed by `UniformSchemaAndAnimalCatalog`), `vc_employees` and `vc_users` (`UserRolesAndEmployees`), `vc_reservations` (`ReservationsAndClinicalVisits`) and `vc_services` (`ClinicServices`) exist, that `dbo.vc_employee_schedules` does not exist and that none of the five new `vc_blocked_times` columns exists.
 
 Preconditions (exclusive table locks, `TABLOCKX, HOLDLOCK`, on `vc_blocked_times` and `vc_employees` held until commit; THROW codes 51090, 51091 and 51092):
 
@@ -273,7 +273,7 @@ Steps:
 
 # SQL Server schema: clinical integrity triggers
 
-`ClinicalIntegrity1795780800000` follows `SchedulesAndBlocks1795694400000`. It was not executed against any database during this work. It requires an active transaction (default `--transaction all`). It creates no table, column, row or index: it checks the existing data once and then adds two DML triggers, so reservations and clinical visits stay consistent even when a write does not go through the application's checks. `down` drops only those two triggers (each in its own batch, when they exist); no data is lost, but the guarantee is removed.
+`ClinicalIntegrity1795780800000` follows `SchedulesAndBlocks1795694400000`. It was not executed against any database during this work. It requires an active transaction (default `--transaction all`). It creates no table, column, row or index: it checks the existing data once and then adds two DML triggers. The triggers cover only these cases: creating a visit linked to a reservation that is not CONFIRMED (51105); changing a visit's `animal_id` or `reservation_id` (51104; the same THROW also covers its `id`); a reservation becoming COMPLETED without a COMPLETED visit (51106); a reservation becoming CANCELLED, NO_SHOW or PENDING while it has an IN_PROGRESS or COMPLETED visit (51107). They do not cover DELETE (see step 3 below), a reservation leaving COMPLETED for CONFIRMED (COMPLETED -> CONFIRMED), or any change of a visit's `status`, for example away from COMPLETED. Completing a visit and its reservation also depends on the mandatory application order (see below). `down` drops only those two triggers (each in its own batch, when they exist); no data is lost, but these checks are removed.
 
 Before any SQL, the migration checks in TypeScript (plain errors, without THROW codes) that the query runner has an active transaction and that `vc_reservations` and `vc_clinical_visits` exist (both created by `ReservationsAndClinicalVisits`).
 
@@ -288,7 +288,7 @@ Preconditions (exclusive table locks, `TABLOCKX, HOLDLOCK`, on `vc_reservations`
 
 Steps:
 
-1. `tr_vc_clinical_visits_reservation_integrity` on `vc_clinical_visits`, `AFTER INSERT, UPDATE`, alone in its batch (`CREATE TRIGGER` must be the first statement of a batch). It runs `SET NOCOUNT ON` and works on the whole `inserted` set, so multi-row statements are checked row by row. Its rules:
+1. `tr_vc_clinical_visits_reservation_integrity` on `vc_clinical_visits`, `AFTER INSERT, UPDATE`, alone in its batch (`CREATE TRIGGER` must be the first statement of a batch). It runs `SET NOCOUNT ON` and works on the whole `inserted` set, so multi-row statements are checked as a set (every affected row is validated). Its rules:
    - UPDATE: `id`, `animal_id` and `reservation_id` cannot change (THROW 51104, `vc_clinical_visits.animal_id and reservation_id cannot be changed.`). The comparison is null-safe through `INTERSECT`, so a NULL that stays NULL is not a change, and the rule only runs when one of those columns is in the SET list (`UPDATE()`). An UPDATE of any other column, such as `status`, is not checked here.
    - INSERT: a visit with a `reservation_id` needs that reservation to be `CONFIRMED` (THROW 51105, `A clinical visit can only be created for a CONFIRMED reservation.`). Walk-in visits (NULL `reservation_id`) are not checked.
    - The reservation is read `WITH (READCOMMITTEDLOCK)`, so the check sees the latest committed row under READ_COMMITTED_SNAPSHOT (RCSI).

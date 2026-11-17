@@ -13,11 +13,11 @@ export class ReservationHistoryEntity {
   @PrimaryGeneratedColumn("uuid") id: string;
   @Column({ name: "reservation_id", type: "uniqueidentifier" }) reservationId: string;
   @ManyToOne(() => ReservationEntity, { nullable: false })
-  @JoinColumn({ name: "reservation_id" }) reservation: ReservationEntity;
+  @JoinColumn({ name: "reservation_id", foreignKeyConstraintName: "fk_vc_reservation_history_reservation" }) reservation: ReservationEntity;
   /** vc_users.id of the authenticated actor; null for system changes. */
   @Column({ name: "changed_by", type: "uniqueidentifier", nullable: true }) changedBy: string | null;
   @ManyToOne(() => UsersEntity, { nullable: true })
-  @JoinColumn({ name: "changed_by" }) changedByUser: UsersEntity | null;
+  @JoinColumn({ name: "changed_by", foreignKeyConstraintName: "fk_vc_reservation_history_changed_by" }) changedByUser: UsersEntity | null;
   @Column({ type: "nvarchar", length: 30 }) action: ReservationHistoryAction;
   @Column({ name: "old_data", type: "nvarchar", length: "MAX", nullable: true }) oldData: string | null;
   @Column({ name: "new_data", type: "nvarchar", length: "MAX", nullable: true }) newData: string | null;
