@@ -235,7 +235,7 @@ describe("Animal species/breed changes and approval (B2, decision 26)", () => {
   it("refuses (409 ANIMAL_DATA_CHANGED) when the reviewed species/breed no longer match, and approves when they do", async () => {
     stored = { ...stored, isVerified: false, speciesId: "S-2", breedId: "B-2" };
     await expect(business.confirm("CAT", vet, { expectedSpeciesId: "S-1" })).rejects.toMatchObject({
-      status: 409, response: { code: "ANIMAL_DATA_CHANGED", speciesId: "S-2", breedId: "B-2" },
+      status: 409, response: { code: "ANIMAL_DATA_CHANGED", message: "The animal's species or breed changed since it was reviewed; review it again before approving" },
     });
     await expect(business.confirm("CAT", vet, { expectedSpeciesId: "s-2", expectedBreedId: null })).rejects.toBeInstanceOf(ConflictException);
     expect(animals.save).not.toHaveBeenCalled();
@@ -332,13 +332,20 @@ describe("Animal soft delete with open activity (B1)", () => {
     visits = [{ id: "V-1" }];
     const error = await business.delete("CAT").catch(e => e);
     expect(error).toBeInstanceOf(ConflictException);
-    expect(error.getResponse()).toMatchObject({ code: "ANIMAL_HAS_OPEN_ACTIVITY", reservationIds: ["R-1", "R-2"], clinicalVisitIds: ["V-1"] });
+    // Counts only in the readable message; no id lists or count fields in the error.
+    expect(error.getResponse()).toMatchObject({ code: "ANIMAL_HAS_OPEN_ACTIVITY", message: "The animal has 2 open reservations and 1 clinical visit in progress; cancel or finish them first" });
+    expect(error.getResponse()).not.toHaveProperty("reservationIds");
+    expect(error.getResponse()).not.toHaveProperty("clinicalVisitIds");
     expect(manager.findOne).toHaveBeenCalledWith(AnimalEntity, { where: { id: "CAT" }, lock: { mode: "pessimistic_write" } });
     expect(manager.find).toHaveBeenCalledWith(ClinicalVisitEntity, expect.objectContaining({ where: { animalId: "CAT", status: ClinicalVisitStatus.IN_PROGRESS } }));
     expect(params).toMatchObject({ value: "CAT", openStatuses: [ReservationStatus.PENDING, ReservationStatus.CONFIRMED] });
     expect(manager.softDelete).not.toHaveBeenCalled();
     open = [];
-    await expect(business.delete("CAT")).rejects.toMatchObject({ response: { reservationIds: [], clinicalVisitIds: ["V-1"] } });
+    // Zero counts are left out of the message.
+    await expect(business.delete("CAT")).rejects.toMatchObject({ response: { message: "The animal has 1 clinical visit in progress; cancel or finish them first" } });
+    open = [{ id: "R-1", status: ReservationStatus.PENDING, startAt: new Date() }];
+    visits = [];
+    await expect(business.delete("CAT")).rejects.toMatchObject({ response: { message: "The animal has 1 open reservation; cancel or finish them first" } });
   });
 
   it("soft-deletes when nothing is open, and returns 404 for a missing or already deleted animal", async () => {

@@ -101,9 +101,30 @@ export class AnimalAccessService {
   }
 
   /**
+   * Non-deleted animals of which the account is an active secondary tutor. Plain read inside the caller's transaction,
+   * after the caller locked the account (every flow that opens or closes a secondary row locks that account first).
+   */
+  async secondaryAnimalIdsOf(manager: EntityManager, userId: string): Promise<string[]> {
+    const rows = await manager.createQueryBuilder(AnimalOwnerEntity, "o")
+      .select(["o.id", "o.animalId"])
+      .innerJoin("o.animal", "animal")
+      .where("o.userId = :userId", { userId })
+      .andWhere("o.isPrimary = 0")
+      .andWhere("o.endedAt IS NULL")
+      .orderBy("o.animalId", "ASC")
+      .getMany();
+    return rows.map(row => row.animalId);
+  }
+
+  /**
    * Closes every active secondary tutorship of the account (account deletion, loss of the CLIENT role) in the
    * caller's transaction, after the caller locked the account. ended_at is never before assigned_at
    * (ck_vc_animal_owners_dates). Returns the affected animal ids.
+   * Concurrency: only rows still active (ended_at IS NULL) are touched, so a period closed meanwhile is never rewritten.
+   * The animal is not locked here (account -> vc_animal_owners rows); tutorship removal locks animal -> account and
+   * reads/closes rows only after the account lock, so the two flows serialize on the account row and never wait on
+   * each other's vc_animal_owners row locks (no cycle). The UPDATE seeks ix_vc_animal_owners_user_active (user_id),
+   * so it only locks this account's rows.
    */
   async closeSecondaryTutorships(manager: EntityManager, userId: string, reason: AnimalOwnerEndReason, actorId: string | null, now = new Date()): Promise<string[]> {
     const rows: { animal_id: string }[] = await manager.query(

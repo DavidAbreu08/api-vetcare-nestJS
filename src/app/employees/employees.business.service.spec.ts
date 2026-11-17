@@ -162,7 +162,8 @@ describe("Employee profile rules", () => {
       ];
       const error = await business.update("E-1", { terminationDate: "2999-06-01" }, admin).catch(e => e);
       expect(error).toBeInstanceOf(ConflictException);
-      expect(error.getResponse()).toMatchObject({ code: "EMPLOYEE_HAS_OPEN_RESERVATIONS", reservationIds: ["R-CONF", "R-PEND"] });
+      expect(error.getResponse()).toMatchObject({ code: "EMPLOYEE_HAS_OPEN_RESERVATIONS", message: expect.stringContaining("would leave 2 open reservations assigned") });
+      expect(error.getResponse()).not.toHaveProperty("reservationIds");
       expect(openParams).toMatchObject({ value: "E-1", openStatuses: [ReservationStatus.PENDING, ReservationStatus.CONFIRMED] });
       expect(manager.save).not.toHaveBeenCalled();
       // The profile row is locked before the reservations are read.
@@ -178,8 +179,9 @@ describe("Employee profile rules", () => {
 
     it("refuses isAvailableForBookings=false with open reservations, and an immediate termination", async () => {
       open = [reservation("R-1", "2999-01-01T10:00:00Z")];
-      await expect(business.update("E-1", { isAvailableForBookings: false }, admin)).rejects.toMatchObject({ response: { reservationIds: ["R-1"] } });
-      await expect(business.update("E-1", { terminationDate: PAST }, admin)).rejects.toMatchObject({ response: { reservationIds: ["R-1"] } });
+      for (const change of [{ isAvailableForBookings: false }, { terminationDate: PAST }]) {
+        await expect(business.update("E-1", change, admin)).rejects.toMatchObject({ response: { message: expect.stringContaining("would leave 1 open reservation assigned") } });
+      }
       expect(manager.save).not.toHaveBeenCalled();
     });
 
@@ -215,10 +217,14 @@ describe("Employee profile rules", () => {
       counts.reservations = 2;
       const error = await business.delete("E-1").catch(e => e);
       expect(error).toBeInstanceOf(ConflictException);
-      expect(error.getResponse()).toMatchObject({ code: "EMPLOYEE_HAS_HISTORY", reservationCount: 2, clinicalVisitCount: 0 });
+      expect(error.getResponse()).toMatchObject({ code: "EMPLOYEE_HAS_HISTORY", message: "The employee profile is referenced by 2 reservations; terminate it instead of deleting it" });
+      expect(error.getResponse()).not.toHaveProperty("reservationCount");
       counts.reservations = 0;
       counts.visits = 1;
-      await expect(business.delete("E-1")).rejects.toMatchObject({ response: { clinicalVisitCount: 1 } });
+      await expect(business.delete("E-1")).rejects.toMatchObject({ response: { message: "The employee profile is referenced by 1 clinical visit; terminate it instead of deleting it" } });
+      counts.reservations = 1;
+      counts.visits = 3;
+      await expect(business.delete("E-1")).rejects.toMatchObject({ response: { message: expect.stringContaining("referenced by 1 reservation and 3 clinical visits;") } });
       expect(manager.delete).not.toHaveBeenCalled();
       expect(manager.findOne).toHaveBeenCalledWith(EmployeeEntity, { where: { id: "E-1" }, lock: { mode: "pessimistic_write" } });
     });

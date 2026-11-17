@@ -28,14 +28,16 @@ describe("User role management", () => {
   /** Open reservations returned by findOpenReservations, per filter column (clientId / employeeId). */
   let open: Record<string, any[]>, account: any;
   /** Tutorship side (AnimalAccessService): animals of which U-1 is the active primary tutor. */
-  let animalAccess: any, primaryOf: string[];
+  let animalAccess: any, primaryOf: string[], secondaryOf: string[];
 
   beforeEach(() => {
     otherAdmins = 0;
     profile = null;
     primaryOf = [];
+    secondaryOf = [];
     animalAccess = {
       primaryAnimalIdsOf: jest.fn(async () => primaryOf),
+      secondaryAnimalIdsOf: jest.fn(async () => secondaryOf),
       closeSecondaryTutorships: jest.fn(async () => ["DOG"]),
     };
     open = {};
@@ -195,8 +197,8 @@ describe("User role management", () => {
         const error = await run().catch(e => e);
         expect(error).toBeInstanceOf(ConflictException);
         expect(error.getResponse()).toMatchObject({
-          code: "CLIENT_HAS_OPEN_RESERVATIONS", reservationIds: ["R-1", "R-2"],
-          reservations: [{ id: "R-1", status: "PENDING", startAt: "2999-01-01T10:00:00.000Z" }, expect.objectContaining({ id: "R-2" })],
+          code: "CLIENT_HAS_OPEN_RESERVATIONS",
+          message: "The client has 2 open reservations (pending or confirmed, not yet finished); cancel them before deactivating or deleting the account",
         });
       }
       expect(manager.save).not.toHaveBeenCalled();
@@ -210,7 +212,7 @@ describe("User role management", () => {
       profile = { id: "E-1", terminationDate: null };
       open.employeeId = [row("R-9", ReservationStatus.CONFIRMED)];
       await expect(business.update("U-1", { isActive: false }, admin)).rejects.toMatchObject({
-        response: { code: "EMPLOYEE_HAS_OPEN_RESERVATIONS", reservationIds: ["R-9"] },
+        response: { code: "EMPLOYEE_HAS_OPEN_RESERVATIONS", message: "The account's employee profile has 1 open reservation assigned; cancel or reassign them first" },
       });
       expect(manager.findOne).toHaveBeenCalledWith(EmployeeEntity, { where: { userId: "U-1" }, lock: { mode: "pessimistic_write" } });
       expect(manager.save).not.toHaveBeenCalled();
@@ -236,7 +238,8 @@ describe("User role management", () => {
       primaryOf = ["CAT", "DOG"];
       const error = await business.delete("U-1", admin).catch(e => e);
       expect(error).toBeInstanceOf(ConflictException);
-      expect(error.getResponse()).toMatchObject({ code: "PRIMARY_TUTOR_OF_ANIMALS", animalIds: ["CAT", "DOG"] });
+      expect(error.getResponse()).toMatchObject({ code: "PRIMARY_TUTOR_OF_ANIMALS", message: expect.stringMatching(/^The account is the primary tutor of 2 animals; transfer/) });
+      expect(error.getResponse()).not.toHaveProperty("animalIds");
       expect(animalAccess.primaryAnimalIdsOf).toHaveBeenCalledWith(manager, "U-1");
       expect(manager.findOne.mock.invocationCallOrder[0]).toBeLessThan(animalAccess.primaryAnimalIdsOf.mock.invocationCallOrder[0]);
       expect(animalAccess.closeSecondaryTutorships).not.toHaveBeenCalled();
@@ -259,7 +262,7 @@ describe("User role management", () => {
     it("applies the same rule when the CLIENT role is removed (ROLE_CHANGED), and ignores other role changes", async () => {
       currentRows = [{ userId: "U-1", roleId: CLIENT_ID }];
       primaryOf = ["CAT"];
-      await expect(business.replaceRoles("U-1", [], admin)).rejects.toMatchObject({ response: { code: "PRIMARY_TUTOR_OF_ANIMALS", animalIds: ["CAT"] } });
+      await expect(business.replaceRoles("U-1", [], admin)).rejects.toMatchObject({ response: { code: "PRIMARY_TUTOR_OF_ANIMALS", message: expect.stringContaining("primary tutor of 1 animal;") } });
       expect(manager.delete).not.toHaveBeenCalled();
       primaryOf = [];
       await business.replaceRoles("U-1", [], admin);
@@ -268,6 +271,30 @@ describe("User role management", () => {
       currentRows = [{ userId: "U-1", roleId: CLIENT_ID }];
       await business.replaceRoles("U-1", [CLIENT_ID], admin);
       expect(animalAccess.primaryAnimalIdsOf).not.toHaveBeenCalled();
+    });
+
+    it("refuses removing CLIENT (409) while the account is the client of open reservations of animals it co-tutors", async () => {
+      currentRows = [{ userId: "U-1", roleId: CLIENT_ID }];
+      secondaryOf = ["CAT"];
+      const future = new Date("2999-01-01T10:00:00Z");
+      open.clientId = [
+        { id: "R-1", status: ReservationStatus.PENDING, animalId: "cat", startAt: future },
+        { id: "R-2", status: ReservationStatus.CONFIRMED, animalId: "CAT", startAt: future },
+        { id: "R-3", status: ReservationStatus.PENDING, animalId: "OTHER", startAt: future },
+      ];
+      const error = await business.replaceRoles("U-1", [], admin).catch(e => e);
+      expect(error).toBeInstanceOf(ConflictException);
+      expect(error.getResponse()).toMatchObject({ code: "TUTOR_HAS_OPEN_RESERVATIONS", message: expect.stringMatching(/^The account is the client of 2 open reservations of animals it co-tutors/) });
+      expect(error.getResponse()).not.toHaveProperty("reservationIds");
+      expect(animalAccess.secondaryAnimalIdsOf).toHaveBeenCalledWith(manager, "U-1");
+      // Account locked before the tutorships and reservations are read; nothing closed or deleted.
+      expect(manager.findOne.mock.invocationCallOrder[0]).toBeLessThan(animalAccess.secondaryAnimalIdsOf.mock.invocationCallOrder[0]);
+      expect(animalAccess.closeSecondaryTutorships).not.toHaveBeenCalled();
+      expect(manager.delete).not.toHaveBeenCalled();
+      // Reservations of animals it does not co-tutor do not block.
+      open.clientId = [open.clientId[2]];
+      await expect(business.replaceRoles("U-1", [], admin)).resolves.toBeDefined();
+      expect(animalAccess.closeSecondaryTutorships).toHaveBeenCalledWith(manager, "U-1", "ROLE_CHANGED", "u-admin");
     });
   });
 

@@ -74,10 +74,13 @@ function setup() {
       log.push(`insert:${values.userId}:${values.isPrimary ? "primary" : "secondary"}`);
       rows.push({ id: `O-N${++seq}`, ...values });
     }),
-    update: jest.fn(async (entity: unknown, { id }: any, changes: any) => {
+    update: jest.fn(async (entity: unknown, { id, endedAt }: any, changes: any) => {
       if (entity === AnimalOwnerEntity) {
-        log.push(`close:${rows.find(row => row.id === id)!.userId}:${changes.endReason}`);
-        Object.assign(rows.find(row => row.id === id)!, changes);
+        const row = rows.find(candidate => candidate.id === id);
+        // UPDATE ... WHERE id = @id AND ended_at IS NULL: a period closed meanwhile is not matched (0 rows).
+        if (!row || (endedAt instanceof FindOperator && row.endedAt)) return { affected: 0 };
+        log.push(`close:${row.userId}:${changes.endReason}`);
+        Object.assign(row, changes);
       } else if (entity === AnimalEntity) {
         log.push(`owner:${changes.owner.id}`);
         animals[id].owner = changes.owner;
@@ -85,6 +88,7 @@ function setup() {
         log.push(`client:${id}:${changes.clientId}`);
         Object.assign(reservations.get(id), changes);
       }
+      return { affected: 1 };
     }),
     createQueryBuilder: jest.fn(() => {
       const params: any = {};
@@ -190,7 +194,12 @@ describe("Ending a secondary tutorship (decisions 4, 12)", () => {
     t.addReservation("R-1", "BOB", { status: ReservationStatus.CONFIRMED });
     t.addReservation("R-9", "ANA");
     const error = await t.business.remove("CAT", "BOB", {}, bob).catch(e => e);
-    expect(error.getResponse()).toMatchObject({ code: "TUTOR_HAS_OPEN_RESERVATIONS", reservationIds: ["R-2", "R-1"], reservations: [expect.objectContaining({ id: "R-2" }), expect.objectContaining({ id: "R-1" })] });
+    expect(error.getResponse()).toMatchObject({
+      code: "TUTOR_HAS_OPEN_RESERVATIONS",
+      message: "The tutor is the client of 2 open reservations of this animal; send transferFutureReservations: true to move them, or cancel them first",
+    });
+    expect(error.getResponse()).not.toHaveProperty("reservationIds");
+    expect(error.getResponse()).not.toHaveProperty("reservations");
     expect(t.active()).toEqual(["ANA:P", "BOB:S"]);
     expect(t.history.record).not.toHaveBeenCalled();
     t.log.length = 0;
@@ -203,9 +212,45 @@ describe("Ending a secondary tutorship (decisions 4, 12)", () => {
     expect(t.history.record).toHaveBeenCalledWith(t.manager, expect.objectContaining({
       reservationId: "R-1", action: ReservationHistoryAction.CLIENT_CHANGED, changedBy: "BOB", oldData: { clientId: "BOB" }, newData: { clientId: "ANA" },
     }));
-    // Lock order: reservations (by id) -> animal -> primary tutor's account -> writes.
+    // Lock order: reservations (by id) -> animal -> accounts of the primary and the removed tutor (by id) -> writes.
     expect(t.log).toEqual(["lock:ReservationEntity:r-1", "lock:ReservationEntity:r-2", "lock:AnimalEntity:CAT", "lock:UsersEntity:ANA",
-      "close:BOB:REMOVED", "client:R-2:ANA", "client:R-1:ANA"]);
+      "lock:UsersEntity:BOB", "close:BOB:REMOVED", "client:R-2:ANA", "client:R-1:ANA"]);
+  });
+
+  it("locks the removed tutor's account after the animal and before reading the tutorships it decides on", async () => {
+    const t = setup();
+    t.addSecondary("BOB");
+    await t.business.remove("CAT", "BOB", {}, ana);
+    expect(t.log).toEqual(["lock:AnimalEntity:CAT", "lock:UsersEntity:BOB", "close:BOB:REMOVED"]);
+    const accountLock = t.manager.findOne.mock.calls.findIndex(([entity, options]: any[]) => entity === UsersEntity && options.lock);
+    const reads = t.manager.find.mock.calls
+      .map(([entity]: any[], index: number) => [entity, t.manager.find.mock.invocationCallOrder[index]])
+      .filter(([entity]: any[]) => entity === AnimalOwnerEntity)
+      .map(([, order]: any[]) => order as number);
+    // The decision read (the last read in the transaction) runs after the account lock.
+    expect(Math.max(...reads)).toBeGreaterThan(t.manager.findOne.mock.invocationCallOrder[accountLock]);
+  });
+
+  it("never rewrites a period closed concurrently (closeSecondaryTutorships): 0 rows affected -> 409 TUTORS_CHANGED", async () => {
+    const t = setup();
+    t.addSecondary("BOB");
+    t.addReservation("R-1", "BOB");
+    const closedAt = new Date("2021-01-01T00:00:00Z");
+    const update = t.manager.update.getMockImplementation();
+    t.manager.update.mockImplementation(async (entity: unknown, criteria: any, changes: any) => {
+      // The account's deletion closes BOB's row between the decision read and this UPDATE.
+      const bob = t.rows.find(row => row.userId === "BOB")!;
+      if (entity === AnimalOwnerEntity && !bob.endedAt) Object.assign(bob, { endedAt: closedAt, endedBy: "ADM", endReason: AnimalOwnerEndReason.ACCOUNT_DELETED });
+      return update(entity, criteria, changes);
+    });
+    const error = await t.business.remove("CAT", "BOB", { transferFutureReservations: true }, admin).catch(e => e);
+    expect(error.status).toBe(409);
+    expect(error.getResponse()).toMatchObject({ code: "TUTORS_CHANGED", message: "Tutors changed; reload and retry" });
+    expect(t.manager.update).toHaveBeenCalledWith(AnimalOwnerEntity, { id: "O-BOB", endedAt: expect.any(FindOperator) }, expect.anything());
+    expect(t.rows.find(row => row.userId === "BOB")).toMatchObject({ endedAt: closedAt, endReason: "ACCOUNT_DELETED", endedBy: "ADM" });
+    // Nothing else was written: the reservation stays with BOB and no history was recorded.
+    expect(t.reservations.get("R-1").clientId).toBe("BOB");
+    expect(t.history.record).not.toHaveBeenCalled();
   });
 
   it("ignores finished, cancelled and other animals' reservations, and refuses moving them to an inactive primary tutor", async () => {
@@ -234,7 +279,7 @@ describe("Ending a secondary tutorship (decisions 4, 12)", () => {
       return findOne(entity, options);
     });
     await expect(t.business.remove("CAT", "BOB", { transferFutureReservations: true }, bob)).rejects.toMatchObject({
-      status: 409, response: { code: "RESERVATIONS_CHANGED", reservationIds: ["R-0"] },
+      status: 409, response: { code: "RESERVATIONS_CHANGED", message: "The animal's reservations changed while the request was running; retry" },
     });
     expect(t.log.filter(entry => entry.startsWith("lock:ReservationEntity"))).toEqual(["lock:ReservationEntity:r-1"]);
     expect(t.active()).toEqual(["ANA:P", "BOB:S"]);
@@ -279,6 +324,78 @@ describe("Primary tutor transfer (decisions 10, 12)", () => {
     expect(t.rows).toHaveLength(4);
   });
 
+  it("refuses keepPreviousAsSecondary (409) when the previous primary's account is inactive or no longer a client", async () => {
+    const changes: Array<(t: ReturnType<typeof setup>) => void> = [t => { t.accounts.ANA.isActive = false; }, t => { t.clients.delete("ANA"); }];
+    for (const change of changes) {
+      const t = setup();
+      change(t);
+      const error = await t.business.transfer("CAT", { newPrimaryUserId: "BOB", keepPreviousAsSecondary: true }, admin).catch(e => e);
+      expect(error.status).toBe(409);
+      expect(error.getResponse()).toMatchObject({ code: "PREVIOUS_TUTOR_NOT_CLIENT", message: expect.stringContaining("cannot be kept as a secondary tutor") });
+      expect(t.active()).toEqual(["ANA:P"]);
+      expect(t.log.some(entry => entry.startsWith("close:") || entry.startsWith("insert:"))).toBe(false);
+      // Without the flag the transfer goes through.
+      await t.business.transfer("CAT", { newPrimaryUserId: "BOB" }, admin);
+      expect(t.active()).toEqual(["BOB:P"]);
+    }
+  });
+
+  it("two-phase move: a reservation cancelled between the phases is simply not moved", async () => {
+    const t = setup();
+    t.addReservation("R-1", "ANA");
+    t.addReservation("R-2", "ANA");
+    const findOne = t.manager.findOne.getMockImplementation();
+    t.manager.findOne.mockImplementation(async (entity: unknown, options: any) => {
+      // R-2 is cancelled (and committed) after phase 1 read it, before the animal lock.
+      if (entity === AnimalEntity && options.lock) t.reservations.get("R-2").status = ReservationStatus.CANCELLED;
+      return findOne(entity, options);
+    });
+    await t.business.transfer("CAT", { newPrimaryUserId: "BOB", transferFutureReservations: true }, admin);
+    expect(t.reservations.get("R-1").clientId).toBe("BOB");
+    expect(t.reservations.get("R-2").clientId).toBe("ANA");
+    expect(t.history.record).toHaveBeenCalledTimes(1);
+    expect(t.active()).toEqual(["BOB:P"]);
+  });
+
+  it("two-phase move: when the primary changed between the phases, its unlocked reservations fail with 409 RESERVATIONS_CHANGED", async () => {
+    const t = setup();
+    t.addReservation("R-1", "ANA");
+    t.addReservation("R-C", "CARLA");
+    const findOne = t.manager.findOne.getMockImplementation();
+    t.manager.findOne.mockImplementation(async (entity: unknown, options: any) => {
+      // A concurrent transfer ANA -> CARLA (moving nothing) commits after phase 1 locked ANA's reservations.
+      if (entity === AnimalEntity && options.lock && t.rows[0].endedAt === null) {
+        Object.assign(t.rows[0], { endedAt: new Date(), endReason: AnimalOwnerEndReason.TRANSFERRED });
+        t.rows.push({ id: "O-CARLA", animalId: "CAT", userId: "CARLA", isPrimary: true, assignedAt: new Date(), endedAt: null });
+      }
+      return findOne(entity, options);
+    });
+    await expect(t.business.transfer("CAT", { newPrimaryUserId: "BOB", transferFutureReservations: true }, admin)).rejects.toMatchObject({
+      status: 409, response: { code: "RESERVATIONS_CHANGED" },
+    });
+    expect(t.log.filter(entry => entry.startsWith("lock:ReservationEntity"))).toEqual(["lock:ReservationEntity:r-1"]);
+    expect(t.active()).toEqual(["CARLA:P"]);
+    expect([...t.reservations.values()].map(r => r.clientId)).toEqual(["ANA", "CARLA"]);
+  });
+
+  it("two-phase move: when the primary changed between the phases and has nothing open, the transfer is from the current primary", async () => {
+    const t = setup();
+    t.addReservation("R-1", "ANA");
+    const findOne = t.manager.findOne.getMockImplementation();
+    t.manager.findOne.mockImplementation(async (entity: unknown, options: any) => {
+      if (entity === AnimalEntity && options.lock && t.rows[0].endedAt === null) {
+        Object.assign(t.rows[0], { endedAt: new Date(), endReason: AnimalOwnerEndReason.TRANSFERRED });
+        t.rows.push({ id: "O-CARLA", animalId: "CAT", userId: "CARLA", isPrimary: true, assignedAt: new Date(), endedAt: null });
+        t.reservations.get("R-1").status = ReservationStatus.CANCELLED;
+      }
+      return findOne(entity, options);
+    });
+    await t.business.transfer("CAT", { newPrimaryUserId: "BOB", transferFutureReservations: true }, admin);
+    expect(t.active()).toEqual(["BOB:P"]);
+    expect(t.rows.find(row => row.userId === "CARLA")).toMatchObject({ endReason: AnimalOwnerEndReason.TRANSFERRED, endedBy: "ADM" });
+    expect(t.history.record).not.toHaveBeenCalled();
+  });
+
   it("refuses the current primary (409), an inactive or non-client account (400) and a deleted animal (404)", async () => {
     const t = setup();
     await expect(t.business.transfer("CAT", { newPrimaryUserId: "ana" }, admin)).rejects.toMatchObject({ status: 409, response: { code: "ALREADY_PRIMARY" } });
@@ -302,7 +419,7 @@ describe("Primary tutor transfer (decisions 10, 12)", () => {
     t.addReservation("R-1", "ANA");
     t.addReservation("R-2", "ANA", { status: ReservationStatus.CONFIRMED });
     await expect(t.business.transfer("CAT", { newPrimaryUserId: "BOB" }, admin)).rejects.toMatchObject({
-      status: 409, response: { code: "TUTOR_HAS_OPEN_RESERVATIONS", reservationIds: ["R-1", "R-2"] },
+      status: 409, response: { code: "TUTOR_HAS_OPEN_RESERVATIONS", message: expect.stringContaining("client of 2 open reservations") },
     });
     expect(t.active()).toEqual(["ANA:P"]);
     t.log.length = 0;

@@ -1,3 +1,5 @@
+import { countPhrase } from "../helpers/count-phrase";
+
 /** Public messages of tutorship management (vc_animal_owners). */
 export enum AnimalOwnersMessage {
   AnimalNotFound = "Animal not found",
@@ -13,8 +15,15 @@ export enum AnimalOwnersMessage {
   NoPrimary = "The animal has no primary tutor; an administrator must assign one through POST /api/vetcare/animal/:id/transfer",
   PrimaryInactive = "The primary tutor's account is inactive or deleted; reservations cannot be moved to it",
   PreviousTutorUnavailable = "The previous primary tutor's account no longer exists; it cannot be kept as a secondary tutor",
-  FutureReservations = "The tutor is the client of pending or confirmed reservations of this animal not yet finished; send transferFutureReservations: true to move them, or cancel them first",
   ConcurrentReservations = "The animal's reservations changed while the request was running; retry",
   TutorsChanged = "The animal's tutors changed while the request was running; retry",
+  TutorshipClosed = "Tutors changed; reload and retry",
+  PreviousTutorNotClient = "The previous primary tutor's account is inactive or no longer a client; it cannot be kept as a secondary tutor (send keepPreviousAsSecondary: false)",
   Removed = "Tutor removed",
 }
+
+/** Conflict messages carrying the number of affected records (no id lists or count fields in the error). */
+export const AnimalOwnersConflictMessages = {
+  futureReservations: (count: number) =>
+    `The tutor is the client of ${countPhrase(count, "open reservation")} of this animal; send transferFutureReservations: true to move them, or cancel them first`,
+} as const;

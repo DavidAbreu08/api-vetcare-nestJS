@@ -149,7 +149,7 @@ export class ClinicalVisitBusinessService {
    * employee assigned to the reservation or an administrator (who may name another responsible) can start it.
    * Any existing visit, VOIDED included, blocks a new one (filtered unique index on reservation_id).
    * The animal row is then locked (UPDLOCK; not soft-deleted) and an animal may have only one IN_PROGRESS visit:
-   * 409 ANIMAL_VISIT_IN_PROGRESS with the visit id, also when the filtered unique index
+   * 409 (message only), also when the filtered unique index
    * uq_vc_clinical_visits_animal_in_progress rejects the insert (concurrent start).
    */
   async start(dto: CreateClinicalVisitDto, actor: Actor) {
@@ -176,7 +176,7 @@ export class ClinicalVisitBusinessService {
       const animal = await manager.findOne(AnimalEntity, { where: { id: animalId }, lock: WRITE_LOCK });
       if (!animal) throw applicationError(ErrorMetadata.NOT_FOUND, ClinicalVisitMessage.AnimalNotFound);
       const inProgress = await manager.find(ClinicalVisitEntity, { select: { id: true }, where: { animalId: animal.id, status: ClinicalVisitStatus.IN_PROGRESS } });
-      if (inProgress.length) throw this.visitInProgressConflict(inProgress.map(visit => visit.id));
+      if (inProgress.length) throw this.visitInProgressConflict();
       const employee = await this.resolveEmployee(manager, dto.employeeId, actor, reservationEmployeeId);
       try {
         return await manager.save(manager.create(ClinicalVisitEntity, {
@@ -185,15 +185,15 @@ export class ClinicalVisitBusinessService {
           voidReason: null, voidedAt: null, voidedBy: null, completedBy: null,
         }));
       } catch (error) {
-        if (isUniqueViolationOf(error, CLINICAL_VISIT_ANIMAL_IN_PROGRESS_INDEX)) throw this.visitInProgressConflict([]);
+        if (isUniqueViolationOf(error, CLINICAL_VISIT_ANIMAL_IN_PROGRESS_INDEX)) throw this.visitInProgressConflict();
         throw error;
       }
     });
     return this.get(saved.id, actor);
   }
 
-  private visitInProgressConflict(clinicalVisitIds: string[]): ConflictException {
-    return applicationError(ErrorMetadata.IN_USE, ClinicalVisitMessage.AnimalVisitInProgress, undefined, { code: "ANIMAL_VISIT_IN_PROGRESS", clinicalVisitIds });
+  private visitInProgressConflict(): ConflictException {
+    return applicationError(ErrorMetadata.IN_USE, ClinicalVisitMessage.AnimalVisitInProgress, undefined, { code: "ANIMAL_VISIT_IN_PROGRESS" });
   }
 
   /** Locks the reservation (if any) and then the visit, re-reading the visit under its lock. */

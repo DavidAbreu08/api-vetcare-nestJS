@@ -1,3 +1,5 @@
+import { countList } from "../helpers/count-phrase";
+
 /** Public messages for animal business validation and lookups. */
 export enum AnimalMessage {
   NotFound = "Animal not found",
@@ -18,5 +20,10 @@ export enum AnimalMessage {
   Deleted = "Animal deleted successfully",
   VerificationForbidden = "Only an administrator or a veterinarian can verify this animal",
   DataChanged = "The animal's species or breed changed since it was reviewed; review it again before approving",
-  OpenActivity = "The animal has pending or confirmed reservations not yet finished or a clinical visit in progress; cancel or finish them first",
 }
+
+/** Conflict messages carrying the number of affected records (no id lists or count fields in the error); zero counts are left out. */
+export const AnimalConflictMessages = {
+  openActivity: (reservations: number, clinicalVisits: number) =>
+    `The animal has ${countList([[reservations, "open reservation"], [clinicalVisits, "clinical visit in progress", "clinical visits in progress"]])}; cancel or finish them first`,
+} as const;

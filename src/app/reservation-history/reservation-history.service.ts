@@ -62,12 +62,20 @@ export class ReservationHistoryService {
   }
 }
 
-/** Administrators see who made each change; others only learn whether it was themselves (no third-party ids). */
+/**
+ * Administrators see who made each change; others only learn whether it was themselves (no third-party ids). The same
+ * rule applies to the client ids of CLIENT_CHANGED snapshots: a non-administrator sees only their own id, null otherwise.
+ */
 export function serializeHistoryEvent(row: ReservationHistoryEntity, actor: Actor) {
-  const parse = (value: string | null) => (value ? JSON.parse(value) as unknown : null);
+  const visibleId = (id: unknown) => (actor.isAdmin || (typeof id === "string" && sameId(id, actor.id)) ? id : null);
+  const parse = (value: string | null) => {
+    const data = value ? JSON.parse(value) as unknown : null;
+    if (row.action !== ReservationHistoryAction.CLIENT_CHANGED || !data || typeof data !== "object" || !("clientId" in data)) return data;
+    return { ...data, clientId: visibleId((data as { clientId: unknown }).clientId) };
+  };
   return {
     id: row.id, reservationId: row.reservationId, action: row.action,
-    changedBy: actor.isAdmin || sameId(row.changedBy, actor.id) ? row.changedBy : null,
+    changedBy: visibleId(row.changedBy) as string | null,
     changedBySelf: sameId(row.changedBy, actor.id),
     oldData: parse(row.oldData), newData: parse(row.newData), reason: row.reason, createdAt: row.createdAt,
   };

@@ -133,7 +133,8 @@ describe("One IN_PROGRESS visit per animal (decision 27)", () => {
     t.addVisit({ id: "V-1", animalId: "CAT" });
     const error = await t.business.start({ animalId: "CAT" }, vet1).catch(e => e);
     expect(error).toBeInstanceOf(ConflictException);
-    expect(error.getResponse()).toMatchObject({ code: "ANIMAL_VISIT_IN_PROGRESS", clinicalVisitIds: ["V-1"] });
+    expect(error.getResponse()).toMatchObject({ code: "ANIMAL_VISIT_IN_PROGRESS", message: "The animal already has a clinical visit in progress; complete or void it first" });
+    expect(error.getResponse()).not.toHaveProperty("clinicalVisitIds");
     expect(t.manager.findOne).toHaveBeenCalledWith(AnimalEntity, { where: { id: "CAT" }, lock: { mode: "pessimistic_write" } });
     expect(t.manager.save).not.toHaveBeenCalled();
   });

@@ -1,6 +1,6 @@
 import { applicationError } from "src/app/core/exceptions/application-error";
 import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
-import { UsersMessages } from "./users.messages";
+import { UsersConflictMessages, UsersMessages } from "./users.messages";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { Injectable, Logger } from "@nestjs/common";
 import { DataSource, EntityManager, FindOptionsWhere, In, MssqlParameter, Not, Repository } from "typeorm";
@@ -250,7 +250,7 @@ export class UsersBusinessService {
   /**
    * Soft-deletes the account and removes its reset tokens explicitly (no cascading FK). An active
    * employee profile (locked for the check) must be terminated or deleted first. While the account is the active
-   * primary tutor of non-deleted animals the deletion is refused (409 PRIMARY_TUTOR_OF_ANIMALS with animalIds: transfer
+   * primary tutor of non-deleted animals the deletion is refused (409 with the number of animals in the message: transfer
    * them first); its active secondary tutorships are closed in the same transaction (end_reason ACCOUNT_DELETED).
    */
   async delete(id: string, actor?: Actor) {
@@ -269,7 +269,7 @@ export class UsersBusinessService {
   }
 
   /**
-   * 409 with the reservation ids while the account is the client of, or (through its employee profile) assigned to,
+   * 409 (count in the message only) while the account is the client of, or (through its employee profile) assigned to,
    * PENDING/CONFIRMED reservations not yet finished; nothing is cancelled automatically. Requires the account row
    * locked by the caller; the employee profile is locked here (account -> employee profile). Reservation creation
    * locks the client account and assignment/confirmation lock the profile, so no open reservation can appear
@@ -277,25 +277,34 @@ export class UsersBusinessService {
    */
   private async assertNoOpenReservations(manager: EntityManager, userId: string, lockedProfile?: EmployeeEntity | null) {
     const asClient = await findOpenReservations(manager, { clientId: userId });
-    if (asClient.length) throw openReservationsConflict("CLIENT_HAS_OPEN_RESERVATIONS", UsersMessages.CLIENT_OPEN_RESERVATIONS, asClient);
+    if (asClient.length) throw openReservationsConflict("CLIENT_HAS_OPEN_RESERVATIONS", UsersConflictMessages.clientOpenReservations, asClient);
     const profile = lockedProfile !== undefined
       ? lockedProfile
       : await manager.findOne(EmployeeEntity, { where: { userId }, lock: { mode: "pessimistic_write" } });
     if (!profile) return;
     const assigned = await findOpenReservations(manager, { employeeId: profile.id });
-    if (assigned.length) throw openReservationsConflict("EMPLOYEE_HAS_OPEN_RESERVATIONS", UsersMessages.EMPLOYEE_OPEN_RESERVATIONS, assigned);
+    if (assigned.length) throw openReservationsConflict("EMPLOYEE_HAS_OPEN_RESERVATIONS", UsersConflictMessages.employeeOpenReservations, assigned);
   }
 
   /**
-   * The account stops being able to be a tutor (deletion, loss of CLIENT): 409 PRIMARY_TUTOR_OF_ANIMALS (animalIds)
-   * while it is the active primary tutor of non-deleted animals, otherwise its active secondary tutorships are closed.
+   * The account stops being able to be a tutor (deletion, loss of CLIENT): 409 (number of animals in the message)
+   * while it is the active primary tutor of non-deleted animals, or (409 TUTOR_HAS_OPEN_RESERVATIONS) while it is the
+   * client of open reservations of animals it co-tutors; otherwise its active secondary tutorships are closed.
    * Requires the account row locked by the caller: every flow that opens a tutorship for an account locks that account
    * first (animal -> account -> vc_animal_owners), so none can be opened between this check and the commit.
    */
   private async releaseTutorships(manager: EntityManager, userId: string, reason: AnimalOwnerEndReason, actorId: string | null) {
     const animalIds = await this.animalAccess.primaryAnimalIdsOf(manager, userId);
     if (animalIds.length) {
-      throw applicationError(ErrorMetadata.IN_USE, UsersMessages.PRIMARY_TUTOR_OF_ANIMALS, undefined, { code: "PRIMARY_TUTOR_OF_ANIMALS", animalIds });
+      throw applicationError(ErrorMetadata.IN_USE, UsersConflictMessages.primaryTutorOfAnimals(animalIds.length), undefined, { code: "PRIMARY_TUTOR_OF_ANIMALS" });
+    }
+    // Open reservations booked by the account for animals it co-tutors would be left with a client who is no longer
+    // a tutor: refused (409); end the tutorship with transferFutureReservations or cancel them first.
+    const secondaryOf = new Set((await this.animalAccess.secondaryAnimalIdsOf(manager, userId)).map(id => id.toLowerCase()));
+    if (secondaryOf.size) {
+      const blocking = (await findOpenReservations(manager, { clientId: userId }))
+        .filter(reservation => secondaryOf.has(reservation.animalId.toLowerCase()));
+      if (blocking.length) throw openReservationsConflict("TUTOR_HAS_OPEN_RESERVATIONS", UsersConflictMessages.secondaryTutorOpenReservations, blocking);
     }
     await this.animalAccess.closeSecondaryTutorships(manager, userId, reason, actorId);
   }

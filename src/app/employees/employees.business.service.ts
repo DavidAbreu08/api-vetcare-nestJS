@@ -22,7 +22,7 @@ import { CreateEmployeeDto, EmployeeFieldsDto, ListEmployeesQueryDto, UpdateEmpl
 import { serializeEmployee } from "./employee.serializer";
 import { EmployeeJobTitleEntity } from "./entities/employee-job-title.entity";
 import { EmployeeEntity } from "./entities/employee.entity";
-import { EmployeeMessage } from "./employees.messages";
+import { EmployeeConflictMessages, EmployeeMessage } from "./employees.messages";
 
 const RELATIONS = { user: true, jobTitleLinks: { jobTitle: true } } as const;
 
@@ -114,7 +114,7 @@ export class EmployeesBusinessService {
   }
 
   /**
-   * Rejects (409 with the reservation ids) a profile change that makes the employee unable to attend PENDING or
+   * Rejects (409, count in the message only) a profile change that makes the employee unable to attend PENDING or
    * CONFIRMED reservations assigned to them and not yet finished: termination on or before their clinic date or
    * isAvailableForBookings=false. Nothing is cancelled automatically. Only reservations attendable before the
    * change count, so editing an already unavailable profile is not blocked by them. Called with the profile row
@@ -129,7 +129,7 @@ export class EmployeesBusinessService {
       const date = clinicParts(reservation.startAt).date;
       return this.isBookable({ ...before, user }, date) && !this.isBookable({ ...after, user }, date);
     });
-    if (stranded.length) throw openReservationsConflict("EMPLOYEE_HAS_OPEN_RESERVATIONS", EmployeeMessage.OpenReservations, stranded);
+    if (stranded.length) throw openReservationsConflict("EMPLOYEE_HAS_OPEN_RESERVATIONS", EmployeeConflictMessages.openReservations, stranded);
   }
 
   /** A terminated profile loses EMPLOYEE in the caller's transaction; returns whether a row was removed. */
@@ -210,7 +210,7 @@ export class EmployeesBusinessService {
 
   /**
    * Removes the profile, its job titles and the EMPLOYEE role together; the account remains. A profile referenced
-   * by any reservation or clinical visit (any state) is never deleted (409 with the counts): terminate it instead.
+   * by any reservation or clinical visit (any state) is never deleted (409, counts in the message only): terminate it instead.
    * The row is locked (UPDLOCK) first, so no assignment or visit (which lock or read it) appears meanwhile; the
    * foreign keys remain the final arbiter.
    */
@@ -221,7 +221,7 @@ export class EmployeesBusinessService {
       const reservationCount = await manager.count(ReservationEntity, { where: { employeeId: employee.id } });
       const clinicalVisitCount = await manager.count(ClinicalVisitEntity, { where: { employeeId: employee.id } });
       if (reservationCount || clinicalVisitCount) {
-        throw applicationError(ErrorMetadata.IN_USE, EmployeeMessage.HasHistory, undefined, { code: "EMPLOYEE_HAS_HISTORY", reservationCount, clinicalVisitCount });
+        throw applicationError(ErrorMetadata.IN_USE, EmployeeConflictMessages.hasHistory(reservationCount, clinicalVisitCount), undefined, { code: "EMPLOYEE_HAS_HISTORY" });
       }
       const employeeRoleId = await this.settings.resolveRoleId(SystemRole.EMPLOYEE);
       await manager.delete(EmployeeJobTitleEntity, { employeeId: employee.id });

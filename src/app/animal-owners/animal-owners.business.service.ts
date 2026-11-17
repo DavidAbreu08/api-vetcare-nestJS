@@ -1,7 +1,7 @@
 import { applicationError } from "src/app/core/exceptions/application-error";
 import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
 import { Injectable } from "@nestjs/common";
-import { DataSource, EntityManager } from "typeorm";
+import { DataSource, EntityManager, IsNull } from "typeorm";
 import { AnimalEntity } from "../animal/entities/animal.entity";
 import { Actor, isStaff, requireAdmin, sameId } from "../core/authorization";
 import { SystemRole } from "../core/enums/system-role.enum";
@@ -17,7 +17,7 @@ import { AnimalAccessService } from "./animal-access.service";
 import { AddAnimalOwnerDto, ListAnimalOwnersQueryDto, RemoveAnimalOwnerDto, TransferAnimalDto } from "./dto/animal-owners.dto";
 import { ANIMAL_OWNER_ACTIVE_INDEX, ANIMAL_OWNER_PRIMARY_INDEX, AnimalOwnerEntity } from "./entities/animal-owner.entity";
 import { AnimalOwnerEndReason } from "./enums/animal-owner-end-reason.enum";
-import { AnimalOwnersMessage } from "./animal-owners.messages";
+import { AnimalOwnersConflictMessages, AnimalOwnersMessage } from "./animal-owners.messages";
 
 const WRITE_LOCK = { mode: "pessimistic_write" } as const;
 
@@ -53,8 +53,12 @@ export function serializeTutor(row: AnimalOwnerEntity, actor: Actor, period = fa
  *   vc_reservations (by id, only when reservations are moved) -> vc_animals -> vc_users (accounts, by id)
  *   -> writes to vc_animal_owners / vc_reservations.
  * The animal row is locked (UPDLOCK) before vc_animal_owners is read for a decision or written, so every tutorship
- * change of one animal is serialized; accounts that gain a row are locked before any vc_animal_owners write, so account
- * deletion and role changes (account lock, then vc_animal_owners) serialize with them. Reservations that may be moved
+ * change of one animal is serialized; accounts that gain or lose a row (remove locks the removed tutor and, when moving
+ * reservations, the primary tutor, in id order) are locked before vc_animal_owners is read for the decision, so account
+ * deletion and role changes (account lock, then closeSecondaryTutorships, without the animal lock) serialize with them
+ * without a cycle: neither side holds a vc_animal_owners row lock while waiting for the other's lock. As a last guard,
+ * every close is conditional on ended_at IS NULL (0 rows -> 409 TUTORS_CHANGED), so a closed period is never
+ * rewritten. Reservations that may be moved
  * are locked BEFORE the animal (reservation -> animal, as every reservation flow), in id order; after the animal lock
  * they are read again and, if the set grew in between, the request fails with 409 RESERVATIONS_CHANGED (retry) instead
  * of locking a reservation while holding the animal (which could deadlock with confirm/reschedule/visit start).
@@ -83,6 +87,20 @@ export class AnimalOwnersBusinessService {
     const animal = await manager.findOne(AnimalEntity, { where: { id: animalId }, lock: WRITE_LOCK });
     if (!animal) throw applicationError(ErrorMetadata.NOT_FOUND, AnimalOwnersMessage.AnimalNotFound);
     return animal;
+  }
+
+  /**
+   * Locks (UPDLOCK) the accounts in id order (lock order: animal -> accounts by id). Missing or soft-deleted accounts
+   * are skipped. Returns the locked accounts keyed by lowercase id.
+   */
+  private async lockAccounts(manager: EntityManager, userIds: string[]): Promise<Map<string, UsersEntity>> {
+    const ids = [...new Map(userIds.map(id => [id.toLowerCase(), id])).entries()].sort(([a], [b]) => a.localeCompare(b));
+    const accounts = new Map<string, UsersEntity>();
+    for (const [key, id] of ids) {
+      const account = await manager.findOne(UsersEntity, { where: { id }, lock: WRITE_LOCK });
+      if (account) accounts.set(key, account);
+    }
+    return accounts;
   }
 
   /**
@@ -155,7 +173,7 @@ export class AnimalOwnersBusinessService {
   /**
    * Ends a secondary tutorship (ended_at, never deleted). Allowed to staff, the primary tutor and the secondary tutor
    * themselves; the primary tutor cannot be removed (409, transfer first). Open reservations of the animal whose
-   * client is that tutor block the removal (409 with the list) unless transferFutureReservations, which moves them to
+   * client is that tutor block the removal (409, count in the message only) unless transferFutureReservations, which moves them to
    * the primary tutor (CLIENT_CHANGED events) in the same transaction.
    */
   async remove(animalId: string, userId: string, dto: RemoveAnimalOwnerDto, actor: Actor) {
@@ -168,6 +186,13 @@ export class AnimalOwnersBusinessService {
     const moved = await this.transaction(async manager => {
       const locked = dto.transferFutureReservations ? await this.lockReservationsOf(manager, animalId, userId) : new Set<string>();
       await this.lockAnimal(manager, animalId);
+      // Accounts after the animal and before the decision read: users.delete/replaceRoles lock the account and then
+      // close its secondary rows (closeSecondaryTutorships), so this read never sees a row that is being closed.
+      // The primary tutor cannot change while the animal is locked, so reading it here only picks which account to lock.
+      const primaryId = dto.transferFutureReservations
+        ? (await this.access.activeTutors(animalId, manager)).find(row => row.isPrimary)?.userId ?? null
+        : null;
+      const accounts = await this.lockAccounts(manager, [userId, ...(primaryId ? [primaryId] : [])]);
       const active = await this.access.activeTutors(animalId, manager);
       const primary = active.find(row => row.isPrimary) ?? null;
       if (!allowed(primary?.userId)) throw applicationError(ErrorMetadata.FORBIDDEN, AnimalOwnersMessage.ManageForbidden);
@@ -176,10 +201,11 @@ export class AnimalOwnersBusinessService {
       if (target.isPrimary) throw applicationError(ErrorMetadata.CONFLICT, AnimalOwnersMessage.PrimaryNotRemovable, undefined, { code: "PRIMARY_TUTOR_NOT_REMOVABLE" });
       const open = await this.openReservationsOf(manager, animalId, userId);
       if (open.length) {
-        if (!dto.transferFutureReservations) throw openReservationsConflict("TUTOR_HAS_OPEN_RESERVATIONS", AnimalOwnersMessage.FutureReservations, open);
+        if (!dto.transferFutureReservations) throw openReservationsConflict("TUTOR_HAS_OPEN_RESERVATIONS", AnimalOwnersConflictMessages.futureReservations, open);
         this.requireLocked(open, locked);
         if (!primary) throw this.noPrimary();
-        const account = await manager.findOne(UsersEntity, { where: { id: primary.userId }, lock: WRITE_LOCK });
+        if (!sameId(primary.userId, primaryId)) throw this.tutorsChanged();
+        const account = accounts.get(primary.userId.toLowerCase());
         if (!account?.isActive) throw applicationError(ErrorMetadata.CONFLICT, AnimalOwnersMessage.PrimaryInactive, undefined, { code: "PRIMARY_TUTOR_INACTIVE" });
       }
       await this.close(manager, target, actor.id, AnimalOwnerEndReason.REMOVED);
@@ -210,7 +236,8 @@ export class AnimalOwnersBusinessService {
    * transferFutureReservations, the reservations in `locked`). Closes the current primary period (TRANSFERRED),
    * closes the new tutor's secondary period if any (TRANSFERRED; promotion = close + open), opens the new primary
    * period, optionally reopens the previous primary as secondary, and synchronizes vc_animals.owner_id. Accounts are
-   * locked in id order before any write. Without a current primary (legacy animal without owner) it only assigns one.
+   * locked in id order before any write; with keepPreviousAsSecondary the previous primary's account must still exist
+   * (409 PREVIOUS_TUTOR_UNAVAILABLE) and be active with CLIENT (409 PREVIOUS_TUTOR_NOT_CLIENT). Without a current primary (legacy animal without owner) it only assigns one.
    * Returns the new primary account.
    */
   async transferLocked(manager: EntityManager, animalId: string, options: TransferOptions, actor: Actor, locked = new Set<string>()): Promise<UsersEntity> {
@@ -221,7 +248,7 @@ export class AnimalOwnersBusinessService {
     }
     const open = previous ? await this.openReservationsOf(manager, animalId, previous.userId) : [];
     if (open.length) {
-      if (!options.transferFutureReservations) throw openReservationsConflict("TUTOR_HAS_OPEN_RESERVATIONS", AnimalOwnersMessage.FutureReservations, open);
+      if (!options.transferFutureReservations) throw openReservationsConflict("TUTOR_HAS_OPEN_RESERVATIONS", AnimalOwnersConflictMessages.futureReservations, open);
       this.requireLocked(open, locked);
     }
     const keepPrevious = !!options.keepPreviousAsSecondary && !!previous;
@@ -230,8 +257,13 @@ export class AnimalOwnersBusinessService {
     let newPrimary: UsersEntity | null = null;
     for (const id of accountIds) {
       if (sameId(id, options.newPrimaryUserId)) newPrimary = await this.lockTutorAccount(manager, id);
-      else if (!(await manager.findOne(UsersEntity, { where: { id }, lock: WRITE_LOCK }))) {
-        throw applicationError(ErrorMetadata.CONFLICT, AnimalOwnersMessage.PreviousTutorUnavailable, undefined, { code: "PREVIOUS_TUTOR_UNAVAILABLE" });
+      else {
+        // keepPreviousAsSecondary was asked explicitly: refuse (409) instead of silently not keeping the previous tutor.
+        const account = await manager.findOne(UsersEntity, { where: { id }, lock: WRITE_LOCK });
+        if (!account) throw applicationError(ErrorMetadata.CONFLICT, AnimalOwnersMessage.PreviousTutorUnavailable, undefined, { code: "PREVIOUS_TUTOR_UNAVAILABLE" });
+        if (!account.isActive || !(await this.membership.hasSystemRole(account.id, SystemRole.CLIENT))) {
+          throw applicationError(ErrorMetadata.CONFLICT, AnimalOwnersMessage.PreviousTutorNotClient, undefined, { code: "PREVIOUS_TUTOR_NOT_CLIENT" });
+        }
       }
     }
     const now = new Date();
@@ -248,7 +280,7 @@ export class AnimalOwnersBusinessService {
     } catch (error) {
       // Not expected while the animal lock is held; mapped to a clear 409 should the invariant ever be broken.
       if (isUniqueViolationOf(error, ANIMAL_OWNER_PRIMARY_INDEX) || isUniqueViolationOf(error, ANIMAL_OWNER_ACTIVE_INDEX)) {
-        throw applicationError(ErrorMetadata.CONFLICT, AnimalOwnersMessage.TutorsChanged, undefined, { code: "TUTORS_CHANGED" });
+        throw this.tutorsChanged();
       }
       throw error;
     }
@@ -278,8 +310,7 @@ export class AnimalOwnersBusinessService {
   private requireLocked(open: OpenReservation[], locked: Set<string>) {
     const unlocked = open.filter(reservation => !locked.has(reservation.id.toLowerCase()));
     if (unlocked.length) {
-      throw applicationError(ErrorMetadata.CONFLICT, AnimalOwnersMessage.ConcurrentReservations, undefined, {
-        code: "RESERVATIONS_CHANGED", reservationIds: unlocked.map(reservation => reservation.id) });
+      throw applicationError(ErrorMetadata.CONFLICT, AnimalOwnersMessage.ConcurrentReservations, undefined, { code: "RESERVATIONS_CHANGED" });
     }
   }
 
@@ -293,9 +324,18 @@ export class AnimalOwnersBusinessService {
     }
   }
 
-  /** Closes one active period; ended_at is never before assigned_at (ck_vc_animal_owners_dates). */
+  /**
+   * Closes one active period; ended_at is never before assigned_at (ck_vc_animal_owners_dates). Conditional on
+   * ended_at IS NULL so a period closed by a concurrent flow (e.g. closeSecondaryTutorships) is never rewritten:
+   * 0 rows affected -> 409 TUTORS_CHANGED (reload and retry), rolling back the whole transaction.
+   */
   private async close(manager: EntityManager, row: AnimalOwnerEntity, actorId: string, reason: AnimalOwnerEndReason, now = new Date()) {
     const endedAt = new Date(Math.max(now.getTime(), row.assignedAt.getTime()));
-    await manager.update(AnimalOwnerEntity, { id: row.id }, { endedAt, endedBy: actorId, endReason: reason });
+    const result = await manager.update(AnimalOwnerEntity, { id: row.id, endedAt: IsNull() }, { endedAt, endedBy: actorId, endReason: reason });
+    if (result.affected !== 1) throw this.tutorsChanged(AnimalOwnersMessage.TutorshipClosed);
+  }
+
+  private tutorsChanged(message: AnimalOwnersMessage = AnimalOwnersMessage.TutorsChanged) {
+    return applicationError(ErrorMetadata.CONFLICT, message, undefined, { code: "TUTORS_CHANGED" });
   }
 }

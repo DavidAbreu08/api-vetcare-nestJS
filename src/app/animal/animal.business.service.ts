@@ -20,7 +20,7 @@ import { SpeciesEntity } from "../species/entities/species.entity";
 import { BreedEntity } from "../breeds/entities/breed.entity";
 import { AnimalEntity } from "./entities/animal.entity";
 import { AnimalRelation } from "./enums/animal-relation.enum";
-import { AnimalMessage } from "./animal.messages";
+import { AnimalConflictMessages, AnimalMessage } from "./animal.messages";
 import { CreateAnimalDto } from "./dto/create-animal.dto";
 import { UpdateAnimalDto } from "./dto/update-animal.dto";
 import { ConfirmAnimalDto } from "./dto/confirm-animal.dto";
@@ -292,8 +292,7 @@ export class AnimalBusinessService {
       }
       if ((dto.expectedSpeciesId !== undefined && !sameId(dto.expectedSpeciesId, animal.speciesId))
         || (dto.expectedBreedId !== undefined && !sameOptionalId(dto.expectedBreedId, animal.breedId))) {
-        throw applicationError(ErrorMetadata.CONFLICT, AnimalMessage.DataChanged, undefined, {
-          code: "ANIMAL_DATA_CHANGED", speciesId: animal.speciesId, breedId: animal.breedId });
+        throw applicationError(ErrorMetadata.CONFLICT, AnimalMessage.DataChanged, undefined, { code: "ANIMAL_DATA_CHANGED" });
       }
       animal.isVerified = true;
       return manager.save(animal);
@@ -318,7 +317,7 @@ export class AnimalBusinessService {
   }
 
   /**
-   * Soft delete, refused (409 with the ids) while the animal has PENDING/CONFIRMED reservations not yet finished
+   * Soft delete, refused (409, counts in the message only) while the animal has PENDING/CONFIRMED reservations not yet finished
    * or an IN_PROGRESS clinical visit. The animal row is locked (UPDLOCK) before those reads; reservation creation,
    * confirmation, reschedule and visit start lock the same row (lock order reservation -> animal -> visit), so
    * none of them can slip in before the deletion commits.
@@ -332,8 +331,7 @@ export class AnimalBusinessService {
         select: { id: true }, where: { animalId: animal.id, status: ClinicalVisitStatus.IN_PROGRESS }, order: { startedAt: "ASC" },
       });
       if (reservations.length || visits.length) {
-        throw applicationError(ErrorMetadata.IN_USE, AnimalMessage.OpenActivity, undefined, {
-          code: "ANIMAL_HAS_OPEN_ACTIVITY", reservationIds: reservations.map(reservation => reservation.id), clinicalVisitIds: visits.map(visit => visit.id) });
+        throw applicationError(ErrorMetadata.IN_USE, AnimalConflictMessages.openActivity(reservations.length, visits.length), undefined, { code: "ANIMAL_HAS_OPEN_ACTIVITY" });
       }
       await manager.softDelete(AnimalEntity, { id: animal.id });
     }));

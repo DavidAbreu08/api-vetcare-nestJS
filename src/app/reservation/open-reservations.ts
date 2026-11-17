@@ -31,11 +31,10 @@ export async function findOpenReservations(manager: EntityManager, filter: OpenR
     .getMany();
 }
 
-/** 409 whose body lists the affected reservations, so the caller can cancel or reassign them first. */
-export function openReservationsConflict(code: string, message: string, reservations: OpenReservation[]): ConflictException {
-  return applicationError(ErrorMetadata.IN_USE, message, undefined, {
-    code,
-    reservationIds: reservations.map(reservation => reservation.id),
-    reservations: reservations.map(({ id, status, startAt }) => ({ id, status, startAt: startAt.toISOString() })),
-  });
+/**
+ * 409 IN_USE whose only public detail is a readable message with the number of affected reservations (no id lists or
+ * count fields); clients find them through GET /api/vetcare/reservations with filters.
+ */
+export function openReservationsConflict(code: string, message: (count: number) => string, reservations: OpenReservation[]): ConflictException {
+  return applicationError(ErrorMetadata.IN_USE, message(reservations.length), undefined, { code });
 }

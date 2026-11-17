@@ -397,6 +397,18 @@ describe("Reservation state machine and history projection", () => {
     expect(serializeHistoryEvent(row, admin)).toMatchObject({ changedBy: "ADM", changedBySelf: true });
     expect(serializeHistoryEvent({ ...row, changedBy: "ana" }, ana)).toMatchObject({ changedBy: "ana", changedBySelf: true });
   });
+
+  it("hides other accounts' client ids in CLIENT_CHANGED snapshots from non-admins, keeping their own", () => {
+    const row = {
+      id: "H-2", reservationId: "R-1", action: ReservationHistoryAction.CLIENT_CHANGED, changedBy: "ADM",
+      oldData: '{"clientId":"BOB"}', newData: '{"clientId":"ana"}', reason: null, createdAt: new Date(0),
+    } as any;
+    expect(serializeHistoryEvent(row, ana)).toMatchObject({ changedBy: null, oldData: { clientId: null }, newData: { clientId: "ana" } });
+    expect(serializeHistoryEvent(row, admin)).toMatchObject({ oldData: { clientId: "BOB" }, newData: { clientId: "ana" } });
+    // Other actions keep their snapshots untouched.
+    const other = { ...row, action: ReservationHistoryAction.EMPLOYEE_CHANGED, oldData: '{"employeeId":"E-1"}', newData: null };
+    expect(serializeHistoryEvent(other, ana)).toMatchObject({ oldData: { employeeId: "E-1" }, newData: null });
+  });
 });
 
 describe("Reservations of animals with several tutors (decisions 11, 13)", () => {
