@@ -1,12 +1,12 @@
 # API routes
 
-Inventory of the current HTTP controllers (99 operations). Paths below are the real registered routes; Swagger must describe these paths rather than infer singular/plural names.
+Inventory of the current HTTP controllers (98 operations). Paths below are the real registered routes; Swagger must describe these paths rather than infer singular/plural names.
 
 All operations use the global `/api/vetcare` prefix from `src/api-routing.ts`. Controllers declare only their resource path. Swagger UI and its JSON document remain at `/docs` and `/docs-json`.
 
 ## Access and validation
 
-- Public: POST /api/vetcare/auth/login (local credentials guard), POST /api/vetcare/auth/forgot-password and PUT /api/vetcare/auth/reset-password (rate limited), POST /api/vetcare/users, GET /api/vetcare/users/check-email, GET /api/vetcare/clinic/hours.
+- Public: POST /api/vetcare/auth/login (local credentials guard), POST /api/vetcare/auth/forgot-password and PUT /api/vetcare/auth/reset-password (rate limited), POST /api/vetcare/users, GET /api/vetcare/clinic/hours.
 - Other operations require JWT. Role restrictions come from @Roles; ownership, employee responsibility, clinical permissions and tutorship are additionally checked by domain services.
 - All identifier path parameters use ParseUUIDPipe. GET /api/vetcare/employees/available/:date validates YYYY-MM-DD through dateKey in the business service.
 - DELETE routes returning 204 have no response body. Measurement deletion and tutorship removal return 200 with their operation result.
@@ -111,7 +111,6 @@ All operations use the global `/api/vetcare` prefix from `src/api-routing.ts`. C
 | PATCH | `/api/vetcare/users/:id` | [src/app/users/users.controller.ts:113](../src/app/users/users.controller.ts#L113) |
 | GET | `/api/vetcare/users/:id/roles` | [src/app/users/users.controller.ts:82](../src/app/users/users.controller.ts#L82) |
 | PUT | `/api/vetcare/users/:id/roles` | [src/app/users/users.controller.ts:94](../src/app/users/users.controller.ts#L94) |
-| GET | `/api/vetcare/users/check-email` | [src/app/users/users.controller.ts:57](../src/app/users/users.controller.ts#L57) |
 | GET | `/api/vetcare/users/clients` | [src/app/users/users.controller.ts:48](../src/app/users/users.controller.ts#L48) |
 | POST | `/api/vetcare/users/clients` | [src/app/users/users.controller.ts:73](../src/app/users/users.controller.ts#L73) |
 
@@ -122,7 +121,7 @@ All operations use the global `/api/vetcare` prefix from `src/api-routing.ts`. C
 3. Animal creation uses POST /api/vetcare/animal and animal updates use PATCH /api/vetcare/animal/:id. Administrator-created client accounts use POST /api/vetcare/users/clients. Deprecated route aliases are not registered or advertised in OpenAPI.
 4. Partial updates use PATCH for animals, users, employees, roles, job titles, services, species, breeds, measurement types, system settings and blocked times. Duplicate PUT /:id handlers and the previous blocked-time PUT /:id handler are not registered. PUT /users/:id/roles, PUT /employees/:id/services and PUT /employees/:id/schedules replace the whole assignment list or weekly schedule; confirmation and password-reset action routes also retain PUT.
 5. Action statuses are explicit: login and password change return 200; asynchronous password recovery returns 202; primary tutor transfer returns 200. Resource creation remains 201. Reservation/clinical action controllers already use explicit 200. These explicit statuses replace the previous default 201 for these POST actions.
-6. GET /api/vetcare/users/check-email intentionally reveals email existence. CheckEmailQueryDto now validates the query: missing or invalid email returns 400 instead of the previous false result. The operation remains public; its authentication and rate-limit policy are unchanged.
+6. GET /api/vetcare/users/check-email was removed: it was public and revealed whether an email is registered. Registration (POST /api/vetcare/users) stays public; a duplicate email or NIF still returns 409 ALREADY_EXISTS.
 7. GET /api/vetcare/employees/available/:date lists active, bookable employees who work on that clinic date (a period of their schedule, or the clinic hours when they have none, inside the clinic hours) and are not blocked for the whole day (clinic closures and individual blocks). It does not consider reservations and does not promise a free timeslot. GET /api/vetcare/availability returns indicative free slots of the service duration for each employee qualified for the service and bookable on the date: clinic closures, the employee's blocks and confirmed reservations (widened by the reservation buffer) are excluded, pending reservations do not occupy time, and confirmation re-checks the slot under locks.
 8. DELETE /api/vetcare/animal/:id/owners/:userId accepts transferFutureReservations in query or JSON body; body wins. Prefer the query parameter in clients for DELETE portability while keeping body compatibility.
 9. Reservation authorship: POST /api/vetcare/reservations always records the caller as `createdBy` (a `createdBy` body field is rejected with 400 by the whitelist validation). GET /api/vetcare/reservations accepts an optional `createdBy` (UUID) query filter that only narrows the caller's existing scope; non-administrators can only filter by their own id (another id returns an empty page). Reservation responses carry `createdBy` (administrators, or the caller's own id; null otherwise) and `createdBySelf`; the schema is `ReservationResponseDto` in OpenAPI.
@@ -146,4 +145,4 @@ All operations use the global `/api/vetcare` prefix from `src/api-routing.ts`. C
 | POST /api/vetcare/animal/:id/transfer | 200 |
 | POST /api/vetcare/users/clients | 201 |
 
-The API base URL is `/api/vetcare`. No aliases for the old `/api` prefix, deprecated animal/client creation routes or duplicate PUT partial-update handlers are registered. The frontend must use the canonical routes in the inventory. The action statuses above are explicit rather than the implicit POST default of 201. Invalid or missing check-email query input returns 400.
+The API base URL is `/api/vetcare`. No aliases for the old `/api` prefix, deprecated animal/client creation routes or duplicate PUT partial-update handlers are registered. The frontend must use the canonical routes in the inventory. The action statuses above are explicit rather than the implicit POST default of 201.

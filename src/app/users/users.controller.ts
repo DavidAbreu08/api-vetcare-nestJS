@@ -1,4 +1,4 @@
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiBadRequestResponse, ApiResponse } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam } from "@nestjs/swagger";
 import {
   Body,
   Controller,
@@ -28,7 +28,6 @@ import { ListUsersQueryDto } from "./dto/list-users-query.dto";
 import { ReplaceUserRolesDto } from "./dto/replace-user-roles.dto";
 import { ResponseMessage } from "../core/decorators/response-message.decorator";
 import { UsersMessages } from "./users.messages";
-import { CheckEmailQueryDto } from "./dto/check-email-query.dto";
 
 /** Account data only; employee profiles live in /api/vetcare/employees. */
 @Controller("users")
@@ -52,14 +51,6 @@ export class UsersController {
   @Roles(SystemRole.ADMIN, SystemRole.EMPLOYEE)
   async getAllClients() {
     return this.usersService.findAllClients();
-  }
-
-  @Get("check-email")
-  @ApiOperation({ summary: "Check whether an email is registered", description: "Public operation. A valid email is required; missing or invalid input returns 400." })
-  @ApiBadRequestResponse({ description: "A valid email is required." })
-  @ApiResponse({ status: HttpStatus.OK, description: "Indicates whether the email is registered.", schema: { type: "boolean" } })
-  async checkEmail(@Query() query: CheckEmailQueryDto): Promise<boolean> {
-    return this.usersService.checkEmailExists(query.email);
   }
 
   @Post()

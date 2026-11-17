@@ -101,11 +101,12 @@ describe("API routing and published OpenAPI contract", () => {
     expect(response.body.result.handler).toBe(handler);
   });
 
-  it("validates and normalizes the email availability query", async () => {
+  it("no longer serves the removed public email availability route", async () => {
+    const document = (await request(app.getHttpServer()).get("/docs-json").expect(200)).body;
+    expect(Object.keys(document.paths)).not.toContain("/api/vetcare/users/check-email");
+    // Matches GET /users/:id, where ParseUUIDPipe rejects "check-email" before any service call.
     await request(app.getHttpServer()).get("/api/vetcare/users/check-email").expect(400);
-    await request(app.getHttpServer()).get("/api/vetcare/users/check-email?email=invalid").expect(400);
-    await request(app.getHttpServer()).get("/api/vetcare/users/check-email").query({ email: " CLIENT@EXAMPLE.COM " }).expect(200);
-    expect([...services.values()].find(service => service.checkEmailExists)?.checkEmailExists).toHaveBeenLastCalledWith("client@example.com");
+    expect([...services.values()].flatMap(service => service.checkEmailExists?.mock.calls ?? [])).toHaveLength(0);
   });
 
   it("updates animals through PATCH and rejects malformed identifiers", async () => {

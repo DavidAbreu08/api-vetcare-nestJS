@@ -16,7 +16,6 @@ export class UsersService {
   create(data: CreateUserDto) { return this.business.create(data); }
   delete(id: string, actor?: Actor) { return this.business.delete(id, actor); }
   findAllClients() { return this.business.findAllClients(); }
-  checkEmailExists(email: string) { return this.business.checkEmailExists(email); }
   findForAuthentication(where: FindOptionsWhere<UsersEntity>) { return this.business.findForAuthentication(where); }
   findOneOrFail(where: FindOptionsWhere<UsersEntity> | FindOptionsWhere<UsersEntity>[]) { return this.business.findOneOrFail(where); }
   loadActor(id: string, issuedAt?: number) { return this.business.loadActor(id, issuedAt); }

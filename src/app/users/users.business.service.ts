@@ -89,12 +89,6 @@ export class UsersBusinessService {
     }));
   }
 
-  async checkEmailExists(email: string): Promise<boolean> {
-    const normalized = normalizeEmail(email);
-    if (typeof normalized !== "string" || !normalized) return false;
-    return !!(await this.persistence.execute(() => this.usersRepository.findOne({ where: { email: normalized } })));
-  }
-
   async findForAuthentication(where: FindOptionsWhere<UsersEntity>) {
     return this.persistence.execute(() => this.usersRepository.findOne({
       where,
