@@ -29,7 +29,7 @@ export class ClinicalVisitController {
   get(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() actor: Actor) { return this.service.get(id, actor); }
 
   @Post()
-  @ApiOperation({ summary: "Start a clinical visit", description: "The service checks clinical responsibility and animal ownership. Clinical changes require an authorized employee or administrator. 409 when the reservation already has a clinical visit (voided included)." })
+  @ApiOperation({ summary: "Start a clinical visit", description: "The service checks clinical responsibility and animal ownership. Clinical changes require an authorized employee or administrator. 409 when the reservation already has a clinical visit (voided included). 400 EMPLOYEE_NOT_QUALIFIED when the reservation has a service that the responsible employee does not hold (walk-ins and reservations without a service are not checked)." })
   @Roles(SystemRole.ADMIN, SystemRole.EMPLOYEE)
   start(@Body() dto: CreateClinicalVisitDto, @CurrentUser() actor: Actor) { return this.service.start(dto, actor); }
 

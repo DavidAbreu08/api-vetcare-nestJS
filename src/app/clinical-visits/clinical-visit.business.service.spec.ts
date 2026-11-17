@@ -6,6 +6,8 @@ import { ReservationStatus } from "../core/enums/reservation-status.enum";
 import { PersistenceMessage } from "../core/persistence/persistence.messages";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { EmployeeEntity } from "../employees/entities/employee.entity";
+import { EmployeeServiceEntity } from "../clinic-services/entities/employee-service.entity";
+import { UsersEntity } from "../users/entities/users.entity";
 import { AnimalEntity } from "../animal/entities/animal.entity";
 import { ReservationEntity } from "../reservation/entities/reservation.entity";
 import { ReservationHistoryAction } from "../reservation-history/enums/reservation-history-action.enum";
@@ -20,12 +22,20 @@ const vet1 = actor({ id: "U-E-1", isEmployee: true, employeeId: "E-1" });
 const vet2 = actor({ id: "U-E-2", isEmployee: true, employeeId: "E-2" });
 const owner = actor({ id: "OWNER", isClient: true });
 const stranger = actor({ id: "OTHER", isClient: true });
-const employee = (id: string) => ({ id, userId: `U-${id}`, terminationDate: null, isAvailableForBookings: true, user: { id: `U-${id}`, name: id, isActive: true, deletedAt: null } });
+/** Employee profile (vc_employees row, without its account). */
+const employee = (id: string) => ({ id, userId: `U-${id}`, terminationDate: null, isAvailableForBookings: true });
+/** Account (vc_users row) of the employee's profile. */
+const account = (id: string) => ({ id: `U-${id}`, name: id, isActive: true, deletedAt: null });
 
 function setup() {
   const reservations = new Map<string, any>();
   const visits = new Map<string, any>();
   const employees = new Map<string, any>([["E-1", employee("E-1")], ["E-2", employee("E-2")]]);
+  const users = new Map<string, any>([["U-E-1", account("E-1")], ["U-E-2", account("E-2")]]);
+  /** Qualifications (vc_employee_services) as "employeeId|serviceId": E-1 and E-2 hold SVC-1 by default. */
+  const qualifications = new Set<string>(["E-1|SVC-1", "E-2|SVC-1"]);
+  /** Employee profile with its account, as the visit's employee relation is loaded. */
+  const withAccount = (employeeId: string) => ({ ...employees.get(employeeId), user: users.get(`U-${employeeId}`) });
   const animals: Record<string, any> = { CAT: { id: "CAT" }, DOG: { id: "DOG" } };
 
   /** Reservation query builder honouring the employee and status filters of assignedAnimalIds. */
@@ -46,11 +56,16 @@ function setup() {
     findOne: jest.fn(async (entity: unknown, { where }: any) => {
       if (entity === ReservationEntity) return reservations.has(where.id) ? { ...reservations.get(where.id) } : null;
       if (entity === ClinicalVisitEntity) return visits.has(where.id) ? { ...visits.get(where.id) } : null;
-      if (entity === EmployeeEntity) return employees.get(where.id) ?? null;
+      if (entity === EmployeeEntity) return employees.has(where.id) ? { ...employees.get(where.id) } : null;
+      if (entity === UsersEntity) return users.has(where.id) ? { ...users.get(where.id) } : null;
       if (entity === AnimalEntity) return animals[where.id] ?? null;
       return null;
     }),
-    count: jest.fn(async (_entity: unknown, { where }: any) => [...visits.values()].filter(v => sameId(v.reservationId, where.reservationId)).length),
+    count: jest.fn(async (entity: unknown, { where }: any) => {
+      if (entity === EmployeeServiceEntity) return qualifications.has(`${where.employeeId}|${where.serviceId}`) ? 1 : 0;
+      if (entity === ClinicalVisitEntity) return [...visits.values()].filter(v => sameId(v.reservationId, where.reservationId)).length;
+      throw new Error("unexpected count entity");
+    }),
     find: jest.fn(async (_entity: unknown, { where }: any) => [...visits.values()]
       .filter(v => sameId(v.animalId, where.animalId) && v.status === where.status).map(v => ({ id: v.id }))),
     create: jest.fn((_entity: unknown, row: any) => ({ ...row })),
@@ -66,7 +81,7 @@ function setup() {
   const history = { record: jest.fn(async () => undefined) };
   const visitRepository = {
     findOne: jest.fn(async ({ where }: any) => (visits.has(where.id)
-      ? { ...visits.get(where.id), animal: { id: visits.get(where.id).animalId, owner: { id: "OWNER" } }, employee: employees.get(visits.get(where.id).employeeId) }
+      ? { ...visits.get(where.id), animal: { id: visits.get(where.id).animalId, owner: { id: "OWNER" } }, employee: withAccount(visits.get(where.id).employeeId) }
       : null)),
   };
   const reservationRepository = { createQueryBuilder: reservationQueryBuilder };
@@ -74,12 +89,12 @@ function setup() {
   const tutors: Record<string, string[]> = { CAT: ["OWNER"], DOG: ["OWNER"] };
   const access = { isActiveTutor: jest.fn(async (animalId: string, userId: string) => (tutors[animalId] ?? []).some(id => sameId(id, userId))) };
   const business = new ClinicalVisitBusinessService(new PersistenceService(), dataSource as any, history as any, visitRepository as any, reservationRepository as any, access as any);
-  const addReservation = (row: any) => reservations.set(row.id, { animalId: "CAT", clientId: "OWNER", employeeId: "E-1", status: ReservationStatus.CONFIRMED, confirmedAt: new Date(), ...row });
+  const addReservation = (row: any) => reservations.set(row.id, { animalId: "CAT", clientId: "OWNER", employeeId: "E-1", serviceId: "SVC-1", status: ReservationStatus.CONFIRMED, confirmedAt: new Date(), ...row });
   const addVisit = (row: any) => visits.set(row.id, {
     reservationId: null, animalId: "CAT", employeeId: "E-1", status: ClinicalVisitStatus.IN_PROGRESS,
     startedAt: new Date(Date.now() - 60_000), endedAt: null, clinicalNotes: "secret notes", voidReason: null, voidedBy: null, ...row,
   });
-  return { business, manager, batch, history, reservations, visits, addReservation, addVisit, reservationQueryBuilder, tutors, access };
+  return { business, manager, batch, history, reservations, visits, employees, users, qualifications, addReservation, addVisit, reservationQueryBuilder, tutors, access };
 }
 
 describe("ClinicalVisitBusinessService.start", () => {
@@ -130,6 +145,98 @@ describe("ClinicalVisitBusinessService.start", () => {
     t.addReservation({ id: "R-1" });
     await t.business.start({ reservationId: "R-1" }, admin);
     expect(t.manager.create).toHaveBeenCalledWith(ClinicalVisitEntity, expect.objectContaining({ employeeId: "E-1" }));
+  });
+});
+
+describe("Visit start: responsible profile lock, account and service qualification", () => {
+  const notQualified = { status: 400, response: { code: "EMPLOYEE_NOT_QUALIFIED", message: "The employee is not qualified for this service" } };
+
+  it("rejects a reservation whose responsible employee is not qualified for its service (400), without saving", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    t.qualifications.delete("E-1|SVC-1");
+    await expect(t.business.start({ reservationId: "R-1" }, vet1)).rejects.toMatchObject(notQualified);
+    expect(t.manager.count).toHaveBeenCalledWith(EmployeeServiceEntity, { where: { employeeId: "E-1", serviceId: "SVC-1" } });
+    expect(t.manager.save).not.toHaveBeenCalled();
+  });
+
+  it("starts the visit when the responsible employee holds the service qualification", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    await t.business.start({ reservationId: "R-1" }, vet1);
+    expect(t.manager.count).toHaveBeenCalledWith(EmployeeServiceEntity, { where: { employeeId: "E-1", serviceId: "SVC-1" } });
+    expect(t.manager.save).toHaveBeenCalledWith(expect.objectContaining({ reservationId: "R-1", employeeId: "E-1" }));
+  });
+
+  it("skips the qualification check for a legacy reservation without service_id", async () => {
+    const t = setup();
+    t.qualifications.clear();
+    t.addReservation({ id: "R-1", serviceId: null });
+    await t.business.start({ reservationId: "R-1" }, vet1);
+    expect(t.manager.count).not.toHaveBeenCalledWith(EmployeeServiceEntity, expect.anything());
+    expect(t.manager.save).toHaveBeenCalledWith(expect.objectContaining({ reservationId: "R-1", employeeId: "E-1" }));
+  });
+
+  it("skips the qualification check for a walk-in visit (no reservation, no service)", async () => {
+    const t = setup();
+    t.qualifications.clear();
+    await t.business.start({ animalId: "DOG" }, vet2);
+    expect(t.manager.count).not.toHaveBeenCalledWith(EmployeeServiceEntity, expect.anything());
+    expect(t.manager.save).toHaveBeenCalledWith(expect.objectContaining({ reservationId: null, animalId: "DOG", employeeId: "E-2" }));
+  });
+
+  it("checks the employee the administrator names, not the reservation's employee (refused when she is not qualified)", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    t.qualifications.delete("E-2|SVC-1");
+    await expect(t.business.start({ reservationId: "R-1", employeeId: "E-2" }, admin)).rejects.toMatchObject(notQualified);
+    expect(t.manager.count).toHaveBeenCalledWith(EmployeeServiceEntity, { where: { employeeId: "E-2", serviceId: "SVC-1" } });
+    expect(t.manager.count).not.toHaveBeenCalledWith(EmployeeServiceEntity, { where: { employeeId: "E-1", serviceId: "SVC-1" } });
+    expect(t.manager.save).not.toHaveBeenCalled();
+  });
+
+  it("accepts the employee the administrator names when she is qualified, even if the reservation's employee is not", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    t.qualifications.delete("E-1|SVC-1");
+    await t.business.start({ reservationId: "R-1", employeeId: "E-2" }, admin);
+    expect(t.manager.count).toHaveBeenCalledWith(EmployeeServiceEntity, { where: { employeeId: "E-2", serviceId: "SVC-1" } });
+    expect(t.manager.save).toHaveBeenCalledWith(expect.objectContaining({ reservationId: "R-1", employeeId: "E-2" }));
+  });
+
+  it("reads the responsible profile with the write lock and no relations, after the reservation and animal locks, then its account, then the qualification", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    await t.business.start({ reservationId: "R-1" }, vet1);
+    const calls: any[][] = t.manager.findOne.mock.calls;
+    const order: number[] = t.manager.findOne.mock.invocationCallOrder;
+    const at = (entity: unknown) => calls.findIndex(([called]) => called === entity);
+    const profile = at(EmployeeEntity);
+    expect(calls[profile][1]).toEqual({ where: { id: "E-1" }, lock: { mode: "pessimistic_write" } });
+    expect(calls[profile][1]).not.toHaveProperty("relations");
+    expect(order[at(ReservationEntity)]).toBeLessThan(order[profile]);
+    expect(order[at(AnimalEntity)]).toBeLessThan(order[profile]);
+    expect(order[profile]).toBeLessThan(order[at(UsersEntity)]);
+    const qualificationCall = t.manager.count.mock.calls.findIndex(([entity]) => entity === EmployeeServiceEntity);
+    const qualification = t.manager.count.mock.invocationCallOrder[qualificationCall];
+    expect(order[at(UsersEntity)]).toBeLessThan(qualification);
+    expect(qualification).toBeLessThan(t.manager.save.mock.invocationCallOrder[0]);
+  });
+
+  it("refuses a responsible employee whose account is inactive, as read after the profile lock (400 INVALID_EMPLOYEE)", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    t.users.get("U-E-1").isActive = false;
+    await expect(t.business.start({ reservationId: "R-1" }, vet1)).rejects.toMatchObject({ status: 400, response: { message: ClinicalVisitMessage.InvalidEmployee } });
+    expect(t.manager.save).not.toHaveBeenCalled();
+  });
+
+  it("refuses a responsible employee whose profile is terminated, as read after the profile lock (400 INVALID_EMPLOYEE)", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    t.employees.get("E-1").terminationDate = "2000-01-01";
+    await expect(t.business.start({ reservationId: "R-1" }, vet1)).rejects.toMatchObject({ status: 400, response: { message: ClinicalVisitMessage.InvalidEmployee } });
+    expect(t.manager.save).not.toHaveBeenCalled();
   });
 });
 

@@ -8,8 +8,10 @@ import { Actor, sameId } from "../core/authorization";
 import { ReservationStatus } from "../core/enums/reservation-status.enum";
 import { withLockTimeout } from "../core/persistence/lock-timeout";
 import { isUniqueViolationOf, PersistenceService } from "../core/persistence/persistence.service";
+import { isQualifiedForService } from "../clinic-services/clinic-service.projection";
 import { isActiveEmployee } from "../employees/employee-status";
 import { EmployeeEntity } from "../employees/entities/employee.entity";
+import { UsersEntity } from "../users/entities/users.entity";
 import { ReservationEntity } from "../reservation/entities/reservation.entity";
 import { ReservationHistoryAction } from "../reservation-history/enums/reservation-history-action.enum";
 import { ReservationHistoryService, reservationSnapshot } from "../reservation-history/reservation-history.service";
@@ -32,7 +34,10 @@ export const CLINICAL_ACCESS_RESERVATION_STATUSES = [ReservationStatus.CONFIRMED
  * COMPLETED or NO_SHOW (a PENDING assignment is not yet accepted and grants nothing);
  * every active tutor (primary or secondary) of the animal sees its visits without clinical notes (the clinical record
  * follows the animal: a new tutor sees earlier visits, a former tutor none). Lock order is always
- * reservation -> animal -> visit -> measurement, matching reservation flows, animal deletion and visit start.
+ * reservation -> animal -> visit -> measurement, matching reservation flows, animal deletion and visit start. Visit start
+ * then locks the responsible employee profile (UPDLOCK) and reads its account after the lock; from a reservation with a
+ * service_id it also requires the responsible employee's qualification (walk-ins and reservations without service_id are
+ * not checked).
  */
 @Injectable()
 export class ClinicalVisitBusinessService {
@@ -134,15 +139,19 @@ export class ClinicalVisitBusinessService {
   /**
    * Responsible employee: the caller's active profile, or (administrators only) any active employee. Without an
    * explicit choice, `fallback` (the reservation's employee) is used before the caller's own profile.
+   * The profile row is locked (UPDLOCK) and read without relations; the account is read in a separate statement after
+   * the lock is granted, so it reflects any change committed by the transaction that held the lock.
    */
   private async resolveEmployee(manager: EntityManager, requested: string | undefined, actor: Actor, fallback?: string | null): Promise<EmployeeEntity> {
     const own = this.actorEmployeeId(actor);
     if (requested && !actor.isAdmin && !sameId(requested, own)) throw applicationError(ErrorMetadata.FORBIDDEN, ClinicalVisitMessage.EmployeeForbidden);
     const target = requested ?? fallback ?? own;
     if (!target) throw applicationError(ErrorMetadata.INVALID_VALUE, ClinicalVisitMessage.EmployeeRequired);
-    const employee = await manager.findOne(EmployeeEntity, { where: { id: target }, relations: { user: true } });
-    if (!isActiveEmployee(employee)) throw applicationError(ErrorMetadata.INVALID_VALUE, ClinicalVisitMessage.InvalidEmployee);
-    return employee;
+    const employee = await manager.findOne(EmployeeEntity, { where: { id: target }, lock: WRITE_LOCK });
+    const user = employee ? await manager.findOne(UsersEntity, { where: { id: employee.userId } }) : null;
+    const candidate = employee && user ? Object.assign(employee, { user }) : null;
+    if (!isActiveEmployee(candidate)) throw applicationError(ErrorMetadata.INVALID_VALUE, ClinicalVisitMessage.InvalidEmployee);
+    return candidate;
   }
 
   /**
@@ -154,6 +163,9 @@ export class ClinicalVisitBusinessService {
    * The animal row is then locked (UPDLOCK; not soft-deleted) and an animal may have only one IN_PROGRESS visit:
    * 409 (message only), also when the filtered unique index
    * uq_vc_clinical_visits_animal_in_progress rejects the insert (concurrent start).
+   * The responsible employee is then resolved and locked (see resolveEmployee; 400 INVALID_EMPLOYEE when inactive). From a
+   * reservation with a service_id, the responsible employee (which an administrator may name) must hold the qualification
+   * (400 EMPLOYEE_NOT_QUALIFIED); reservations without service_id (created before the catalog) and walk-ins are not checked.
    */
   async start(dto: CreateClinicalVisitDto, actor: Actor) {
     if (!dto.reservationId && !dto.animalId) throw applicationError(ErrorMetadata.INVALID_VALUE, ClinicalVisitMessage.AnimalOrReservationRequired);
@@ -161,6 +173,7 @@ export class ClinicalVisitBusinessService {
       let animalId = dto.animalId as string;
       let reservationId: string | null = null;
       let reservationEmployeeId: string | null = null;
+      let reservationServiceId: string | null = null;
       if (dto.reservationId) {
         const reservation = await manager.findOne(ReservationEntity, { where: { id: dto.reservationId }, lock: WRITE_LOCK });
         if (!reservation) throw applicationError(ErrorMetadata.NOT_FOUND, ClinicalVisitMessage.ReservationNotFound);
@@ -175,12 +188,16 @@ export class ClinicalVisitBusinessService {
         animalId = reservation.animalId;
         reservationId = reservation.id;
         reservationEmployeeId = reservation.employeeId;
+        reservationServiceId = reservation.serviceId;
       }
       const animal = await manager.findOne(AnimalEntity, { where: { id: animalId }, lock: WRITE_LOCK });
       if (!animal) throw applicationError(ErrorMetadata.NOT_FOUND, ClinicalVisitMessage.AnimalNotFound);
       const inProgress = await manager.find(ClinicalVisitEntity, { select: { id: true }, where: { animalId: animal.id, status: ClinicalVisitStatus.IN_PROGRESS } });
       if (inProgress.length) throw this.visitInProgressConflict();
       const employee = await this.resolveEmployee(manager, dto.employeeId, actor, reservationEmployeeId);
+      if (reservationServiceId && !(await isQualifiedForService(manager, employee.id, reservationServiceId))) {
+        throw applicationError(ErrorMetadata.INVALID_VALUE, ClinicalVisitMessage.EmployeeNotQualified, undefined, { code: "EMPLOYEE_NOT_QUALIFIED" });
+      }
       try {
         return await manager.save(manager.create(ClinicalVisitEntity, {
           reservationId, animalId: animal.id, employeeId: employee.id, status: ClinicalVisitStatus.IN_PROGRESS,

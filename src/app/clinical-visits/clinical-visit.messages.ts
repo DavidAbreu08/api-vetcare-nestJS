@@ -9,6 +9,7 @@ export enum ClinicalVisitMessage {
   EmployeeRequired = "A responsible employee with an active profile is required",
   InvalidEmployee = "The responsible employee must have an active profile and account",
   EmployeeForbidden = "Only administrators can make another employee responsible for a visit",
+  EmployeeNotQualified = "The employee is not qualified for this service",
   NotReservationEmployee = "Only the employee assigned to the reservation or an administrator can start its visit",
   NotResponsible = "Only the responsible employee or an administrator can change this visit",
   NotInProgress = "Only IN_PROGRESS visits can be changed, completed or voided",
