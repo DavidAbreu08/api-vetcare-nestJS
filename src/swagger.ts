@@ -19,7 +19,7 @@ export function setupSwagger(app: INestApplication): void {
 
   const builder = new swagger.DocumentBuilder()
     .setTitle("VetCare API")
-    .setDescription("Gestão da clínica veterinária. As operações estão agrupadas por domínio. Iniciar sessão em POST /api/vetcare/auth/login e usar o token em Authorize nas operações com cadeado. As respostas JSON seguem o contrato global de sucesso ou erro; HEAD, 204, 304 e ficheiros não têm esse envelope.")
+    .setDescription("Veterinary clinic management. Operations are grouped by domain. Sign in at POST /api/vetcare/auth/login and use the token in Authorize for protected operations. JSON responses follow the global success or error contract; HEAD, 204, 304 and file responses do not use this envelope.")
     .setVersion("0.0.1")
     .addBearerAuth({ type: "http", scheme: "bearer", bearerFormat: "JWT" }, "bearer");
   for (const tag of SWAGGER_TAGS) builder.addTag(tag.name, tag.description);

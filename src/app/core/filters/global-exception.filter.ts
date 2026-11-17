@@ -6,7 +6,7 @@ import { isApplicationError } from "../exceptions/application-error";
 import { HttpResponse } from "../interface/http-response.interface";
 import { PersistenceService } from "../persistence/persistence.service";
 
-const INTERNAL_MESSAGE = "Ocorreu um erro interno. Tente novamente mais tarde.";
+const INTERNAL_MESSAGE = "An internal error occurred. Please try again later.";
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
@@ -37,7 +37,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       status,
       friendlyMessage: status >= 500 && !(error instanceof ApplicationException) && !isApplicationError(error)
         ? INTERNAL_MESSAGE
-        : publicMessage || (status >= 500 ? INTERNAL_MESSAGE : "Não foi possível concluir a operação."),
+        : publicMessage || (status >= 500 ? INTERNAL_MESSAGE : "The operation could not be completed."),
       success: false,
       result: null,
       errorMetadata: metadata,

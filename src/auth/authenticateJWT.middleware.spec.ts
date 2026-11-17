@@ -14,6 +14,7 @@ describe("AuthenticateJWT middleware error propagation", () => {
   it("throws missing-token errors for the global exception filter", () => {
     const next = jest.fn();
     expect(() => middleware.use({ header: () => undefined } as any, response, next)).toThrow(UnauthorizedException);
+    expect(() => middleware.use({ header: () => undefined } as any, response, next)).toThrow("Access denied");
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -21,6 +22,7 @@ describe("AuthenticateJWT middleware error propagation", () => {
     jwt.verify.mockImplementation(() => { throw new Error("invalid signature"); });
     const next = jest.fn();
     expect(() => middleware.use({ header: () => "Bearer invalid" } as any, response, next)).toThrow(ForbiddenException);
+    expect(() => middleware.use({ header: () => "Bearer invalid" } as any, response, next)).toThrow("Invalid token");
     expect(next).not.toHaveBeenCalled();
   });
 

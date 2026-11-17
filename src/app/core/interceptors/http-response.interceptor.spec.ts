@@ -15,18 +15,18 @@ class Account {
 @Controller()
 class ResponseController {
   @Get("account")
-  @ResponseMessage("Perfil obtido.")
+  @ResponseMessage("Profile retrieved.")
   account() { return new Account(); }
 
   @Get("list")
   list() { return [{ id: "1" }]; }
 
   @Get("token")
-  @ResponseMessage("Concluído.")
+  @ResponseMessage("Completed.")
   token() { return { token: "replacement-token" }; }
 
   @Get("message")
-  @ResponseMessage("Eliminado.")
+  @ResponseMessage("Deleted.")
   message() { return null; }
 
   @Get("business-message")
@@ -57,24 +57,29 @@ describe("HttpResponseInterceptor (HTTP contract)", () => {
 
   it("wraps serialized entities without revealing excluded fields", async () => {
     const response = await request(app.getHttpServer()).get("/account").expect(200);
-    expect(response.body).toEqual({ status: 200, friendlyMessage: "Perfil obtido.", success: true, result: { name: "Ana" } });
+    expect(response.body).toEqual({ status: 200, friendlyMessage: "Profile retrieved.", success: true, result: { name: "Ana" } });
   });
 
   it("preserves lists as the result", async () => {
     const response = await request(app.getHttpServer()).get("/list").expect(200);
-    expect(response.body.result).toEqual([{ id: "1" }]);
+    expect(response.body).toEqual({
+      status: 200,
+      friendlyMessage: "Operation completed successfully.",
+      success: true,
+      result: [{ id: "1" }],
+    });
     expect(response.body.errorMetadata).toBeUndefined();
   });
 
   it("uses explicit messages and the actual HTTP status without changing operation data", async () => {
     const response = await request(app.getHttpServer()).get("/token").expect(200);
-    expect(response.body).toEqual({ status: 200, friendlyMessage: "Concluído.", success: true, result: { token: "replacement-token" } });
+    expect(response.body).toEqual({ status: 200, friendlyMessage: "Completed.", success: true, result: { token: "replacement-token" } });
   });
 
   it("supports explicit acknowledgement messages with a null result", async () => {
     const response = await request(app.getHttpServer()).get("/message").expect(200);
     expect(response.body.result).toBeNull();
-    expect(response.body.friendlyMessage).toBe("Eliminado.");
+    expect(response.body.friendlyMessage).toBe("Deleted.");
   });
 
   it("keeps business message fields inside ordinary results", async () => {

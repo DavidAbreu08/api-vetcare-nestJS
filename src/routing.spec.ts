@@ -104,19 +104,25 @@ describe("API routing and published OpenAPI contract", () => {
     expect([...services.values()].find(service => service.checkEmailExists)?.checkEmailExists).toHaveBeenLastCalledWith("client@example.com");
   });
 
-  it("keeps animal update compatibility routes and rejects malformed identifiers", async () => {
-    for (const path of [`/api/vetcare/animal/${uuid}`, `/api/vetcare/animal/update/${uuid}`]) {
-      const response = await request(app.getHttpServer()).patch(path).send({ name: "Rex" }).expect(200);
-      expect(response.body.result.handler).toBe("update");
-    }
+  it("updates animals through PATCH and rejects malformed identifiers", async () => {
+    const response = await request(app.getHttpServer()).patch(`/api/vetcare/animal/${uuid}`).send({ name: "Rex" }).expect(200);
+    expect(response.body.result.handler).toBe("update");
     await request(app.getHttpServer()).get("/api/vetcare/animal/invalid-id").expect(400);
   });
 
-  it("keeps the client creation alias equivalent to the canonical collection route", async () => {
+  it("creates clients through the collection route", async () => {
     const body = { name: "Ana", email: "ana@example.com", birthDate: "1990-05-20", phone: "912345678", nif: "123456789" };
-    for (const path of ["/api/vetcare/users/clients", "/api/vetcare/users/create-clients"]) {
-      const response = await request(app.getHttpServer()).post(path).send(body).expect(201);
-      expect(response.body.result.handler).toBe("storeClient");
+    const response = await request(app.getHttpServer()).post("/api/vetcare/users/clients").send(body).expect(201);
+    expect(response.body.result.handler).toBe("storeClient");
+  });
+
+  it("does not register legacy aliases or duplicated partial-update PUT routes", async () => {
+    await request(app.getHttpServer()).post("/api/vetcare/animal/create").send({}).expect(404);
+    await request(app.getHttpServer()).patch(`/api/vetcare/animal/update/${uuid}`).send({}).expect(404);
+    await request(app.getHttpServer()).post("/api/vetcare/users/create-clients").send({}).expect(404);
+    for (const resource of ["animal", "users", "employees", "roles", "job-titles", "species", "breeds", "measurement-types", "system-settings", "blocked-times"]) {
+      await request(app.getHttpServer()).put(`/api/vetcare/${resource}/${uuid}`).send({}).expect(404);
+      await request(app.getHttpServer()).patch(`/api/vetcare/${resource}/${uuid}`).send({}).expect(200);
     }
   });
 
@@ -148,15 +154,25 @@ describe("API routing and published OpenAPI contract", () => {
         expect(operation.tags).toHaveLength(1);
         expect(operation.tags[0]).not.toBe("API");
         expect(operation.summary).toBeTruthy();
+        expect(operation.deprecated).not.toBe(true);
         const successStatus = Reflect.getMetadata(HTTP_CODE_METADATA, handler) ?? (method === RequestMethod.POST ? 201 : 200);
         expect(Object.keys(operation.responses)).toContain(String(successStatus));
+        if (successStatus !== 204) {
+          expect(operation.responses[successStatus].content["application/json"].example).toMatchObject({ status: successStatus, success: true });
+          expect(operation.responses[successStatus].content["application/json"].example).toHaveProperty("result");
+        }
+        for (const parameter of operation.parameters ?? []) {
+          if (parameter.in === "query" && ["skip", "take"].includes(parameter.name)) expect(parameter.schema.type).toBe("integer");
+        }
       }
     }
     expect(document.paths["/api/vetcare/animal/{id}"].delete.security).toEqual([{ bearer: [] }]);
     expect(document.paths["/api/vetcare/clinic/hours"].get.security ?? []).toEqual([]);
-    expect(document.paths["/api/vetcare/reservations"].get.tags).toEqual(["Reservas"]);
-    expect(document.paths["/api/vetcare/animal/create"].post.deprecated).toBe(true);
-    expect(document.paths["/api/vetcare/users/create-clients"].post.deprecated).toBe(true);
+    expect(document.paths["/api/vetcare/reservations"].get.tags).toEqual(["Reservations"]);
+    expect(document.paths["/api/vetcare/animal/create"]).toBeUndefined();
+    expect(document.paths["/api/vetcare/animal/update/{id}"]).toBeUndefined();
+    expect(document.paths["/api/vetcare/users/create-clients"]).toBeUndefined();
+    expect(document.paths["/api/vetcare/animal/{id}"].put).toBeUndefined();
     expect(document.paths["/api/vetcare/users/clients"].post.deprecated).not.toBe(true);
     expect(document.paths["/api/vetcare/auth/login"].post.requestBody.content["application/json"].schema.required).toEqual(["email", "password"]);
     expect(document.paths["/api/vetcare/animal/{id}/owners/{userId}"].delete.requestBody.required).toBe(false);

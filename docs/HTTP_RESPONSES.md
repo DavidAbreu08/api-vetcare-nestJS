@@ -1,6 +1,6 @@
-# Respostas HTTP e tratamento global de erros
+# HTTP responses and global error handling
 
-`HttpResponseModule`, importado pelo `AppModule`, regista o interceptor de sucesso e o filtro de exceções para todos os controllers. Não é preciso adicioná-los a cada endpoint.
+`HttpResponseModule`, imported by `AppModule`, registers the success interceptor and exception filter for every controller. Individual endpoints do not need to register them.
 
 ```ts
 interface HttpResponse<T = unknown> {
@@ -12,11 +12,11 @@ interface HttpResponse<T = unknown> {
 }
 ```
 
-O estado do corpo coincide com o estado HTTP real. Sucessos omitem `errorMetadata`; erros têm `result: null`. Headers continuam nos headers HTTP. Não se inclui request nem timestamp.
+The body status matches the actual HTTP status. Successful responses omit `errorMetadata`; errors have `result: null`. Headers remain in the HTTP headers. Request and timestamp fields are not included.
 
-## Erros de domínio
+## Domain errors
 
-O enum `ErrorMetadata` é global. As mensagens continuam a pertencer ao domínio e conservam o idioma atual; esta alteração não traduz todas as mensagens existentes.
+`ErrorMetadata` is a global enum. Public messages belong to their domain and are written in English.
 
 ```ts
 throw applicationError(
@@ -25,42 +25,42 @@ throw applicationError(
 );
 ```
 
-`applicationError` preserva as subclasses do Nest (`NotFoundException`, `ConflictException`, etc.), necessárias aos catches e testes existentes. Quando a categoria não chega para descrever uma regra, fornece-se uma mensagem específica do domínio. Não se faz try/catch só para voltar a lançar o mesmo erro.
+`applicationError` preserves Nest subclasses (`NotFoundException`, `ConflictException`, etc.) used by existing catches and tests. When a category is not specific enough to describe a rule, supply a domain-specific message. Do not add try/catch blocks solely to rethrow the same error.
 
-As mensagens fornecidas a `applicationError` e `ApplicationException` são explicitamente públicas, incluindo falhas 5xx: devem ser frases seguras do domínio, nunca mensagens de drivers. O filtro oculta por defeito mensagens de outras exceções 5xx e erros desconhecidos. A causa opcional nunca é serializada. Os logs globais registam o tipo e as localizações da stack sem mensagens SQL ou parâmetros.
+Messages supplied to `applicationError` and `ApplicationException` are explicitly public, including 5xx failures: use safe domain messages, never driver messages. The filter hides messages from other 5xx exceptions and unknown errors by default. The optional cause is never serialized. Global logs record the error type and stack locations without SQL messages or parameters.
 
-As exceções Nest existentes continuam suportadas: a categoria é inferida do estado HTTP quando não foi declarada. Arrays de mensagens da validação são unidos por `; ` em `friendlyMessage`; não existe um mapa estruturado de erros por campo neste contrato.
+Existing Nest exceptions remain supported: their category is inferred from the HTTP status when not declared explicitly. Validation message arrays are joined with `; ` in `friendlyMessage`; this contract does not include a structured field-error map.
 
-`PersistenceService.translate` concentra a tradução de SQL Server, tanto em `execute` como no filtro global. Não existe um segundo filtro a enviar respostas de persistência separadamente.
+`PersistenceService.translate` centralizes SQL Server translation for both `execute` and the global filter. There is no second filter sending persistence responses separately.
 
-## Sucessos
+## Successful responses
 
-O serviço devolve dados e o interceptor coloca-os em `result`. A mensagem por defeito é `Operação concluída com sucesso.`. Para uma mensagem própria:
+Services return data and the interceptor places it in `result`. The default message is `Operation completed successfully.`. To provide a specific message:
 
 ```ts
-@ResponseMessage('Medição criada com sucesso.')
+@ResponseMessage('Measurement created successfully.')
 @Post()
 create(@Body() dto: CreateMeasurementDto) {
   return this.service.create(dto);
 }
 ```
 
-O decorator pode receber uma constante de mensagens e pode ser aplicado ao controller inteiro. Não se deve devolver manualmente um `HttpResponse` já formatado: o interceptor é o dono do envelope.
+The decorator accepts message constants and can also be applied to an entire controller. Do not return an already formatted `HttpResponse` manually: the interceptor owns the envelope.
 
-Os serviços existentes foram migrados para devolver dados ou `null`, sem `{ statusCode, message }`. As mensagens de confirmação estão nos decorators dos controllers. O interceptor não tenta reconhecer envelopes antigos: qualquer objeto devolvido é dado da operação. Usar `@HttpCode` quando for necessário definir o estado da operação.
+Existing services return data or `null`, without `{ statusCode, message }` wrappers. Acknowledgement messages are defined in controller decorators. The interceptor does not detect old envelopes: every returned object is treated as operation data. Use `@HttpCode` to set an operation's HTTP status when needed.
 
-Objetos de negócio com `message` e outros campos, sem `statusCode`, são preservados como dados. A serialização existente continua a excluir campos privados antes do envelope. Respostas 204/304/HEAD não recebem corpo e `StreamableFile` mantém o fluxo original.
+Business objects containing `message` and other fields are preserved as data. Existing serialization excludes private fields before wrapping the result. Responses with status 204 or 304, and HEAD responses, have no body; `StreamableFile` retains its original stream.
 
-## Impacto no frontend
+## Frontend impact
 
-- Dados anteriormente na raiz passam para `result`: por exemplo `response.token` passa a `response.result.token`.
-- `message` público passa a `friendlyMessage`; `statusCode` passa a `status`.
-- Códigos específicos antigos (`EMPLOYEE_UNAVAILABLE`, `INVALID_TRANSITION`, etc.) passam a categorias genéricas, normalmente `CONFLICT` ou `INVALID_VALUE`.
-- Detalhes adicionais de conflitos (IDs, contagens e outros campos) não integram a resposta de erro. Podem continuar disponíveis internamente para regras e diagnóstico, mas o filtro emite apenas o contrato acordado.
-- A documentação Swagger apresenta o envelope global.
+- Data previously returned at the root now appears in `result`: for example, `response.token` becomes `response.result.token`.
+- Public `message` becomes `friendlyMessage`; `statusCode` becomes `status`.
+- Former domain-specific codes (`EMPLOYEE_UNAVAILABLE`, `INVALID_TRANSITION`, etc.) become generic categories, usually `CONFLICT` or `INVALID_VALUE`.
+- Extra conflict details (IDs, counts and other fields) are excluded from error responses. They can remain available internally for domain rules and diagnosis, but the filter emits only the agreed contract.
+- Swagger documents the global envelope.
 
-O filtro trata pedidos HTTP. Falhas de arranque, migrations e tarefas em background precisam de logs e tratamento próprios. Respostas enviadas diretamente com `res.json()` não passam pela transformação de sucesso; os controllers devem devolver dados ao Nest. O middleware JWT existente foi adaptado para lançar exceções.
+The filter handles HTTP requests. Startup failures, migrations and background tasks need their own logging and handling. Responses sent directly with `res.json()` bypass success transformation; controllers should return data to Nest. The existing JWT middleware throws exceptions for the global filter.
 
-## Validação
+## Verification
 
-Os testes de integração de `http-response.module.spec.ts` exercitam o módulo real sem base de dados: validação, guards, estados, SQL, rotas inexistentes e falhas inesperadas. Os testes do interceptor verificam serialização, mensagens explícitas, listas, ficheiros e ausência de corpo. A suite de domínio verifica a compatibilidade das exceções. As convenções para alterações futuras estão em `AGENTS.md` na raiz do projeto.
+Integration tests in `http-response.module.spec.ts` exercise the real module without a database: validation, guards, statuses, SQL failures, unknown routes and unexpected failures. Interceptor tests verify serialization, explicit messages, lists, files and body-free responses. Domain tests verify exception compatibility. Conventions for future changes are documented in the root `AGENTS.md`.

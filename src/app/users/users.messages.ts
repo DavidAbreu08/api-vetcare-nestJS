@@ -1,5 +1,5 @@
 export const UsersMessages = {
-  USER_NOT_FOUND: "Usuário não encontrado",
+  USER_NOT_FOUND: "User not found",
   EMAIL_OR_NIF_ALREADY_EXISTS: "Email or NIF already exists",
   CLIENT_CREATED: "Client account created successfully. Temporary password sent via email.",
   OK: "ok",

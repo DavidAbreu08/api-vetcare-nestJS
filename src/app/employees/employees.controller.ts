@@ -1,5 +1,5 @@
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam } from "@nestjs/swagger";
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Put, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
 import { Actor } from "../core/authorization";
 import { CurrentUser } from "../core/decorators/current-user.decorator";
@@ -10,55 +10,49 @@ import { CreateEmployeeDto, ListEmployeesQueryDto, UpdateEmployeeDto } from "./d
 import { EmployeesService } from "./employees.service";
 
 @Controller("employees")
-@ApiTags("Funcionários")
+@ApiTags("Employees")
 @ApiBearerAuth("bearer")
 @UseGuards(AuthGuard("jwt"), RolesGuard)
 export class EmployeesController {
   constructor(private readonly service: EmployeesService) {}
 
   @Get()
-  @ApiOperation({ summary: "Listar funcionários", description: "Gestão reservada a administradores; a consulta individual também permite o próprio funcionário." })
+  @ApiOperation({ summary: "List employees", description: "Management is restricted to administrators; employees may also read their own profile." })
   @Roles(SystemRole.ADMIN)
   getAll(@Query() query: ListEmployeesQueryDto) { return this.service.getAll(query); }
 
   /** The caller's own employee profile. */
   @Get("me")
-  @ApiOperation({ summary: "Consultar o próprio perfil de funcionário", description: "Gestão reservada a administradores; a consulta individual também permite o próprio funcionário." })
+  @ApiOperation({ summary: "Get the current employee profile", description: "Management is restricted to administrators; employees may also read their own profile." })
   getMine(@CurrentUser() actor: Actor) { return this.service.getMine(actor); }
 
   /** Bookable employees for a clinic date (YYYY-MM-DD). */
   @Get("available/:date")
-  @ApiOperation({ summary: "Listar funcionários elegíveis para uma data", description: "Data no formato YYYY-MM-DD. Lista perfis ativos e elegíveis para marcações; não garante um intervalo horário sem reservas." })
-  @ApiParam({ name: "date", description: "Data da clínica (YYYY-MM-DD)", schema: { type: "string", format: "date" } })
+  @ApiOperation({ summary: "List bookable employees for a date", description: "Date in YYYY-MM-DD format. Lists active profiles eligible for bookings; it does not guarantee an unoccupied appointment slot." })
+  @ApiParam({ name: "date", description: "Clinic date (YYYY-MM-DD)", schema: { type: "string", format: "date" } })
   @Roles(SystemRole.ADMIN)
   getAvailable(@Param("date") date: string) { return this.service.getAvailableByDate(date); }
 
   /** Administrators, or the employee itself. */
   @Get(":id")
-  @ApiOperation({ summary: "Consultar funcionário", description: "Gestão reservada a administradores; a consulta individual também permite o próprio funcionário." })
-  @ApiParam({ name: "id", description: "Identificador UUID", schema: { type: "string", format: "uuid" } })
+  @ApiOperation({ summary: "Get employee", description: "Management is restricted to administrators; employees may also read their own profile." })
+  @ApiParam({ name: "id", description: "UUID identifier", schema: { type: "string", format: "uuid" } })
   getById(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() actor: Actor) { return this.service.getById(id, actor); }
 
   @Post()
-  @ApiOperation({ summary: "Criar funcionário", description: "Gestão reservada a administradores; a consulta individual também permite o próprio funcionário." })
+  @ApiOperation({ summary: "Create employee", description: "Management is restricted to administrators; employees may also read their own profile." })
   @Roles(SystemRole.ADMIN)
   create(@Body() dto: CreateEmployeeDto, @CurrentUser() actor: Actor) { return this.service.create(dto, actor); }
 
-  @Put(":id")
-  @ApiOperation({ summary: "Atualizar funcionário", description: "Gestão reservada a administradores; a consulta individual também permite o próprio funcionário. Compatibilidade: este PUT aceita atualização parcial, tal como PATCH; os campos omitidos mantêm-se." })
-  @ApiParam({ name: "id", description: "Identificador UUID", schema: { type: "string", format: "uuid" } })
-  @Roles(SystemRole.ADMIN)
-  update(@Param("id", ParseUUIDPipe) id: string, @Body() dto: UpdateEmployeeDto, @CurrentUser() actor: Actor) { return this.service.update(id, dto, actor); }
-
   @Patch(":id")
-  @ApiOperation({ summary: "Atualizar funcionário", description: "Gestão reservada a administradores; a consulta individual também permite o próprio funcionário." })
-  @ApiParam({ name: "id", description: "Identificador UUID", schema: { type: "string", format: "uuid" } })
+  @ApiOperation({ summary: "Update employee", description: "Management is restricted to administrators; employees may also read their own profile." })
+  @ApiParam({ name: "id", description: "UUID identifier", schema: { type: "string", format: "uuid" } })
   @Roles(SystemRole.ADMIN)
   updatePartial(@Param("id", ParseUUIDPipe) id: string, @Body() dto: UpdateEmployeeDto, @CurrentUser() actor: Actor) { return this.service.update(id, dto, actor); }
 
   @Delete(":id")
-  @ApiOperation({ summary: "Eliminar funcionário", description: "Gestão reservada a administradores; a consulta individual também permite o próprio funcionário." })
-  @ApiParam({ name: "id", description: "Identificador UUID", schema: { type: "string", format: "uuid" } })
+  @ApiOperation({ summary: "Delete employee", description: "Management is restricted to administrators; employees may also read their own profile." })
+  @ApiParam({ name: "id", description: "UUID identifier", schema: { type: "string", format: "uuid" } })
   @Roles(SystemRole.ADMIN)
   @HttpCode(HttpStatus.NO_CONTENT)
   delete(@Param("id", ParseUUIDPipe) id: string) { return this.service.delete(id); }

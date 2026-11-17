@@ -10,7 +10,7 @@ export class AuthenticateJWT implements NestMiddleware {
     const token = req.header("Authorization")?.split(" ")[1]; // Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI...
 
     if (!token) {
-      throw applicationError(ErrorMetadata.UNAUTHORIZED, "Acesso negado");
+      throw applicationError(ErrorMetadata.UNAUTHORIZED, "Access denied");
     }
 
     try {
@@ -21,7 +21,7 @@ export class AuthenticateJWT implements NestMiddleware {
       );
       req.user = decoded;
     } catch (err) {
-      throw applicationError(ErrorMetadata.FORBIDDEN, "Token inválido");
+      throw applicationError(ErrorMetadata.FORBIDDEN, "Invalid token");
     }
     // Downstream failures must reach the global filter with their original status.
     next();

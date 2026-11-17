@@ -24,16 +24,16 @@
 
 ## Description
 
-VetCare API: gestão de uma clínica veterinária, desenvolvida com NestJS e TypeScript.
+VetCare API: veterinary clinic management built with NestJS and TypeScript.
 
-A API usa o prefixo global `/api/vetcare`, por exemplo:
+The API uses the global `/api/vetcare` prefix, for example:
 
 - `POST /api/vetcare/auth/login`
 - `GET /api/vetcare/animal`
 - `GET /api/vetcare/reservations`
 - `GET /api/vetcare/clinic/hours`
 
-Swagger: `/docs`. Documento OpenAPI: `/docs-json`. Consultar o [inventário de rotas](docs/API_ROUTES.md) e o [contrato de respostas](docs/HTTP_RESPONSES.md).
+Swagger: `/docs`. OpenAPI document: `/docs-json`. See the [route inventory](docs/API_ROUTES.md) and [response contract](docs/HTTP_RESPONSES.md).
 
 ## Project setup
 

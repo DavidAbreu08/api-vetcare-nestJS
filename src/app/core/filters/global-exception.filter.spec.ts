@@ -27,9 +27,9 @@ describe("GlobalExceptionFilter", () => {
   afterEach(() => jest.restoreAllMocks());
 
   it("preserves a domain message and emits only the agreed response fields", () => {
-    filter.catch(new ApplicationException(ErrorMetadata.NOT_FOUND, "Medição não encontrada."), host);
+    filter.catch(new ApplicationException(ErrorMetadata.NOT_FOUND, "Measurement not found."), host);
     expect(reply).toHaveBeenCalledWith(rawResponse, {
-      status: 404, friendlyMessage: "Medição não encontrada.", success: false,
+      status: 404, friendlyMessage: "Measurement not found.", success: false,
       result: null, errorMetadata: ErrorMetadata.NOT_FOUND,
     }, 404);
   });
@@ -43,8 +43,8 @@ describe("GlobalExceptionFilter", () => {
   });
 
   it.each([
-    [new UnauthorizedException("Sessão inválida."), 401, ErrorMetadata.UNAUTHORIZED],
-    [new ForbiddenException("Acesso negado."), 403, ErrorMetadata.FORBIDDEN],
+    [new UnauthorizedException("Invalid session."), 401, ErrorMetadata.UNAUTHORIZED],
+    [new ForbiddenException("Access denied."), 403, ErrorMetadata.FORBIDDEN],
     [new HttpException("Too many requests", HttpStatus.TOO_MANY_REQUESTS), 429, ErrorMetadata.TOO_MANY_REQUESTS],
     [new ServiceUnavailableException("private infrastructure detail"), 503, ErrorMetadata.SERVICE_UNAVAILABLE],
   ])("preserves HTTP status for guards, rate limits and infrastructure", (error, status, metadata) => {
@@ -68,20 +68,20 @@ describe("GlobalExceptionFilter", () => {
   });
 
   it("allows explicitly public application messages for 5xx failures", () => {
-    filter.catch(new ApplicationException(ErrorMetadata.SERVICE_UNAVAILABLE, "Serviço temporariamente indisponível."), host);
-    expect(reply.mock.calls[0][1].friendlyMessage).toBe("Serviço temporariamente indisponível.");
+    filter.catch(new ApplicationException(ErrorMetadata.SERVICE_UNAVAILABLE, "Service temporarily unavailable."), host);
+    expect(reply.mock.calls[0][1].friendlyMessage).toBe("Service temporarily unavailable.");
   });
 
   it("preserves explicitly public domain factory messages for 5xx failures", () => {
-    filter.catch(applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, "Email temporariamente indisponível.", new Error("private SMTP detail")), host);
-    expect(reply.mock.calls[0][1]).toMatchObject({ status: 503, errorMetadata: ErrorMetadata.SERVICE_UNAVAILABLE, friendlyMessage: "Email temporariamente indisponível." });
+    filter.catch(applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, "Email temporarily unavailable.", new Error("private SMTP detail")), host);
+    expect(reply.mock.calls[0][1]).toMatchObject({ status: 503, errorMetadata: ErrorMetadata.SERVICE_UNAVAILABLE, friendlyMessage: "Email temporarily unavailable." });
     expect(JSON.stringify(reply.mock.calls)).not.toContain("private SMTP detail");
   });
 
   it("drops legacy rich domain payloads instead of leaking them into the envelope", () => {
-    filter.catch(new HttpException({ message: "Conflito", code: "OLD_CODE", internal: "private" }, 409), host);
+    filter.catch(new HttpException({ message: "Conflict", code: "OLD_CODE", internal: "private" }, 409), host);
     expect(reply.mock.calls[0][1]).toEqual({
-      status: 409, friendlyMessage: "Conflito", success: false, result: null, errorMetadata: ErrorMetadata.CONFLICT,
+      status: 409, friendlyMessage: "Conflict", success: false, result: null, errorMetadata: ErrorMetadata.CONFLICT,
     });
   });
 

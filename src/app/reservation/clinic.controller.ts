@@ -3,9 +3,9 @@ import { Controller, Get } from '@nestjs/common';
 import { CLINIC_POLICY } from './reservation-policy';
 
 @Controller('clinic')
-@ApiTags("Clínica")
+@ApiTags("Clinic")
 export class ClinicController {
   @Get('hours')
-  @ApiOperation({ summary: "Consultar os horários e as regras da clínica", description: "Operação pública. Devolve o calendário e as regras base da clínica." })
+  @ApiOperation({ summary: "Get clinic hours and scheduling rules", description: "Public operation. Returns the clinic calendar and base scheduling rules." })
   hours() { return CLINIC_POLICY; }
 }

@@ -4,7 +4,7 @@ import { Observable, map } from "rxjs";
 import { RESPONSE_MESSAGE } from "../decorators/response-message.decorator";
 import { HttpResponse } from "../interface/http-response.interface";
 
-const DEFAULT_MESSAGE = "Operação concluída com sucesso.";
+const DEFAULT_MESSAGE = "Operation completed successfully.";
 
 @Injectable()
 export class HttpResponseInterceptor implements NestInterceptor {

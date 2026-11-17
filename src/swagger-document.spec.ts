@@ -1,21 +1,25 @@
-import { Controller, Get, INestApplication } from "@nestjs/common";
+import { Controller, Get, INestApplication, ValidationPipe } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
-import type { OpenAPIObject, ResponseObject, SchemaObject } from "@nestjs/swagger/dist/interfaces/open-api-spec.interface";
+import type { OpenAPIObject, ParameterObject, ResponseObject, SchemaObject } from "@nestjs/swagger/dist/interfaces/open-api-spec.interface";
 import { ClinicController } from "./app/reservation/clinic.controller";
 import { prepareSwaggerDocument } from "./swagger-document";
 import { configureApiRouting } from "./api-routing";
 import { setupSwagger } from "./swagger";
 import * as request from "supertest";
+import { AuthGuard } from "@nestjs/passport";
+import { RolesGuard } from "./app/core/guards/roles/roles.guard";
+import { ClinicalVisitController } from "./app/clinical-visits/clinical-visit.controller";
+import { ClinicalVisitService } from "./app/clinical-visits/clinical-visit.service";
 
-@ApiTags("Reservas")
+@ApiTags("Reservations")
 @ApiBearerAuth("bearer")
 @Controller("reservations")
 class DocumentedController {
   @Get()
-  @ApiOperation({ summary: "Listar reservas", description: "Apenas reservas visíveis ao utilizador." })
-  @ApiResponse({ status: 200, description: "Reservas encontradas.", schema: { type: "array", items: { type: "string" } } })
-  @ApiResponse({ status: 409, description: "Conflito de negócio documentado." })
+  @ApiOperation({ summary: "List reservations", description: "Only reservations visible to the user." })
+  @ApiResponse({ status: 200, description: "Reservations found.", schema: { type: "array", items: { type: "string" } } })
+  @ApiResponse({ status: 409, description: "Documented business conflict." })
   list() { return []; }
 }
 
@@ -76,6 +80,56 @@ describe("Swagger document contract", () => {
     expect(doc.paths["/file"].get!.responses[304]).not.toHaveProperty("content");
   });
 
+  it("provides visible success examples with meaningful result types and actual statuses", () => {
+    const doc = document();
+    for (const [name, schema] of Object.entries({ generic: undefined, array: { type: "array", items: { type: "string" } }, boolean: { type: "boolean" }, nullable: { type: "object", nullable: true, enum: [null] }, explicit: { type: "object", example: { id: "A" } } })) {
+      doc.paths[`/${name}`] = { post: { responses: { 201: { description: "Created", content: { "application/json": { schema } } } } } };
+    }
+    prepareSwaggerDocument(doc);
+    const example = (name: string) => (doc.paths[`/${name}`].post!.responses[201] as ResponseObject).content!["application/json"].example;
+    expect(example("generic")).toEqual({ status: 201, friendlyMessage: "Operation completed successfully.", success: true, result: {} });
+    expect(example("array").result).toEqual([]);
+    expect(example("boolean").result).toBe(false);
+    expect(example("nullable").result).toBeNull();
+    expect(example("explicit").result).toEqual({ id: "A" });
+  });
+
+  it("does not follow circular schema references when generating a generic example", () => {
+    const doc = document();
+    doc.components = { schemas: { Self: { $ref: "#/components/schemas/Self" } } };
+    doc.paths["/self"] = { get: { responses: { 200: { description: "OK", content: { "application/json": { schema: { $ref: "#/components/schemas/Self" } } } } } } };
+    prepareSwaggerDocument(doc);
+    expect((doc.paths["/self"].get!.responses[200] as ResponseObject).content!["application/json"].example.result).toEqual({});
+  });
+
+  it("documents and transforms the actual clinical-visit pagination as bounded integer query parameters", async () => {
+    const list = jest.fn().mockResolvedValue([]);
+    const module = await Test.createTestingModule({
+      controllers: [ClinicalVisitController],
+      providers: [{ provide: ClinicalVisitService, useValue: { list } }],
+    })
+      .overrideGuard(AuthGuard("jwt")).useValue({ canActivate: () => true })
+      .overrideGuard(RolesGuard).useValue({ canActivate: () => true })
+      .compile();
+    const app = module.createNestApplication();
+    configureApiRouting(app);
+    app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
+    await app.init();
+    try {
+      const doc = prepareSwaggerDocument(SwaggerModule.createDocument(app, new DocumentBuilder().build()));
+      const operation = doc.paths["/api/vetcare/clinical-visits"].get!;
+      const parameters = operation.parameters!.filter((parameter): parameter is ParameterObject => !("$ref" in parameter));
+      expect(parameters.find(parameter => parameter.name === "skip")).toMatchObject({ in: "query", required: false, schema: { type: "integer", default: 0, example: 0, minimum: 0, maximum: 2147483647 } });
+      expect(parameters.find(parameter => parameter.name === "take")).toMatchObject({ in: "query", required: false, schema: { type: "integer", default: 50, example: 50, minimum: 1, maximum: 100 } });
+      expect((operation.responses[200] as ResponseObject).content!["application/json"].example).toMatchObject({ success: true, result: {} });
+      await request(app.getHttpServer()).get("/api/vetcare/clinical-visits?skip=3&take=4").expect(200);
+      expect(list.mock.calls[0][0]).toMatchObject({ skip: 3, take: 4 });
+      await request(app.getHttpServer()).get("/api/vetcare/clinical-visits?take=101").expect(400);
+      await request(app.getHttpServer()).get("/api/vetcare/clinical-visits?skip=-1").expect(400);
+      expect(list).toHaveBeenCalledTimes(1);
+    } finally { await app.close(); }
+  });
+
   describe("real Swagger metadata generation without a database", () => {
     let app: INestApplication;
     afterAll(async () => { await app?.close(); });
@@ -94,11 +148,11 @@ describe("Swagger document contract", () => {
       await app.init();
       const doc = prepareSwaggerDocument(SwaggerModule.createDocument(app, new DocumentBuilder().addBearerAuth(undefined, "bearer").build()));
       const reservations = doc.paths["/api/vetcare/reservations"].get!;
-      expect(reservations.tags).toContain("Reservas");
+      expect(reservations.tags).toContain("Reservations");
       expect(reservations.security).toEqual([{ bearer: [] }]);
-      expect(reservations.summary).toBe("Listar reservas");
-      expect(reservations.description).toBe("Apenas reservas visíveis ao utilizador.");
-      expect(reservations.responses[409]).toMatchObject({ description: "Conflito de negócio documentado.", content: { "application/json": { schema: { $ref: "#/components/schemas/HttpErrorResponse" } } } });
+      expect(reservations.summary).toBe("List reservations");
+      expect(reservations.description).toBe("Only reservations visible to the user.");
+      expect(reservations.responses[409]).toMatchObject({ description: "Documented business conflict.", content: { "application/json": { schema: { $ref: "#/components/schemas/HttpErrorResponse" } } } });
       expect(doc.paths["/api/vetcare/clinic/hours"].get!.security).toBeUndefined();
       expect(doc.paths["/api/vetcare/clinic/hours"].get!.responses).not.toHaveProperty("401");
       const published = await request(app.getHttpServer()).get("/docs-json").expect(200);

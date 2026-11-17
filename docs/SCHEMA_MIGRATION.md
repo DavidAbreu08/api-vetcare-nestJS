@@ -10,15 +10,15 @@ Back up the database and rehearse restoration. Stop writes and run `npm run db:m
 
 `vc_measurement_types` contains a UUID, unique `code` varchar(64), `name` nvarchar(255), `unit` nvarchar(32), `is_active` bit, `description` nvarchar(240), `notes` nvarchar(500), `created_at` and `updated_at`. Description and notes are optional, following the global rule for domain tables. The technical migration tracking table is excluded. Names and codes are required; application codes use canonical uppercase. Inactive types still identify historical observations. The FK prevents deleting referenced types, without cascading deletion.
 
-Deterministic seeds (UUID `10000000-0000-4000-8000-00000000000N`):
+Deterministic seeds (English display-name meanings below; historical migrations and their persisted labels remain unchanged). UUID `10000000-0000-4000-8000-00000000000N`:
 
-| N | code | name | unit |
+| N | code | English display-name meaning | unit |
 |---|---|---|---|
-| 1 | WEIGHT | Peso | kg |
-| 2 | HEIGHT | Altura | cm |
-| 3 | TEMPERATURE | Temperatura | °C |
-| 4 | HEART_RATE | Frequência cardíaca | bpm |
-| 5 | RESPIRATORY_RATE | Frequência respiratória | rpm |
+| 1 | WEIGHT | Weight | kg |
+| 2 | HEIGHT | Height | cm |
+| 3 | TEMPERATURE | Temperature | °C |
+| 4 | HEART_RATE | Heart rate | bpm |
+| 5 | RESPIRATORY_RATE | Respiratory rate | rpm |
 
 ## Historical conversion
 
@@ -69,12 +69,14 @@ Filtered indexes require `SET ANSI_NULLS ON` and `SET QUOTED_IDENTIFIER ON` in t
 
 ## Deterministic seeds
 
-| UUID | Table | code | name / value |
+Display names in this table are English meanings of the historical seed labels, not a migration that renames stored data.
+
+| UUID | Table | code | English display-name meaning / value |
 |---|---|---|---|
-| `20000000-0000-4000-8000-000000000001` | vc_roles | ADMIN | Administrador |
-| `20000000-0000-4000-8000-000000000002` | vc_roles | EMPLOYEE | Funcionário |
-| `20000000-0000-4000-8000-000000000003` | vc_roles | CLIENT | Cliente |
-| `30000000-0000-4000-8000-00000000000N` (1-6) | vc_job_titles | VETERINARIAN, RECEPTIONIST, ACCOUNTANT, ADMINISTRATION, PHARMACY, OTHER | Veterinário, Atendimento, Contabilista, Administração, Farmácia, Outros |
+| `20000000-0000-4000-8000-000000000001` | vc_roles | ADMIN | Administrator |
+| `20000000-0000-4000-8000-000000000002` | vc_roles | EMPLOYEE | Employee |
+| `20000000-0000-4000-8000-000000000003` | vc_roles | CLIENT | Client |
+| `30000000-0000-4000-8000-00000000000N` (1-6) | vc_job_titles | VETERINARIAN, RECEPTIONIST, ACCOUNTANT, ADMINISTRATION, PHARMACY, OTHER | Veterinarian, Receptionist, Accountant, Administration, Pharmacy, Other |
 | `40000000-0000-4000-8000-000000000001` | vc_system_settings | ADMIN_ROLE_ID | `20000000-...-000000000001` |
 | `40000000-0000-4000-8000-000000000002` | vc_system_settings | EMPLOYEE_ROLE_ID | `20000000-...-000000000002` |
 | `40000000-0000-4000-8000-000000000003` | vc_system_settings | CLIENT_ROLE_ID | `20000000-...-000000000003` |

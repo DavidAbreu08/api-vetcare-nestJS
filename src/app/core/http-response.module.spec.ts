@@ -15,7 +15,7 @@ class DenyGuard { canActivate() { return false; } }
 @Controller()
 class ContractController {
   @Post("validate") validate(@Body() input: Input) { return input; }
-  @Get("missing") missing() { throw new ApplicationException(ErrorMetadata.NOT_FOUND, "Medição não encontrada."); }
+  @Get("missing") missing() { throw new ApplicationException(ErrorMetadata.NOT_FOUND, "Measurement not found."); }
   @Get("guard") @UseGuards(DenyGuard) guarded() { return "unreachable"; }
   @Get("limited") limited() { throw new HttpException("Too many requests", 429); }
   @Get("database") database() {
@@ -60,6 +60,7 @@ describe("Global HTTP response module", () => {
     try {
       const response = await request(app.getHttpServer()).get("/unexpected").expect(500);
       expect(response.body.errorMetadata).toBe(ErrorMetadata.INTERNAL_ERROR);
+      expect(response.body.friendlyMessage).toBe("An internal error occurred. Please try again later.");
       expect(JSON.stringify(response.body)).not.toContain("private server detail");
     } finally { log.mockRestore(); }
   });
