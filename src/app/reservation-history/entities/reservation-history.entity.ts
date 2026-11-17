@@ -7,6 +7,8 @@ import { ReservationEntity } from "../../reservation/entities/reservation.entity
 @Entity("vc_reservation_history")
 @Index("ix_vc_reservation_history_reservation_created", ["reservationId", "createdAt"])
 @Index("ix_vc_reservation_history_changed_by", ["changedBy"])
+/** At most one CREATED event per reservation (migration 1795521600000); its changed_by is the reservation's created_by. */
+@Index("uq_vc_reservation_history_created", ["reservationId"], { unique: true, where: "[action] = N'CREATED'" })
 export class ReservationHistoryEntity {
   @PrimaryGeneratedColumn("uuid") id: string;
   @Column({ name: "reservation_id", type: "uniqueidentifier" }) reservationId: string;

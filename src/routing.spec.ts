@@ -179,5 +179,17 @@ describe("API routing and published OpenAPI contract", () => {
     expect(document.paths["/api/vetcare/animal/{id}/owners/{userId}"].delete.requestBody.content["application/json"].schema).toBeDefined();
     expect(document.paths["/api/vetcare/auth/forgot-password"].post.responses["202"]).toBeDefined();
     expect(document.paths["/api/vetcare/users/{id}"].delete.responses["204"].content).toBeUndefined();
+    // Reservation authorship: response fields and the createdBy filter.
+    const reservationSchema = document.components.schemas.ReservationResponseDto;
+    expect(reservationSchema.properties.createdBy).toMatchObject({ type: "string", format: "uuid", nullable: true });
+    expect(reservationSchema.properties.createdBySelf).toMatchObject({ type: "boolean" });
+    expect(reservationSchema.required).toEqual(expect.arrayContaining(["createdBy", "createdBySelf"]));
+    const createdResult = document.paths["/api/vetcare/reservations"].post.responses["201"].content["application/json"].schema.allOf[1].properties.result;
+    expect(createdResult).toEqual({ $ref: "#/components/schemas/ReservationResponseDto" });
+    expect(document.paths["/api/vetcare/reservations"].get.responses["200"].content["application/json"].schema.allOf[1].properties.result)
+      .toEqual({ type: "array", items: { $ref: "#/components/schemas/ReservationResponseDto" } });
+    expect(document.paths["/api/vetcare/reservations"].get.parameters.find((parameter: { name: string }) => parameter.name === "createdBy"))
+      .toMatchObject({ in: "query", required: false, schema: { type: "string", format: "uuid" } });
+    expect(document.components.schemas.CreateReservationDto.properties).not.toHaveProperty("createdBy");
   });
 });

@@ -212,6 +212,10 @@ describe("Ending a secondary tutorship (decisions 4, 12)", () => {
     expect(t.history.record).toHaveBeenCalledWith(t.manager, expect.objectContaining({
       reservationId: "R-1", action: ReservationHistoryAction.CLIENT_CHANGED, changedBy: "BOB", oldData: { clientId: "BOB" }, newData: { clientId: "ANA" },
     }));
+    // Moving the client never rewrites the reservation's author (created_by): only client_id is updated.
+    for (const [entity, , changes] of t.manager.update.mock.calls as any[]) {
+      if (entity === ReservationEntity) expect(Object.keys(changes)).toEqual(["clientId"]);
+    }
     // Lock order: reservations (by id) -> animal -> accounts of the primary and the removed tutor (by id) -> writes.
     expect(t.log).toEqual(["lock:ReservationEntity:r-1", "lock:ReservationEntity:r-2", "lock:AnimalEntity:CAT", "lock:UsersEntity:ANA",
       "lock:UsersEntity:BOB", "close:BOB:REMOVED", "client:R-2:ANA", "client:R-1:ANA"]);

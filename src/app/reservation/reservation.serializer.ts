@@ -1,4 +1,4 @@
-import { Actor } from "../core/authorization";
+import { Actor, sameId } from "../core/authorization";
 import { AccountSummary, serializeAccount } from "../employees/employee.serializer";
 import { EmployeeEntity } from "../employees/entities/employee.entity";
 import { contactSummary, projectRelatedUser, PublicEmployeeSummary } from "../users/user.projection";
@@ -22,16 +22,25 @@ export function projectEmployee(employee: EmployeeEntity | null | undefined, act
  * and the client (the responsible tutor, client_id) as { id, name, email, phone }; the animal's owner (its current
  * primary tutor, which may differ from the client) is only shown (full) to administrators. Administrators see full
  * accounts, never password hashes.
+ * Authorship (created_by), same rule as changedBy in history events: administrators see createdBy; everyone else sees
+ * it only when it is their own id (null otherwise, so the id of the employee who booked for a client never leaks), and
+ * every caller gets createdBySelf. The creator account itself is never serialized to non-administrators.
  */
 export function serializeReservation<R extends ReservationEntity>(reservation: R, actor: Actor) {
-  const view = { ...reservation } as unknown as Record<string, unknown>;
+  const { creator, ...rest } = reservation;
+  const view = { ...rest } as unknown as Record<string, unknown>;
+  const createdBy = reservation.createdBy ?? null;
+  view.createdBy = actor.isAdmin || sameId(createdBy, actor.id) ? createdBy : null;
+  view.createdBySelf = sameId(createdBy, actor.id);
+  if (actor.isAdmin && creator !== undefined) view.creator = projectRelatedUser(creator, actor, contactSummary);
   if ("client" in reservation) view.client = projectRelatedUser(reservation.client, actor, contactSummary);
   if ("employee" in reservation) view.employee = projectEmployee(reservation.employee, actor);
   if (reservation.animal) {
     const { owner, ...animal } = reservation.animal;
     view.animal = actor.isAdmin && owner !== undefined ? { ...animal, owner: projectRelatedUser(owner, actor, contactSummary) } : animal;
   }
-  return view as Omit<R, "client" | "employee" | "animal"> & Record<"client" | "employee" | "animal", unknown>;
+  return view as Omit<R, "client" | "employee" | "animal" | "creator" | "createdBy">
+    & Record<"client" | "employee" | "animal", unknown> & { createdBy: string | null; createdBySelf: boolean };
 }
 
 export function serializeReservations(reservations: ReservationEntity[], actor: Actor) {

@@ -55,6 +55,8 @@ const ACTIVE_VISIT_STATUSES = [ClinicalVisitStatus.IN_PROGRESS, ClinicalVisitSta
  * the reservation's client (the responsible tutor, client_id) sees it and may cancel it; every active tutor (primary
  * or secondary) of the animal sees the animal's reservations (read only). A client_id keeps seeing that reservation
  * after leaving the animal (they remain its responsible client). Responses are projected per actor (serializeReservation).
+ * Authorship (created_by = the actor of POST, immutable) grants no access: staff who book for a client only see the
+ * reservation afterwards when it is assigned to them (or they are administrators).
  */
 @Injectable()
 export class ReservationBusinessService {
@@ -79,8 +81,13 @@ export class ReservationBusinessService {
 
   // ---------------------------------------------------------------- reads
 
-  /** Paginated, filtered and always limited to the caller's scope. */
+  /**
+   * Paginated, filtered and always limited to the caller's scope. The createdBy filter narrows that scope only: a
+   * non-administrator learns creator ids only when it is their own (see serializeReservation), so filtering by
+   * another account returns an empty page instead of revealing who created the reservations they can see.
+   */
   async list(query: ListReservationsQueryDto, actor: Actor) {
+    if (query.createdBy && !actor.isAdmin && !sameId(query.createdBy, actor.id)) return [];
     const builder = this.reservationRepository.createQueryBuilder("reservation")
       .withDeleted()
       .leftJoinAndSelect("reservation.client", "client")
@@ -95,6 +102,7 @@ export class ReservationBusinessService {
     if (query.status) builder.andWhere("reservation.status = :status", { status: query.status });
     if (query.clientId) builder.andWhere("reservation.clientId = :clientId", { clientId: query.clientId });
     if (query.employeeId) builder.andWhere("reservation.employeeId = :employeeId", { employeeId: query.employeeId });
+    if (query.createdBy) builder.andWhere("reservation.createdBy = :createdBy", { createdBy: query.createdBy });
     if (query.animalId) builder.andWhere("reservation.animalId = :animalId", { animalId: query.animalId });
     if (query.from !== undefined) builder.andWhere("reservation.startAt >= :from", { from: toDbUtc(this.instant(query.from)) });
     if (query.to !== undefined) builder.andWhere("reservation.startAt < :to", { to: toDbUtc(this.instant(query.to)) });
@@ -159,7 +167,8 @@ export class ReservationBusinessService {
       const employee = dto.employeeId ? await this.requireBookableEmployee(manager, dto.employeeId, startAt) : null;
       if (employee) await this.reserveEmployeeSlot(manager, employee.id, startAt, endAt);
       const reservation = await manager.save(manager.create(ReservationEntity, {
-        animalId: animal.id, clientId: client.id, employeeId: employee?.id ?? null, startAt, endAt,
+        // Author = the authenticated actor (never from the body); differs from clientId when staff book for a client.
+        animalId: animal.id, clientId: client.id, createdBy: actor.id, employeeId: employee?.id ?? null, startAt, endAt,
         status: ReservationStatus.PENDING, reason: dto.reason ?? null, description: dto.description ?? null, notes: dto.notes ?? null,
         confirmedAt: null, cancelledAt: null,
       }));

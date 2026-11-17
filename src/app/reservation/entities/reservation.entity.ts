@@ -16,6 +16,7 @@ import { Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, Primary
 @Index("ix_vc_reservations_animal_start", ["animalId", "startAt"])
 @Index("ix_vc_reservations_employee_start", ["employeeId", "startAt"])
 @Index("ix_vc_reservations_status_start", ["status", "startAt"])
+@Index("ix_vc_reservations_created_by", ["createdBy"])
 export class ReservationEntity {
   @PrimaryGeneratedColumn("uuid") id: string;
 
@@ -26,6 +27,16 @@ export class ReservationEntity {
   @Column({ name: "client_id", type: "uniqueidentifier" }) clientId: string;
   @ManyToOne(() => UsersEntity, { nullable: false })
   @JoinColumn({ name: "client_id", foreignKeyConstraintName: "fk_vc_reservations_client" }) client: UsersEntity;
+
+  /**
+   * vc_users.id of the account that created the reservation (POST /reservations: always the authenticated actor, never
+   * read from the body). NULL = system/unknown (reservations without a CREATED event before migration 1795521600000).
+   * Immutable: `update: false` keeps it out of every UPDATE. Invariant: equals changed_by of the CREATED history event.
+   * Distinct from clientId (the responsible tutor): staff booking for a client are the creator, not the client.
+   */
+  @Column({ name: "created_by", type: "uniqueidentifier", nullable: true, update: false }) createdBy: string | null;
+  @ManyToOne(() => UsersEntity, { nullable: true })
+  @JoinColumn({ name: "created_by", foreignKeyConstraintName: "fk_vc_reservations_created_by" }) creator: UsersEntity | null;
 
   /** vc_employees.id (employee profile), not the account. */
   @Column({ name: "employee_id", type: "uniqueidentifier", nullable: true }) employeeId: string | null;

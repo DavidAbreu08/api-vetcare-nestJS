@@ -207,3 +207,24 @@ Steps:
 6. Final verification (51069): four trusted non-cascading FKs, three trusted checks, both filtered unique indexes, the other four indexes, `ix_vc_animals_owner_id`, and the trusted history CHECK containing `CLIENT_CHANGED`.
 
 `vc_animals.owner_id` is kept (not dropped) as a synchronized copy of the active primary tutor, written in the same transaction as every tutorship change; access rules read `vc_animal_owners`. Rows are periods that the application only closes (`ended_at`, `ended_by`, `end_reason`) and never deletes or rewrites. `MIGRATED` is reserved for future data migrations and is not written by the application. "At least one primary tutor while there are active tutors" cannot be expressed declaratively and is enforced by the application (animal row lock). The entities declare the same names (`@Index` with filters, `@Check`, `foreignKeyConstraintName`; `AnimalEntity` declares `ix_vc_animals_owner_id`); `animal-owners.sql.spec.ts` checks the metadata and the generated SQL, and `src/database/animal-owners.migration.spec.ts` checks the migration's SQL batches and their order.
+
+# SQL Server schema: reservation authorship
+
+`ReservationAuthorship1795521600000` follows `AnimalOwners1795435200000`. It was not executed against any database during this work. It requires an active transaction (default `--transaction all`); `down` rejects rollback (restore a backup). The migration sets `ANSI_NULLS` and `QUOTED_IDENTIFIER` ON and verifies them (51070) before creating the filtered unique index.
+
+Preconditions (exclusive locks on `vc_reservations` and `vc_reservation_history` held until commit; THROW codes 51070–51079):
+
+- 51071: `vc_reservations.created_by`, `fk_vc_reservations_created_by`, `ix_vc_reservations_created_by` and `uq_vc_reservation_history_created` do not exist yet (the column is also checked with `hasColumn` before any SQL).
+- 51072: `fk_vc_reservation_history_changed_by` and the append-only trigger `tr_vc_reservation_history_append_only` exist.
+- 51073: no reservation has more than one `CREATED` history event. The history is append-only, so duplicates are not cleaned automatically; review them before migrating.
+
+Steps:
+
+1. `ALTER TABLE vc_reservations ADD created_by uniqueidentifier NULL` (alone in its batch; the column is only referenced by later batches). NULL means system/unknown author.
+2. Backfill: `created_by = changed_by` of the reservation's single `CREATED` event (when it has an author). Never derived from `client_id`, because staff may book on behalf of a client. Reservations without a `CREATED` event (or with an unauthored one) stay NULL. No trigger maintains `updated_at`, so the backfill does not change it.
+3. Backfill verification (51074): `created_by` equals the `CREATED` author wherever one exists and is NULL otherwise.
+4. `fk_vc_reservations_created_by` (`created_by` -> `vc_users.id`, `WITH CHECK`, no cascade), `ix_vc_reservations_created_by` (`created_by`), and `uq_vc_reservation_history_created` on `vc_reservation_history(reservation_id)` WHERE `action = N'CREATED'`.
+5. Final verification (51079): nullable column, trusted non-cascading FK, both indexes (the history one unique and filtered).
+6. Report: the number of reservations left with `created_by` NULL is logged as a warning through the TypeORM logger (nothing is logged when it is zero).
+
+The application writes `created_by` only on `POST /api/vetcare/reservations` (always the authenticated caller, never read from the body) and never updates it (`update: false` on the entity column). Invariant: `vc_reservations.created_by` = `changed_by` of the reservation's `CREATED` event; the history snapshot does not duplicate it. The entities declare the same names (`foreignKeyConstraintName`, `@Index`, including the filtered unique index on `ReservationHistoryEntity`); `src/app/reservation/reservation.sql.spec.ts` checks the metadata and the generated INSERT/UPDATE/SELECT SQL, and `src/database/reservation-authorship.migration.spec.ts` checks the migration's SQL batches and their order.

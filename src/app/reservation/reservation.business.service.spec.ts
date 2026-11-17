@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, ValidationPipe } from "@nestjs/common";
 import { ClinicalVisitStatus } from "../clinical-visits/enums/clinical-visit-status.enum";
 import { Actor, sameId } from "../core/authorization";
 import { ReservationStatus } from "../core/enums/reservation-status.enum";
@@ -13,6 +13,8 @@ import { ReservationHistoryAction } from "../reservation-history/enums/reservati
 import { serializeHistoryEvent } from "../reservation-history/reservation-history.service";
 import { assertTransition } from "./reservation-policy";
 import { ReservationBusinessService } from "./reservation.business.service";
+import { CreateReservationDto } from "./dto/create-reservation.dto";
+import { ListReservationsQueryDto } from "./dto/list-reservations-query.dto";
 
 // Monday 2030-01-07, 10:00-10:30 in Lisbon (UTC in winter).
 const START = "2030-01-07T10:00:00Z";
@@ -453,5 +455,74 @@ describe("Reservations of animals with several tutors (decisions 11, 13)", () =>
     await expect(t.business.getById("R-1", ana)).resolves.toMatchObject({ id: "R-1" });
     expect(await t.business.canRead(bob, { clientId: "ANA", employeeId: null, animalId: "DOG" })).toBe(true);
     expect(await t.business.canRead(actor({ id: "EVE", isClient: true }), { clientId: "ANA", employeeId: null, animalId: "DOG" })).toBe(false);
+  });
+});
+
+describe("Reservation authorship (created_by, decisions 15 and 16)", () => {
+  const dto = { animalId: "DOG", startAt: START, endAt: END } as any;
+  const createdEvent = (t: ReturnType<typeof setup>) => (t.history.record.mock.calls as any[]).find(call => call[1].action === ReservationHistoryAction.CREATED)[1];
+
+  it("a client booking their own animal is both client and author; CREATED.changedBy is the same actor", async () => {
+    const t = setup();
+    const view: any = await t.business.create(dto, bob);
+    expect(t.manager.create).toHaveBeenCalledWith(ReservationEntity, expect.objectContaining({ clientId: "BOB", createdBy: "BOB" }));
+    expect(createdEvent(t)).toMatchObject({ changedBy: "BOB" });
+    // The history snapshot does not duplicate the author.
+    expect(createdEvent(t).newData).not.toHaveProperty("createdBy");
+    expect(view).toMatchObject({ createdBy: "BOB", createdBySelf: true });
+  });
+
+  it("staff and administrators booking for another client are the author, not the client", async () => {
+    const t = setup();
+    await t.business.create({ ...dto, ownerId: "BOB" }, ana);
+    expect(t.manager.create).toHaveBeenLastCalledWith(ReservationEntity, expect.objectContaining({ clientId: "BOB", createdBy: "ANA" }));
+    expect(createdEvent(t)).toMatchObject({ changedBy: "ANA" });
+    await t.business.create({ ...dto, ownerId: "BOB", employeeId: "E-1" }, admin);
+    expect(t.manager.create).toHaveBeenLastCalledWith(ReservationEntity, expect.objectContaining({ clientId: "BOB", createdBy: "ADM" }));
+  });
+
+  it("projects the author: admin sees it, the client sees createdBySelf=false and no employee id, the author grants no access", async () => {
+    const t = setup();
+    const created: any = await t.business.create({ ...dto, ownerId: "BOB" }, ana);
+    expect(created).toMatchObject({ clientId: "BOB", createdBy: "ANA", createdBySelf: true });
+    await expect(t.business.getById("R-NEW", bob)).resolves.toMatchObject({ clientId: "BOB", createdBy: null, createdBySelf: false });
+    await expect(t.business.getById("R-NEW", admin)).resolves.toMatchObject({ createdBy: "ANA", createdBySelf: false });
+    // Decision 16: the employee who booked for the client only sees it once it is assigned to her.
+    await expect(t.business.getById("R-NEW", ana)).rejects.toBeInstanceOf(ForbiddenException);
+    t.reservations.get("R-NEW").employeeId = "E-ANA";
+    await expect(t.business.getById("R-NEW", ana)).resolves.toMatchObject({ createdBy: "ANA", createdBySelf: true });
+  });
+
+  it("assign, confirm, reschedule, no-show and cancel never write createdBy", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1", createdBy: "ANA" });
+    t.addReservation({ id: "R-2", createdBy: "ANA" });
+    await t.business.assignEmployee("R-1", { employeeId: "E-1" }, admin);
+    await t.business.confirm("R-1", {}, admin);
+    await t.business.reschedule("R-1", { startAt: "2030-01-08T10:00:00Z", endAt: "2030-01-08T10:30:00Z" }, admin);
+    await t.business.confirm("R-1", {}, admin);
+    jest.spyOn(Date, "now").mockReturnValue(new Date("2030-01-08T10:16:00Z").getTime());
+    await t.business.markNoShow("R-1", {}, admin);
+    await t.business.cancel("R-2", {}, admin);
+    expect(t.reservations.get("R-1")).toMatchObject({ status: ReservationStatus.NO_SHOW, createdBy: "ANA" });
+    expect(t.reservations.get("R-2")).toMatchObject({ status: ReservationStatus.CANCELLED, createdBy: "ANA" });
+    expect(t.manager.update.mock.calls.length).toBeGreaterThanOrEqual(6);
+    for (const [, , changes] of t.manager.update.mock.calls as any[]) expect(changes).not.toHaveProperty("createdBy");
+  });
+
+  it("filters by createdBy only inside the caller's scope; non-admins only by their own id", async () => {
+    const t = setup();
+    // Another account's id: empty page without querying (the repository double has no query builder).
+    await expect(t.business.list({ skip: 0, take: 10, createdBy: "ADM" } as any, bob)).resolves.toEqual([]);
+  });
+
+  it("rejects createdBy in the POST body (400, whitelist) and validates the createdBy filter", async () => {
+    const pipe = new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true, forbidUnknownValues: true });
+    const id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    const body = { animalId: id, startAt: START, endAt: END };
+    await expect(pipe.transform(body, { type: "body", metatype: CreateReservationDto })).resolves.toBeInstanceOf(CreateReservationDto);
+    await expect(pipe.transform({ ...body, createdBy: id }, { type: "body", metatype: CreateReservationDto })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(pipe.transform({ createdBy: id }, { type: "query", metatype: ListReservationsQueryDto })).resolves.toMatchObject({ createdBy: id });
+    await expect(pipe.transform({ createdBy: "nope" }, { type: "query", metatype: ListReservationsQueryDto })).rejects.toBeInstanceOf(BadRequestException);
   });
 });

@@ -71,15 +71,15 @@ All operations use the global `/api/vetcare` prefix from `src/api-routing.ts`. C
 | DELETE | `/api/vetcare/measurement-types/:id` | [src/app/measurement-types/measurement-type.controller.ts:38](../src/app/measurement-types/measurement-type.controller.ts#L38) |
 | GET | `/api/vetcare/measurement-types/:id` | [src/app/measurement-types/measurement-type.controller.ts:22](../src/app/measurement-types/measurement-type.controller.ts#L22) |
 | PATCH | `/api/vetcare/measurement-types/:id` | [src/app/measurement-types/measurement-type.controller.ts:32](../src/app/measurement-types/measurement-type.controller.ts#L32) |
-| GET | `/api/vetcare/reservations` | [src/app/reservation/reservation.controller.ts:27](../src/app/reservation/reservation.controller.ts#L27) |
-| POST | `/api/vetcare/reservations` | [src/app/reservation/reservation.controller.ts:46](../src/app/reservation/reservation.controller.ts#L46) |
-| GET | `/api/vetcare/reservations/:id` | [src/app/reservation/reservation.controller.ts:32](../src/app/reservation/reservation.controller.ts#L32) |
-| POST | `/api/vetcare/reservations/:id/cancel` | [src/app/reservation/reservation.controller.ts:77](../src/app/reservation/reservation.controller.ts#L77) |
-| POST | `/api/vetcare/reservations/:id/confirm` | [src/app/reservation/reservation.controller.ts:59](../src/app/reservation/reservation.controller.ts#L59) |
-| PATCH | `/api/vetcare/reservations/:id/employee` | [src/app/reservation/reservation.controller.ts:51](../src/app/reservation/reservation.controller.ts#L51) |
-| GET | `/api/vetcare/reservations/:id/history` | [src/app/reservation/reservation.controller.ts:38](../src/app/reservation/reservation.controller.ts#L38) |
-| POST | `/api/vetcare/reservations/:id/no-show` | [src/app/reservation/reservation.controller.ts:86](../src/app/reservation/reservation.controller.ts#L86) |
-| POST | `/api/vetcare/reservations/:id/reschedule` | [src/app/reservation/reservation.controller.ts:68](../src/app/reservation/reservation.controller.ts#L68) |
+| GET | `/api/vetcare/reservations` | [src/app/reservation/reservation.controller.ts:28](../src/app/reservation/reservation.controller.ts#L28) |
+| POST | `/api/vetcare/reservations` | [src/app/reservation/reservation.controller.ts:49](../src/app/reservation/reservation.controller.ts#L49) |
+| GET | `/api/vetcare/reservations/:id` | [src/app/reservation/reservation.controller.ts:34](../src/app/reservation/reservation.controller.ts#L34) |
+| POST | `/api/vetcare/reservations/:id/cancel` | [src/app/reservation/reservation.controller.ts:84](../src/app/reservation/reservation.controller.ts#L84) |
+| POST | `/api/vetcare/reservations/:id/confirm` | [src/app/reservation/reservation.controller.ts:64](../src/app/reservation/reservation.controller.ts#L64) |
+| PATCH | `/api/vetcare/reservations/:id/employee` | [src/app/reservation/reservation.controller.ts:55](../src/app/reservation/reservation.controller.ts#L55) |
+| GET | `/api/vetcare/reservations/:id/history` | [src/app/reservation/reservation.controller.ts:41](../src/app/reservation/reservation.controller.ts#L41) |
+| POST | `/api/vetcare/reservations/:id/no-show` | [src/app/reservation/reservation.controller.ts:94](../src/app/reservation/reservation.controller.ts#L94) |
+| POST | `/api/vetcare/reservations/:id/reschedule` | [src/app/reservation/reservation.controller.ts:74](../src/app/reservation/reservation.controller.ts#L74) |
 | GET | `/api/vetcare/roles` | [src/app/roles/roles.controller.ts:19](../src/app/roles/roles.controller.ts#L19) |
 | POST | `/api/vetcare/roles` | [src/app/roles/roles.controller.ts:30](../src/app/roles/roles.controller.ts#L30) |
 | DELETE | `/api/vetcare/roles/:id` | [src/app/roles/roles.controller.ts:41](../src/app/roles/roles.controller.ts#L41) |
@@ -114,6 +114,7 @@ All operations use the global `/api/vetcare` prefix from `src/api-routing.ts`. C
 6. GET /api/vetcare/users/check-email intentionally reveals email existence. CheckEmailQueryDto now validates the query: missing or invalid email returns 400 instead of the previous false result. The operation remains public; its authentication and rate-limit policy are unchanged.
 7. Employee availability means an active, bookable employee on the date; it does not promise an unoccupied timeslot (the business service has a scheduling TODO). Document the existing meaning rather than imply timeslot availability.
 8. DELETE /api/vetcare/animal/:id/owners/:userId accepts transferFutureReservations in query or JSON body; body wins. Prefer the query parameter in clients for DELETE portability while keeping body compatibility.
+9. Reservation authorship: POST /api/vetcare/reservations always records the caller as `createdBy` (a `createdBy` body field is rejected with 400 by the whitelist validation). GET /api/vetcare/reservations accepts an optional `createdBy` (UUID) query filter that only narrows the caller's existing scope; non-administrators can only filter by their own id (another id returns an empty page). Reservation responses carry `createdBy` (administrators, or the caller's own id; null otherwise) and `createdBySelf`; the schema is `ReservationResponseDto` in OpenAPI.
 
 ## Regression checks
 

@@ -45,4 +45,37 @@ describe("Reservation projection", () => {
     expect(view).not.toHaveProperty("client");
     expect(view.employee).toBeNull();
   });
+
+  describe("authorship (createdBy)", () => {
+    const authored = (createdBy: string | null) => ({ ...(reservation() as any), createdBy, creator: account("vet", "Vet") }) as ReservationEntity;
+
+    it("shows administrators the author id", () => {
+      expect(serializeReservation(authored("vet"), actor({ id: "adm", isAdmin: true }))).toMatchObject({ createdBy: "vet", createdBySelf: false });
+    });
+
+    it("hides the employee author from the client but tells them it was not themselves; the creator account never leaks", () => {
+      const view: any = serializeReservation(authored("vet"), actor({ id: "client", isClient: true }));
+      expect(view).toMatchObject({ createdBy: null, createdBySelf: false });
+      expect(view).not.toHaveProperty("creator");
+      const staff: any = serializeReservation(authored("other-staff"), actor({ id: "vet", isEmployee: true }));
+      expect(staff).toMatchObject({ createdBy: null, createdBySelf: false });
+      expect(staff).not.toHaveProperty("creator");
+    });
+
+    it("shows a client author their own id (case-insensitive) and createdBySelf=true", () => {
+      expect(serializeReservation(authored("CLIENT"), actor({ id: "client", isClient: true }))).toMatchObject({ createdBy: "CLIENT", createdBySelf: true });
+    });
+
+    it("reports an unknown author (NULL) as null for everyone", () => {
+      for (const viewer of [actor({ isAdmin: true }), actor({ id: "client", isClient: true })]) {
+        expect(serializeReservation(authored(null), viewer)).toMatchObject({ createdBy: null, createdBySelf: false });
+      }
+    });
+
+    it("gives administrators the creator only as a full account without password hash", () => {
+      const view: any = serializeReservation(authored("vet"), actor({ isAdmin: true }));
+      expect(view.creator).toMatchObject({ id: "vet", nif: "123456789" });
+      expect(view.creator).not.toHaveProperty("passwordHash");
+    });
+  });
 });

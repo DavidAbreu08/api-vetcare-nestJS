@@ -26,6 +26,14 @@ export class ListReservationsQueryDto extends ListQueryDto {
   @IsUUID()
   animalId?: string;
 
+  @ApiPropertyOptional({
+    format: "uuid",
+    description: "Account id (vc_users.id) that created the reservation. Narrows the caller's scope only; non-administrators can only filter by their own id (any other id returns an empty page).",
+  })
+  @IsOptional()
+  @IsUUID()
+  createdBy?: string;
+
   @ApiPropertyOptional({ description: "Reservations starting at or after this instant (ISO-8601 with offset)." })
   @IsOptional()
   @IsoInstant()
