@@ -1,5 +1,5 @@
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam } from "@nestjs/swagger";
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Put, Query, UseGuards } from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
 import { Actor } from "../core/authorization";
 import { CurrentUser } from "../core/decorators/current-user.decorator";
@@ -8,6 +8,7 @@ import { SystemRole } from "../core/enums/system-role.enum";
 import { RolesGuard } from "../core/guards/roles/roles.guard";
 import { CreateEmployeeDto, ListEmployeesQueryDto, UpdateEmployeeDto } from "./dto/create-employee.dto";
 import { EmployeesService } from "./employees.service";
+import { ReplaceEmployeeServicesDto } from "../clinic-services/dto/clinic-service.dto";
 
 @Controller("employees")
 @ApiTags("Employees")
@@ -32,6 +33,19 @@ export class EmployeesController {
   @ApiParam({ name: "date", description: "Clinic date (YYYY-MM-DD)", schema: { type: "string", format: "date" } })
   @Roles(SystemRole.ADMIN)
   getAvailable(@Param("date") date: string) { return this.service.getAvailableByDate(date); }
+
+  /** Service qualifications: administrators, or the employee itself. */
+  @Get(":id/services")
+  @ApiOperation({ summary: "List the services an employee is qualified for", description: "Administrators, or the employee itself. Includes qualifications for services deactivated later." })
+  @ApiParam({ name: "id", description: "Employee profile UUID (vc_employees.id)", schema: { type: "string", format: "uuid" } })
+  @Roles(SystemRole.ADMIN, SystemRole.EMPLOYEE)
+  getServices(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() actor: Actor) { return this.service.getServices(id, actor); }
+
+  @Put(":id/services")
+  @ApiOperation({ summary: "Replace the services an employee is qualified for", description: "Full replacement in one transaction holding the employee profile lock. Unknown services return 404; new qualifications require active services (409 otherwise); inactive services already held may be kept. Removing a qualification while the employee has open reservations of that service returns 409; qualifications changed concurrently return 409 (reload and retry)." })
+  @ApiParam({ name: "id", description: "Employee profile UUID (vc_employees.id)", schema: { type: "string", format: "uuid" } })
+  @Roles(SystemRole.ADMIN)
+  replaceServices(@Param("id", ParseUUIDPipe) id: string, @Body() dto: ReplaceEmployeeServicesDto) { return this.service.replaceServices(id, dto); }
 
   /** Administrators, or the employee itself. */
   @Get(":id")

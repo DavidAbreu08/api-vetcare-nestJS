@@ -9,6 +9,8 @@ import { AnimalEntity } from "../animal/entities/animal.entity";
 import { UsersEntity } from "../users/entities/users.entity";
 import { SystemSettingCode } from "../system-settings/enums/system-setting-code.enum";
 import { ReservationEntity } from "./entities/reservation.entity";
+import { ClinicServiceEntity } from "../clinic-services/entities/clinic-service.entity";
+import { EmployeeServiceEntity } from "../clinic-services/entities/employee-service.entity";
 import { ReservationHistoryAction } from "../reservation-history/enums/reservation-history-action.enum";
 import { serializeHistoryEvent } from "../reservation-history/reservation-history.service";
 import { assertTransition } from "./reservation-policy";
@@ -42,6 +44,9 @@ function setup() {
   const visits: any[] = [];
   const queryBuilders: any[] = [];
   const state = { overlaps: 0 };
+  // Clinic services (30 min by default) and qualifications "employeeId:serviceId" (every employee qualified for SVC).
+  const services: Record<string, any> = { SVC: { id: "SVC", code: "CONSULTATION", name: "Consultation", durationMinutes: 30, isActive: true } };
+  const qualifications = new Set<string>(["E-1:SVC", "E-2:SVC", "E-ANA:SVC"]);
 
   const manager: any = {
     queryRunner: { isTransactionActive: true },
@@ -62,6 +67,7 @@ function setup() {
         const account = accounts[where.id] ?? [...employees.values()].find(employee => employee.userId === where.id)?.user;
         return account && !account.deletedAt ? { ...account } : null;
       }
+      if (entity === ClinicServiceEntity) return services[where.id] ? { ...services[where.id] } : null;
       return null;
     }),
     find: jest.fn(async () => []),
@@ -72,7 +78,9 @@ function setup() {
       return saved;
     }),
     update: jest.fn(async (_entity: unknown, { id }: any, changes: any) => Object.assign(reservations.get(id), changes)),
-    count: jest.fn(async (_entity: unknown, { where }: any) => visits.filter(visit => sameId(visit.reservationId, where.reservationId)
+    count: jest.fn(async (entity: unknown, { where }: any) => entity === EmployeeServiceEntity
+      ? Number(qualifications.has(`${where.employeeId}:${where.serviceId}`))
+      : visits.filter(visit => sameId(visit.reservationId, where.reservationId)
       && (!where.status || where.status.value.includes(visit.status))).length),
     createQueryBuilder: jest.fn(() => {
       const qb: any = { params: {} };
@@ -91,7 +99,10 @@ function setup() {
   const settings = { getNonNegativeInteger: jest.fn(async (_code: SystemSettingCode) => 15) };
   const membership = { hasSystemRole: jest.fn(async () => true) };
   const history = { record: jest.fn(async () => undefined), list: jest.fn() };
-  const reservationRepository = { findOne: jest.fn(async ({ where }: any) => (reservations.has(where.id) ? { ...reservations.get(where.id), client: accounts.ANA } : null)) };
+  const reservationRepository = { findOne: jest.fn(async ({ where }: any) => {
+    const row = reservations.get(where.id);
+    return row ? { ...row, client: accounts.ANA, service: row.serviceId ? services[row.serviceId] ?? null : null } : null;
+  }) };
   const usersRepository = { findOne: jest.fn(async ({ where }: any) => accounts[where.id] ?? null) };
   const animalRepository = { findOne: jest.fn(async ({ where }: any) => pets[where.id] ?? null) };
 
@@ -104,18 +115,18 @@ function setup() {
     membership as any, history as any, reservationRepository as any, usersRepository as any, animalRepository as any, access as any);
   const addReservation = (row: Partial<ReservationEntity> & { id: string }) => {
     reservations.set(row.id, {
-      animalId: "CAT", clientId: "ANA", employeeId: null, startAt, endAt, status: ReservationStatus.PENDING,
+      animalId: "CAT", clientId: "ANA", serviceId: "SVC", employeeId: null, startAt, endAt, status: ReservationStatus.PENDING,
       confirmedAt: null, cancelledAt: null, ...row,
     });
   };
   const actions = () => history.record.mock.calls.map((call: any[]) => call[1].action);
-  return { business, manager, history, settings, membership, reservations, visits, queryBuilders, state, addReservation, actions, accounts, pets, employees, access, secondary };
+  return { business, manager, history, settings, membership, reservations, visits, queryBuilders, state, addReservation, actions, accounts, pets, employees, access, secondary, services, qualifications };
 }
 
 afterEach(() => jest.restoreAllMocks());
 
 describe("ReservationBusinessService.create", () => {
-  const dto = { animalId: "CAT", startAt: START, endAt: END, reason: "check-up" } as any;
+  const dto = { animalId: "CAT", serviceId: "SVC", startAt: START, endAt: END, reason: "check-up" } as any;
 
   it("creates a PENDING reservation with a CREATED event", async () => {
     const t = setup();
@@ -290,7 +301,7 @@ describe("Reservation parties re-checked inside the transaction (B1, A3)", () =>
     await expect(t.business.reschedule("R-1", dto, admin)).rejects.toMatchObject({ response: { code: "ANIMAL_UNAVAILABLE" } });
     // Deactivated between the pre-check and the transaction.
     t.pets.CAT.deletedAt = null;
-    const create = t.business.create({ animalId: "CAT", startAt: START, endAt: END } as any, ana);
+    const create = t.business.create({ animalId: "CAT", serviceId: "SVC", startAt: START, endAt: END } as any, ana);
     t.accounts.ANA.isActive = false;
     await expect(create).rejects.toMatchObject({ response: { code: "CLIENT_INACTIVE" } });
     expect(t.manager.save).not.toHaveBeenCalled();
@@ -304,7 +315,7 @@ describe("Reservation parties re-checked inside the transaction (B1, A3)", () =>
       if (entity === AnimalEntity && options.lock) t.pets.CAT.owner = { id: "BOB" };
       return findOne(entity, options);
     });
-    await expect(t.business.create({ animalId: "CAT", startAt: START, endAt: END } as any, ana)).rejects.toMatchObject({ status: 409, response: { code: "ANIMAL_OWNER_MISMATCH" } });
+    await expect(t.business.create({ animalId: "CAT", serviceId: "SVC", startAt: START, endAt: END } as any, ana)).rejects.toMatchObject({ status: 409, response: { code: "ANIMAL_OWNER_MISMATCH" } });
     expect(t.manager.save).not.toHaveBeenCalled();
     // The in-transaction check reads vc_animal_owners through the transaction manager, after both locks.
     const inTransaction = t.access.isActiveTutor.mock.calls.findIndex((call: any[]) => call[2] === t.manager);
@@ -414,7 +425,7 @@ describe("Reservation state machine and history projection", () => {
 });
 
 describe("Reservations of animals with several tutors (decisions 11, 13)", () => {
-  const dto = { animalId: "CAT", startAt: START, endAt: END } as any;
+  const dto = { animalId: "CAT", serviceId: "SVC", startAt: START, endAt: END } as any;
   const carla = actor({ id: "CARLA", isClient: true });
 
   it("lets a secondary tutor book as the responsible client, re-checking the tutorship under the locks", async () => {
@@ -459,7 +470,7 @@ describe("Reservations of animals with several tutors (decisions 11, 13)", () =>
 });
 
 describe("Reservation authorship (created_by, decisions 15 and 16)", () => {
-  const dto = { animalId: "DOG", startAt: START, endAt: END } as any;
+  const dto = { animalId: "DOG", serviceId: "SVC", startAt: START, endAt: END } as any;
   const createdEvent = (t: ReturnType<typeof setup>) => (t.history.record.mock.calls as any[]).find(call => call[1].action === ReservationHistoryAction.CREATED)[1];
 
   it("a client booking their own animal is both client and author; CREATED.changedBy is the same actor", async () => {
@@ -519,10 +530,162 @@ describe("Reservation authorship (created_by, decisions 15 and 16)", () => {
   it("rejects createdBy in the POST body (400, whitelist) and validates the createdBy filter", async () => {
     const pipe = new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true, forbidUnknownValues: true });
     const id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
-    const body = { animalId: id, startAt: START, endAt: END };
+    const body = { animalId: id, serviceId: id, startAt: START, endAt: END };
     await expect(pipe.transform(body, { type: "body", metatype: CreateReservationDto })).resolves.toBeInstanceOf(CreateReservationDto);
     await expect(pipe.transform({ ...body, createdBy: id }, { type: "body", metatype: CreateReservationDto })).rejects.toBeInstanceOf(BadRequestException);
     await expect(pipe.transform({ createdBy: id }, { type: "query", metatype: ListReservationsQueryDto })).resolves.toMatchObject({ createdBy: id });
     await expect(pipe.transform({ createdBy: "nope" }, { type: "query", metatype: ListReservationsQueryDto })).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe("Clinic services in reservations (phase 5A)", () => {
+  const dto = { animalId: "CAT", serviceId: "SVC", startAt: START } as any;
+  const forBob = { animalId: "DOG", ownerId: "BOB", serviceId: "SVC", startAt: START } as any;
+  const serviceReads = (t: ReturnType<typeof setup>) => t.manager.findOne.mock.calls.filter(([entity]: any[]) => entity === ClinicServiceEntity);
+  const qualificationChecks = (t: ReturnType<typeof setup>) => t.manager.count.mock.calls.filter(([entity]: any[]) => entity === EmployeeServiceEntity);
+
+  it("requires serviceId in the body (400) and accepts a body without endAt", async () => {
+    const pipe = new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true, forbidUnknownValues: true });
+    const id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    await expect(pipe.transform({ animalId: id, startAt: START, endAt: END }, { type: "body", metatype: CreateReservationDto })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(pipe.transform({ animalId: id, serviceId: "nope", startAt: START }, { type: "body", metatype: CreateReservationDto })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(pipe.transform({ animalId: id, serviceId: id, startAt: START }, { type: "body", metatype: CreateReservationDto })).resolves.toMatchObject({ serviceId: id });
+  });
+
+  it("computes endAt = startAt + durationMinutes and records serviceId (CREATED snapshot included)", async () => {
+    const t = setup();
+    t.services.SVC.durationMinutes = 45;
+    await t.business.create(dto, ana);
+    expect(t.manager.create).toHaveBeenCalledWith(ReservationEntity, expect.objectContaining({
+      serviceId: "SVC", startAt, endAt: new Date(startAt.getTime() + 45 * MINUTE),
+    }));
+    const [, created] = t.history.record.mock.calls[0] as any[];
+    expect(created).toMatchObject({ action: ReservationHistoryAction.CREATED, newData: { serviceId: "SVC", endAt: "2030-01-07T10:45:00.000Z" } });
+  });
+
+  it("accepts the computed endAt from anyone, rejects a different one from non-admins (400 END_AT_MISMATCH) and lets administrators override it", async () => {
+    const t = setup();
+    await t.business.create({ ...dto, endAt: END }, ana);
+    expect(t.manager.create).toHaveBeenLastCalledWith(ReservationEntity, expect.objectContaining({ endAt }));
+    const longer = "2030-01-07T11:00:00Z";
+    await expect(t.business.create({ ...dto, endAt: longer }, ana)).rejects.toMatchObject({ status: 400, response: { code: "END_AT_MISMATCH" } });
+    await expect(t.business.create({ ...forBob, endAt: longer }, bob)).rejects.toBeInstanceOf(BadRequestException);
+    expect(t.manager.save).toHaveBeenCalledTimes(1);
+    await t.business.create({ ...forBob, endAt: longer }, admin);
+    expect(t.manager.create).toHaveBeenLastCalledWith(ReservationEntity, expect.objectContaining({ serviceId: "SVC", endAt: new Date(longer) }));
+    // The administrator override still follows the clinic window rules.
+    await expect(t.business.create({ ...forBob, endAt: "2030-01-07T21:00:00Z" }, admin)).rejects.toMatchObject({ response: { code: "OUTSIDE_BUSINESS_HOURS" } });
+  });
+
+  it("refuses a missing (404) or inactive service without writing: 409 SERVICE_INACTIVE for administrators, 404 for everyone else", async () => {
+    const t = setup();
+    await expect(t.business.create({ ...dto, serviceId: "NOPE" }, ana)).rejects.toMatchObject({ status: 404, response: { message: "Service not found" } });
+    await expect(t.business.create({ ...forBob, serviceId: "NOPE" }, admin)).rejects.toMatchObject({ status: 404 });
+    t.services.SVC.isActive = false;
+    // Non-administrators never learn that an inactive service exists (same as GET /services/:id).
+    const hidden = await t.business.create(dto, ana).catch((error: any) => error);
+    expect(hidden).toMatchObject({ status: 404, response: { message: "Service not found" } });
+    expect(hidden.response.code).toBeUndefined();
+    await expect(t.business.create(forBob, admin)).rejects.toMatchObject({ status: 409, response: { code: "SERVICE_INACTIVE" } });
+    expect(t.manager.save).not.toHaveBeenCalled();
+  });
+
+  it("reads the service with a shared lock after the animal and client locks and before the employee profile and the applock", async () => {
+    const t = setup();
+    await t.business.create({ ...forBob, employeeId: "E-1" }, admin);
+    const order = (predicate: (call: any[]) => boolean) => t.manager.findOne.mock.invocationCallOrder[t.manager.findOne.mock.calls.findIndex(predicate)];
+    const service = order(([entity, options]) => entity === ClinicServiceEntity && options.lock?.mode === "pessimistic_read");
+    expect(t.manager.findOne).toHaveBeenCalledWith(ClinicServiceEntity, { where: { id: "SVC" }, lock: { mode: "pessimistic_read" } });
+    expect(order(([entity, options]) => entity === AnimalEntity && !!options.lock)).toBeLessThan(service);
+    expect(order(([entity, options]) => entity === UsersEntity && !!options.lock)).toBeLessThan(service);
+    expect(service).toBeLessThan(order(([entity, options]) => entity === EmployeeEntity && !!options.lock));
+    expect(service).toBeLessThan(t.manager.query.mock.invocationCallOrder[0]);
+  });
+
+  it("does not let an inactive service block assign, confirm or reschedule of existing reservations", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    t.services.SVC.isActive = false;
+    await t.business.assignEmployee("R-1", { employeeId: "E-1" }, admin);
+    await t.business.confirm("R-1", {}, admin);
+    await t.business.reschedule("R-1", { startAt: "2030-01-08T10:00:00Z" }, admin);
+    expect(t.actions()).toEqual([ReservationHistoryAction.EMPLOYEE_ASSIGNED, ReservationHistoryAction.CONFIRMED, ReservationHistoryAction.RESCHEDULED]);
+    expect(serviceReads(t)).toHaveLength(0);
+  });
+
+  it("rejects an employee not qualified for the service on pre-assignment, assign, confirm and reschedule (400 EMPLOYEE_NOT_QUALIFIED)", async () => {
+    const t = setup();
+    t.qualifications.delete("E-1:SVC");
+    const notQualified = { status: 400, response: { code: "EMPLOYEE_NOT_QUALIFIED", message: "The employee is not qualified for this service" } };
+    await expect(t.business.create({ ...forBob, employeeId: "E-1" }, admin)).rejects.toMatchObject(notQualified);
+    t.addReservation({ id: "R-1" });
+    await expect(t.business.assignEmployee("R-1", { employeeId: "E-1" }, admin)).rejects.toMatchObject(notQualified);
+    t.addReservation({ id: "R-2", employeeId: "E-1" });
+    await expect(t.business.confirm("R-2", {}, admin)).rejects.toMatchObject(notQualified);
+    t.addReservation({ id: "R-3", status: ReservationStatus.CONFIRMED, employeeId: "E-1", confirmedAt: new Date() });
+    await expect(t.business.reschedule("R-3", { startAt: "2030-01-08T10:00:00Z" }, admin)).rejects.toMatchObject(notQualified);
+    expect(t.manager.save).not.toHaveBeenCalled();
+    expect(t.manager.update).not.toHaveBeenCalled();
+    // The check fails before sp_getapplock.
+    expect(t.manager.query).not.toHaveBeenCalled();
+    expect(qualificationChecks(t).map(([, options]: any[]) => options.where)).toEqual(Array(4).fill({ employeeId: "E-1", serviceId: "SVC" }));
+  });
+
+  it("checks the qualification after locking the employee profile and before the applock", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1", employeeId: "E-2" });
+    await t.business.confirm("R-1", {}, admin);
+    const profileLock = t.manager.findOne.mock.invocationCallOrder[t.manager.findOne.mock.calls.findIndex(([entity, options]: any[]) => entity === EmployeeEntity && !!options.lock)];
+    const check = t.manager.count.mock.invocationCallOrder[t.manager.count.mock.calls.findIndex(([entity]: any[]) => entity === EmployeeServiceEntity)];
+    expect(profileLock).toBeLessThan(check);
+    expect(check).toBeLessThan(t.manager.query.mock.invocationCallOrder[0]);
+  });
+
+  it("does not check qualifications for legacy reservations without a service (service_id NULL)", async () => {
+    const t = setup();
+    t.qualifications.clear();
+    t.addReservation({ id: "R-1", serviceId: null });
+    await t.business.assignEmployee("R-1", { employeeId: "E-1" }, admin);
+    await t.business.confirm("R-1", {}, admin);
+    await t.business.reschedule("R-1", { startAt: "2030-01-08T10:00:00Z", endAt: "2030-01-08T10:20:00Z" }, admin);
+    expect(t.reservations.get("R-1")).toMatchObject({ status: ReservationStatus.PENDING, employeeId: "E-1", serviceId: null });
+    expect(qualificationChecks(t)).toHaveLength(0);
+    await expect(t.business.getById("R-1", admin)).resolves.toMatchObject({ serviceId: null, service: null });
+  });
+
+  it("keeps the frozen interval: a new duration changes neither existing reservations nor a reschedule without endAt", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1", employeeId: "E-1" });
+    t.services.SVC.durationMinutes = 90;
+    await t.business.confirm("R-1", {}, admin);
+    expect(t.reservations.get("R-1")).toMatchObject({ startAt, endAt });
+    const newStart = new Date("2030-01-08T10:00:00Z");
+    await t.business.reschedule("R-1", { startAt: newStart.toISOString() }, admin);
+    expect(t.reservations.get("R-1")).toMatchObject({ startAt: newStart, endAt: new Date(newStart.getTime() + 30 * MINUTE) });
+    for (const [, , changes] of t.manager.update.mock.calls as any[]) expect(changes).not.toHaveProperty("serviceId");
+    const [, event] = t.history.record.mock.calls[1] as any[];
+    expect(event).toMatchObject({ action: ReservationHistoryAction.RESCHEDULED, oldData: { serviceId: "SVC" }, newData: { serviceId: "SVC", endAt: "2030-01-08T10:30:00.000Z" } });
+  });
+
+  it("projects the service summary { id, code, name, durationMinutes } in responses", async () => {
+    const t = setup();
+    const view: any = await t.business.create(dto, ana);
+    expect(view).toMatchObject({ serviceId: "SVC", service: { id: "SVC", code: "CONSULTATION", name: "Consultation", durationMinutes: 30 } });
+    expect(Object.keys(view.service).sort()).toEqual(["code", "durationMinutes", "id", "name"]);
+  });
+
+  it("loads the service relation in every reservation loader (detail, write responses and list)", async () => {
+    const t = setup();
+    t.addReservation({ id: "R-1" });
+    const repository = (t.business as any).reservationRepository;
+    await t.business.getById("R-1", admin);
+    expect(repository.findOne).toHaveBeenLastCalledWith(expect.objectContaining({ relations: expect.objectContaining({ service: true }) }));
+    const joins: string[] = [];
+    const qb: any = { leftJoinAndSelect: (path: string) => (joins.push(path), qb), getMany: async () => [{ ...t.reservations.get("R-1"), service: t.services.SVC }] };
+    qb.withDeleted = qb.andWhere = qb.orderBy = qb.addOrderBy = qb.skip = qb.take = () => qb;
+    repository.createQueryBuilder = () => qb;
+    const [listed]: any[] = await t.business.list({ skip: 0, take: 10 } as any, admin);
+    expect(joins).toContain("reservation.service");
+    expect(listed.service).toEqual({ id: "SVC", code: "CONSULTATION", name: "Consultation", durationMinutes: 30 });
   });
 });

@@ -1,4 +1,5 @@
 import { AnimalEntity } from "src/app/animal/entities/animal.entity";
+import { ClinicServiceEntity } from "src/app/clinic-services/entities/clinic-service.entity";
 import { ReservationStatus } from "src/app/core/enums/reservation-status.enum";
 import { utcDateTimeTransformer } from "src/app/core/persistence/utc-datetime";
 import { EmployeeEntity } from "src/app/employees/entities/employee.entity";
@@ -17,6 +18,7 @@ import { Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, Primary
 @Index("ix_vc_reservations_employee_start", ["employeeId", "startAt"])
 @Index("ix_vc_reservations_status_start", ["status", "startAt"])
 @Index("ix_vc_reservations_created_by", ["createdBy"])
+@Index("ix_vc_reservations_service_id", ["serviceId"])
 export class ReservationEntity {
   @PrimaryGeneratedColumn("uuid") id: string;
 
@@ -37,6 +39,15 @@ export class ReservationEntity {
   @Column({ name: "created_by", type: "uniqueidentifier", nullable: true, update: false }) createdBy: string | null;
   @ManyToOne(() => UsersEntity, { nullable: true })
   @JoinColumn({ name: "created_by", foreignKeyConstraintName: "fk_vc_reservations_created_by" }) creator: UsersEntity | null;
+
+  /**
+   * Clinic service (vc_services.id, migration 1795608000000). Required on POST /reservations; NULL only for reservations
+   * created before the catalog existed (no qualification check for them). Immutable: changing the service of an existing
+   * reservation is not supported, so `update: false` keeps it out of every UPDATE.
+   */
+  @Column({ name: "service_id", type: "uniqueidentifier", nullable: true, update: false }) serviceId: string | null;
+  @ManyToOne(() => ClinicServiceEntity, { nullable: true })
+  @JoinColumn({ name: "service_id", foreignKeyConstraintName: "fk_vc_reservations_service" }) service: ClinicServiceEntity | null;
 
   /** vc_employees.id (employee profile), not the account. */
   @Column({ name: "employee_id", type: "uniqueidentifier", nullable: true }) employeeId: string | null;

@@ -55,6 +55,15 @@ export function isUniqueViolationOf(error: unknown, name: string): boolean {
   return driverMessages(driver).some(message => message.toLowerCase().includes(quoted));
 }
 
+/**
+ * True when the error is a FOREIGN KEY/REFERENCE violation (547 without the CHECK wording), so a resource can give a
+ * referenced-row deletion its own message without handling SQL Server error numbers itself.
+ */
+export function isReferenceViolation(error: unknown): boolean {
+  const driver = error as DriverError | null;
+  return driverErrorNumber(driver) === SqlServerError.ConstraintViolation && !isCheckViolation(driver);
+}
+
 /** Executes repository work and translates persistence failures into safe HTTP errors. */
 @Injectable()
 export class PersistenceService {

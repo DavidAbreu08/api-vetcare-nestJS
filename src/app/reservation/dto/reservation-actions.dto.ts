@@ -11,7 +11,7 @@ export class ReservationReasonDto {
   reason?: string | null;
 }
 
-/** Assign or change the employee of a PENDING reservation; never confirms it. */
+/** Assign or change the employee of a PENDING reservation (qualified for its service, if any); never confirms it. */
 export class AssignReservationEmployeeDto extends ReservationReasonDto {
   @ApiProperty({ description: "Employee profile UUID (vc_employees.id), bookable on the reservation date.", format: "uuid" })
   @IsUUID()
@@ -24,7 +24,8 @@ export class RescheduleReservationDto extends ReservationReasonDto {
   @IsoInstant()
   startAt: string;
 
-  @ApiProperty({ description: "New end instant, ISO-8601 with offset or Z.", example: "2030-01-08T10:30:00Z" })
+  @ApiPropertyOptional({ type: String, nullable: true, description: "New end instant, ISO-8601 with offset or Z. Optional: when omitted the reservation keeps its current duration (end - start), not the current service duration.", example: "2030-01-08T10:30:00Z" })
+  @IsOptional()
   @IsoInstant()
-  endAt: string;
+  endAt?: string | null;
 }

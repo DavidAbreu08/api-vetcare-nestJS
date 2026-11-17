@@ -32,9 +32,13 @@ import { assertTransition, clinicParts, overlaps, policyError, validateReservati
 import { ReservationRelation } from "./enums/reservation-relations.enum";
 import { serializeReservation, serializeReservations } from "./reservation.serializer";
 import { activeTutorExists, AnimalAccessService } from "../animal-owners/animal-access.service";
+import { ClinicServiceEntity } from "../clinic-services/entities/clinic-service.entity";
+import { isQualifiedForService } from "../clinic-services/clinic-service.projection";
 
 type NotificationStatus = "sent" | "failed" | "not_requested";
 const WRITE_LOCK = { mode: "pessimistic_write" } as const;
+/** Shared lock held until commit (HOLDLOCK, ROWLOCK): compatible with other bookings, serialized with service writes. */
+const SHARED_LOCK = { mode: "pessimistic_read" } as const;
 /** Visits that count as an attendance; a VOIDED visit no longer blocks cancellation. */
 const ACTIVE_VISIT_STATUSES = [ClinicalVisitStatus.IN_PROGRESS, ClinicalVisitStatus.COMPLETED];
 
@@ -44,7 +48,10 @@ const ACTIVE_VISIT_STATUSES = [ClinicalVisitStatus.IN_PROGRESS, ClinicalVisitSta
  * (sp_getapplock) before checking overlaps. Notifications are sent after commit.
  *
  * Lock order (UPDLOCK rows, then the applock), never inverted by any flow:
- *   vc_reservations -> vc_animals -> vc_users (client) -> vc_employees -> employee schedule applock.
+ *   vc_reservations -> vc_animals -> vc_users (client) -> vc_services (shared, creation only) -> vc_employees
+ *   -> [vc_employee_services read] -> employee schedule applock.
+ * PUT /employees/:id/services follows the same order: the services it adds (shared, by id) -> vc_employees -> writes;
+ * PATCH/DELETE /services/:id lock only the service row, so no cycle forms with either flow.
  * Creation, confirmation and reschedule lock the animal and the client account and re-check them (not deleted,
  * active), serializing with animal deletion and account deactivation/deletion, which lock those rows and then
  * read open reservations. Every flow that assigns or confirms an employee locks the employee profile, serializing
@@ -93,7 +100,8 @@ export class ReservationBusinessService {
       .leftJoinAndSelect("reservation.client", "client")
       .leftJoinAndSelect("reservation.employee", "employee")
       .leftJoinAndSelect("employee.user", "employeeUser")
-      .leftJoinAndSelect("reservation.animal", "animal");
+      .leftJoinAndSelect("reservation.animal", "animal")
+      .leftJoinAndSelect("reservation.service", "service");
     if (!actor.isAdmin) {
       const scopes = ["reservation.clientId = :actorId", activeTutorExists("reservation.animalId", "actorId")];
       if (actor.isEmployee && actor.employeeId) scopes.push("reservation.employeeId = :actorEmployeeId");
@@ -140,7 +148,7 @@ export class ReservationBusinessService {
   private async load(id: string): Promise<ReservationEntity> {
     const reservation = await this.persistence.execute(() => this.reservationRepository.findOne({
       where: { id }, withDeleted: true,
-      relations: { [ReservationRelation.CLIENT]: true, [ReservationRelation.EMPLOYEE]: { user: true }, [ReservationRelation.ANIMAL]: true } }));
+      relations: { [ReservationRelation.CLIENT]: true, [ReservationRelation.EMPLOYEE]: { user: true }, [ReservationRelation.ANIMAL]: true, [ReservationRelation.SERVICE]: true } }));
     if (!reservation) throw applicationError(ErrorMetadata.NOT_FOUND, ReservationMessages.RESERVATION_NOT_FOUND);
     return reservation;
   }
@@ -151,10 +159,13 @@ export class ReservationBusinessService {
    * Always PENDING. Staff on the professional path may book for another client; only an administrator may
    * pre-assign an employee (CREATED + EMPLOYEE_ASSIGNED), matching PATCH /:id/employee. A personal booking (the
    * caller is the client) follows the client path.
+   * The service (serviceId, required) must exist and be active; endAt = startAt + its durationMinutes, computed by the
+   * server: an administrator may send a different endAt (override), anyone else only the computed value (400 otherwise).
+   * The interval is then frozen in start_at/end_at (later duration changes never alter the reservation).
    */
   async create(dto: CreateReservationDto, actor: Actor) {
-    const { startAt, endAt } = this.window(dto.startAt, dto.endAt);
-    validateReservationWindow(startAt, endAt);
+    const startAt = this.instant(dto.startAt);
+    const requestedEnd = dto.endAt === undefined || dto.endAt === null ? undefined : this.instant(dto.endAt);
     const user = await this.persistence.execute(() => this.usersRepository.findOne({ where: { id: actor.id } }));
     if (!user) throw applicationError(ErrorMetadata.NOT_FOUND, ReservationMessages.USER_NOT_FOUND);
     const client = await this.validateAndGetClient(actor, user, dto.ownerId);
@@ -163,12 +174,15 @@ export class ReservationBusinessService {
 
     const saved = await this.transaction(async manager => {
       await this.requireBookingParties(manager, animal.id, client.id, { requireOwnership: true });
+      const service = await this.requireBookableService(manager, dto.serviceId, actor);
+      const endAt = this.serviceEnd(startAt, service, requestedEnd, actor);
+      validateReservationWindow(startAt, endAt);
       await this.assertNotBlocked(manager, startAt, endAt);
-      const employee = dto.employeeId ? await this.requireBookableEmployee(manager, dto.employeeId, startAt) : null;
+      const employee = dto.employeeId ? await this.requireBookableEmployee(manager, dto.employeeId, startAt, service.id) : null;
       if (employee) await this.reserveEmployeeSlot(manager, employee.id, startAt, endAt);
       const reservation = await manager.save(manager.create(ReservationEntity, {
         // Author = the authenticated actor (never from the body); differs from clientId when staff book for a client.
-        animalId: animal.id, clientId: client.id, createdBy: actor.id, employeeId: employee?.id ?? null, startAt, endAt,
+        animalId: animal.id, clientId: client.id, createdBy: actor.id, serviceId: service.id, employeeId: employee?.id ?? null, startAt, endAt,
         status: ReservationStatus.PENDING, reason: dto.reason ?? null, description: dto.description ?? null, notes: dto.notes ?? null,
         confirmedAt: null, cancelledAt: null,
       }));
@@ -185,9 +199,9 @@ export class ReservationBusinessService {
       return reservation;
     });
 
-    const start = clinicParts(startAt);
+    const start = clinicParts(saved.startAt);
     return this.respond(saved.id, actor, () => this.emailService.sendReservationCreatedEmail(
-      client.email, client.name, start.date, start.time, clinicParts(endAt).time));
+      client.email, client.name, start.date, start.time, clinicParts(saved.endAt).time));
   }
 
   /** PENDING only; the employee must be bookable on the reservation date and free (applock + overlap check). */
@@ -198,7 +212,7 @@ export class ReservationBusinessService {
         throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.ASSIGN_REQUIRES_PENDING, undefined, { code: "INVALID_TRANSITION" });
       }
       if (sameId(reservation.employeeId, dto.employeeId)) throw applicationError(ErrorMetadata.ALREADY_EXISTS, ReservationMessages.EMPLOYEE_ALREADY_ASSIGNED);
-      const employee = await this.requireBookableEmployee(manager, dto.employeeId, reservation.startAt);
+      const employee = await this.requireBookableEmployee(manager, dto.employeeId, reservation.startAt, reservation.serviceId);
       await this.reserveEmployeeSlot(manager, employee.id, reservation.startAt, reservation.endAt, reservation.id);
       const previous = reservation.employeeId;
       await manager.update(ReservationEntity, { id: reservation.id }, { employeeId: employee.id });
@@ -219,7 +233,7 @@ export class ReservationBusinessService {
       if (!reservation.employeeId) throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.EMPLOYEE_REQUIRED, undefined, { code: "EMPLOYEE_REQUIRED" });
       validateReservationWindow(reservation.startAt, reservation.endAt);
       await this.requireBookingParties(manager, reservation.animalId, reservation.clientId);
-      const employee = await this.requireBookableEmployee(manager, reservation.employeeId, reservation.startAt);
+      const employee = await this.requireBookableEmployee(manager, reservation.employeeId, reservation.startAt, reservation.serviceId);
       await this.assertNotBlocked(manager, reservation.startAt, reservation.endAt);
       await this.reserveEmployeeSlot(manager, employee.id, reservation.startAt, reservation.endAt, reservation.id);
       const before = reservationSnapshot(reservation);
@@ -239,23 +253,29 @@ export class ReservationBusinessService {
   /**
    * New interval for a PENDING or CONFIRMED reservation without a clinical visit. A CONFIRMED reservation returns to
    * PENDING (confirmed_at cleared) and must be confirmed again; one RESCHEDULED event keeps old and new values.
+   * Without endAt the reservation keeps its own (frozen) duration, end_at - start_at, not the current catalog duration;
+   * the service is not re-read, so an inactive service does not block it. The assigned employee must still be qualified.
    */
   async reschedule(id: string, dto: RescheduleReservationDto, actor: Actor) {
-    const { startAt, endAt } = this.window(dto.startAt, dto.endAt);
-    validateReservationWindow(startAt, endAt);
+    const startAt = this.instant(dto.startAt);
+    const requestedEnd = dto.endAt === undefined || dto.endAt === null ? undefined : this.instant(dto.endAt);
+    if (requestedEnd) validateReservationWindow(startAt, requestedEnd);
+    let endAt = requestedEnd as Date;
     const previous = await this.transaction(async manager => {
       const reservation = await this.lockReservation(manager, id);
       if (![ReservationStatus.PENDING, ReservationStatus.CONFIRMED].includes(reservation.status)) {
         throw applicationError(ErrorMetadata.CONFLICT, `Cannot reschedule a ${reservation.status} reservation`, undefined, { code: "INVALID_TRANSITION" });
       }
       if (await this.hasActiveVisit(manager, reservation.id)) throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.VISIT_STARTED);
+      endAt = requestedEnd ?? new Date(startAt.getTime() + (reservation.endAt.getTime() - reservation.startAt.getTime()));
+      validateReservationWindow(startAt, endAt);
       if (reservation.startAt.getTime() === startAt.getTime() && reservation.endAt.getTime() === endAt.getTime()) {
         policyError("RESCHEDULE_UNCHANGED", ReservationMessages.RESCHEDULE_UNCHANGED);
       }
       await this.requireBookingParties(manager, reservation.animalId, reservation.clientId);
       await this.assertNotBlocked(manager, startAt, endAt);
       if (reservation.employeeId) {
-        const employee = await this.requireBookableEmployee(manager, reservation.employeeId, startAt);
+        const employee = await this.requireBookableEmployee(manager, reservation.employeeId, startAt, reservation.serviceId);
         await this.reserveEmployeeSlot(manager, employee.id, startAt, endAt, reservation.id);
       }
       const before = reservationSnapshot(reservation);
@@ -326,8 +346,29 @@ export class ReservationBusinessService {
     return parsed;
   }
 
-  private window(startAt: string, endAt: string) {
-    return { startAt: this.instant(startAt), endAt: this.instant(endAt) };
+  /**
+   * Service of a new reservation, read with a shared lock (HOLDLOCK) until commit after the animal and client locks:
+   * a concurrent deactivation or deletion (which takes UPDLOCK on the service row) either commits first and is seen
+   * here, or waits for this reservation. 404 when missing; when inactive, 409 SERVICE_INACTIVE for administrators and
+   * 404 for everyone else (inactive services are not revealed, as in GET /services/:id). Only creation reads it:
+   * assign/confirm/reschedule of existing reservations are never blocked by an inactive service.
+   */
+  private async requireBookableService(manager: EntityManager, serviceId: string, actor: Actor): Promise<ClinicServiceEntity> {
+    const service = await manager.findOne(ClinicServiceEntity, { where: { id: serviceId }, lock: SHARED_LOCK });
+    if (!service || (!service.isActive && !actor.isAdmin)) throw applicationError(ErrorMetadata.NOT_FOUND, ReservationMessages.SERVICE_NOT_FOUND);
+    if (!service.isActive) throw applicationError(ErrorMetadata.CONFLICT, ReservationMessages.SERVICE_INACTIVE, undefined, { code: "SERVICE_INACTIVE" });
+    return service;
+  }
+
+  /**
+   * endAt of a new reservation: startAt + durationMinutes. A requested endAt equal to the computed one is accepted from
+   * anyone; a different one only from an administrator (override), 400 END_AT_MISMATCH otherwise.
+   */
+  private serviceEnd(startAt: Date, service: ClinicServiceEntity, requestedEnd: Date | undefined, actor: Actor): Date {
+    const computed = new Date(startAt.getTime() + service.durationMinutes * 60_000);
+    if (!requestedEnd || requestedEnd.getTime() === computed.getTime()) return computed;
+    if (!actor.isAdmin) policyError("END_AT_MISMATCH", ReservationMessages.endAtMismatch(service.durationMinutes, computed.toISOString()));
+    return requestedEnd;
   }
 
   /** Reads and locks the reservation row (UPDLOCK) for the rest of the transaction; relations are not locked. */
@@ -342,12 +383,18 @@ export class ReservationBusinessService {
    * is locked (UPDLOCK) until commit, serializing with termination/unavailability and account deactivation; the
    * account is read in a separate statement after the lock is granted, so it reflects any change committed by the
    * transaction that held the lock.
+   * With a service (reservations without service_id, created before the catalog, are not checked), the profile must
+   * hold the qualification (vc_employee_services), read after the profile lock and before the applock: PUT
+   * /employees/:id/services changes qualifications under the same profile lock (400 EMPLOYEE_NOT_QUALIFIED otherwise).
    */
-  private async requireBookableEmployee(manager: EntityManager, employeeId: string, startAt: Date) {
+  private async requireBookableEmployee(manager: EntityManager, employeeId: string, startAt: Date, serviceId: string | null = null) {
     const employee = await manager.findOne(EmployeeEntity, { where: { id: employeeId }, lock: WRITE_LOCK });
     const user = employee ? await manager.findOne(UsersEntity, { where: { id: employee.userId } }) : null;
     const candidate = employee && user ? Object.assign(employee, { user }) : null;
     if (!isBookableEmployee(candidate, clinicParts(startAt).date)) throw applicationError(ErrorMetadata.INVALID_VALUE, ReservationMessages.INVALID_EMPLOYEE);
+    if (serviceId && !(await isQualifiedForService(manager, candidate.id, serviceId))) {
+      throw applicationError(ErrorMetadata.INVALID_VALUE, ReservationMessages.EMPLOYEE_NOT_QUALIFIED, undefined, { code: "EMPLOYEE_NOT_QUALIFIED" });
+    }
     return candidate;
   }
 

@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { ReservationStatus } from "../../core/enums/reservation-status.enum";
+import { ClinicServiceSummaryDto } from "../../clinic-services/dto/clinic-service.dto";
 
 /**
  * Documentation of the reservation `result` (serializeReservation). Related accounts are projected per caller:
@@ -10,6 +11,9 @@ export class ReservationResponseDto {
   @ApiProperty({ format: "uuid" }) animalId: string;
   @ApiProperty({ format: "uuid", description: "Responsible client (an active tutor of the animal when booked)." }) clientId: string;
   @ApiProperty({ type: String, format: "uuid", nullable: true, description: "Assigned employee profile (vc_employees.id)." }) employeeId: string | null;
+  @ApiProperty({ type: String, format: "uuid", nullable: true, description: "Clinic service (vc_services.id). Null only for reservations created before the services catalog; immutable." }) serviceId: string | null;
+  @ApiProperty({ type: ClinicServiceSummaryDto, nullable: true, description: "Service summary { id, code, name, durationMinutes } (current catalog values; the booked interval is startAt/endAt). Null for legacy reservations." })
+  service: ClinicServiceSummaryDto | null;
 
   @ApiProperty({
     type: String, format: "uuid", nullable: true,

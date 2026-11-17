@@ -10,13 +10,14 @@ import { ReservationHistoryAction } from "./enums/reservation-history-action.enu
 
 /** State of a reservation stored in history snapshots (instants as ISO-8601 UTC). */
 export type ReservationSnapshot = {
-  status: string; employeeId: string | null; startAt: string; endAt: string; confirmedAt: string | null; cancelledAt: string | null;
+  status: string; employeeId: string | null; serviceId: string | null; startAt: string; endAt: string; confirmedAt: string | null; cancelledAt: string | null;
 };
 
-export function reservationSnapshot(reservation: Pick<ReservationEntity, "status" | "employeeId" | "startAt" | "endAt" | "confirmedAt" | "cancelledAt">): ReservationSnapshot {
+/** serviceId is recorded for events written after migration 1795608000000 (older snapshots do not have it). */
+export function reservationSnapshot(reservation: Pick<ReservationEntity, "status" | "employeeId" | "startAt" | "endAt" | "confirmedAt" | "cancelledAt"> & Partial<Pick<ReservationEntity, "serviceId">>): ReservationSnapshot {
   const iso = (value: Date | null | undefined) => (value instanceof Date ? value.toISOString() : null);
   return {
-    status: reservation.status, employeeId: reservation.employeeId ?? null,
+    status: reservation.status, employeeId: reservation.employeeId ?? null, serviceId: reservation.serviceId ?? null,
     startAt: iso(reservation.startAt)!, endAt: iso(reservation.endAt)!,
     confirmedAt: iso(reservation.confirmedAt), cancelledAt: iso(reservation.cancelledAt),
   };

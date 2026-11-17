@@ -23,6 +23,11 @@ import { serializeEmployee } from "./employee.serializer";
 import { EmployeeJobTitleEntity } from "./entities/employee-job-title.entity";
 import { EmployeeEntity } from "./entities/employee.entity";
 import { EmployeeConflictMessages, EmployeeMessage } from "./employees.messages";
+import { ClinicServiceEntity } from "../clinic-services/entities/clinic-service.entity";
+import { EmployeeServiceEntity } from "../clinic-services/entities/employee-service.entity";
+import { serializeClinicService } from "../clinic-services/clinic-service.projection";
+import { ClinicServiceConflictMessages, ClinicServiceMessage } from "../clinic-services/clinic-services.messages";
+import { ReplaceEmployeeServicesDto } from "../clinic-services/dto/clinic-service.dto";
 
 const RELATIONS = { user: true, jobTitleLinks: { jobTitle: true } } as const;
 
@@ -225,8 +230,81 @@ export class EmployeesBusinessService {
       }
       const employeeRoleId = await this.settings.resolveRoleId(SystemRole.EMPLOYEE);
       await manager.delete(EmployeeJobTitleEntity, { employeeId: employee.id });
+      await manager.delete(EmployeeServiceEntity, { employeeId: employee.id });
       await manager.delete(EmployeeEntity, { id: employee.id });
       await manager.delete(UserRoleEntity, { userId: employee.userId, roleId: employeeRoleId });
+    });
+  }
+
+  // ---------------------------------------------------------------- service qualifications
+
+  /** Services the employee is qualified for (inactive services included: qualifications are kept), by name. */
+  async getServices(id: string, actor: Actor) {
+    const employee = await this.persistence.execute(() => this.employees.findOne({ where: { id } }));
+    if (!employee) throw applicationError(ErrorMetadata.NOT_FOUND, EmployeeMessage.NotFound);
+    if (!actor.isAdmin && !sameId(employee.userId, actor.id)) throw applicationError(ErrorMetadata.FORBIDDEN, EmployeeMessage.Forbidden);
+    return this.persistence.execute(() => this.listServices(this.employees.manager, employee.id));
+  }
+
+  private async listServices(manager: EntityManager, employeeId: string) {
+    const rows = await manager.find(EmployeeServiceEntity, { where: { employeeId }, relations: { service: true } });
+    return rows.filter(row => row.service).map(row => serializeClinicService(row.service))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  }
+
+  private async currentServiceIds(manager: EntityManager, employeeId: string): Promise<Set<string>> {
+    return new Set((await manager.find(EmployeeServiceEntity, { where: { employeeId } })).map(row => normalizeId(row.serviceId)));
+  }
+
+  /**
+   * Replaces the employee's qualifications in one transaction. Lock order (same as reservation creation, which locks
+   * the service and then the profile): services to add (shared, HOLDLOCK, by id) -> employee profile (UPDLOCK) ->
+   * writes. The services to add are derived from an unlocked read of the current qualifications, read with a shared lock
+   * (a concurrent PATCH/DELETE /services/:id, which takes UPDLOCK on the service, either commits first and is seen here
+   * or waits) and validated: every id must exist (404 SERVICE_NOT_FOUND) and a new qualification requires an active
+   * service (409 SERVICE_INACTIVE; inactive services already held may be kept). The profile lock is the row every
+   * reservation flow locks before checking a qualification; the diff is recomputed under it, and if another transaction
+   * changed the qualifications meanwhile so that a service not locked above must now be added, 409
+   * QUALIFICATIONS_CHANGED (reload and retry). Removing a qualification while the employee is assigned to open
+   * reservations (PENDING/CONFIRMED, not finished) of that service is refused (409 IN_USE, count in the message): cancel
+   * or reassign them first. Kept rows are not rewritten (their created_at is preserved).
+   */
+  async replaceServices(id: string, dto: ReplaceEmployeeServicesDto) {
+    const ids = [...new Set((dto.serviceIds ?? []).map(normalizeId))];
+    return this.transaction(async manager => {
+      const profile = await manager.findOne(EmployeeEntity, { where: { id } });
+      if (!profile) throw applicationError(ErrorMetadata.NOT_FOUND, EmployeeMessage.NotFound);
+      const snapshot = await this.currentServiceIds(manager, profile.id);
+      const toAdd = ids.filter(serviceId => !snapshot.has(serviceId));
+      const kept = ids.filter(serviceId => snapshot.has(serviceId));
+      const locked = toAdd.length
+        ? await manager.find(ClinicServiceEntity, { where: { id: In(toAdd) }, order: { id: "ASC" }, lock: { mode: "pessimistic_read" } })
+        : [];
+      const keptRows = kept.length ? await manager.find(ClinicServiceEntity, { where: { id: In(kept) } }) : [];
+      if (locked.length + keptRows.length !== ids.length) {
+        throw applicationError(ErrorMetadata.NOT_FOUND, ClinicServiceMessage.NotFound, undefined, { code: "SERVICE_NOT_FOUND" });
+      }
+      if (locked.some(service => !service.isActive)) {
+        throw applicationError(ErrorMetadata.CONFLICT, ClinicServiceMessage.InactiveAssignment, undefined, { code: "SERVICE_INACTIVE" });
+      }
+      const employee = await manager.findOne(EmployeeEntity, { where: { id: profile.id }, lock: { mode: "pessimistic_write" } });
+      if (!employee) throw applicationError(ErrorMetadata.NOT_FOUND, EmployeeMessage.NotFound);
+      const current = await this.currentServiceIds(manager, employee.id);
+      const lockedIds = new Set(locked.map(service => normalizeId(service.id)));
+      const added = ids.filter(serviceId => !current.has(serviceId));
+      if (added.some(serviceId => !lockedIds.has(serviceId))) {
+        throw applicationError(ErrorMetadata.CONFLICT, ClinicServiceMessage.QualificationsChanged, undefined, { code: "QUALIFICATIONS_CHANGED" });
+      }
+      const wanted = new Set(ids);
+      const removed = [...current].filter(serviceId => !wanted.has(serviceId));
+      if (removed.length) {
+        const open = (await findOpenReservations(manager, { employeeId: employee.id }))
+          .filter(reservation => !!reservation.serviceId && removed.includes(normalizeId(reservation.serviceId)));
+        if (open.length) throw openReservationsConflict("QUALIFICATION_HAS_OPEN_RESERVATIONS", ClinicServiceConflictMessages.qualificationInUse, open);
+        await manager.delete(EmployeeServiceEntity, { employeeId: employee.id, serviceId: In(removed) });
+      }
+      if (added.length) await manager.insert(EmployeeServiceEntity, added.map(serviceId => ({ employeeId: employee.id, serviceId })));
+      return this.listServices(manager, employee.id);
     });
   }
 

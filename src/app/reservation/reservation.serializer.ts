@@ -3,6 +3,7 @@ import { AccountSummary, serializeAccount } from "../employees/employee.serializ
 import { EmployeeEntity } from "../employees/entities/employee.entity";
 import { contactSummary, projectRelatedUser, PublicEmployeeSummary } from "../users/user.projection";
 import { ReservationEntity } from "./entities/reservation.entity";
+import { clinicServiceSummary } from "../clinic-services/clinic-service.projection";
 
 export type AdminEmployeeSummary = PublicEmployeeSummary & { userId: string; user: AccountSummary | null };
 
@@ -35,12 +36,17 @@ export function serializeReservation<R extends ReservationEntity>(reservation: R
   if (actor.isAdmin && creator !== undefined) view.creator = projectRelatedUser(creator, actor, contactSummary);
   if ("client" in reservation) view.client = projectRelatedUser(reservation.client, actor, contactSummary);
   if ("employee" in reservation) view.employee = projectEmployee(reservation.employee, actor);
+  // Service summary { id, code, name, durationMinutes } (same for every caller), always present; null for legacy
+  // reservations (service_id NULL). Every loader joins the relation, so a missing one is a programming error, never omitted.
+  if (reservation.service) view.service = clinicServiceSummary(reservation.service);
+  else if (!reservation.serviceId) view.service = null;
+  else throw new Error(`Reservation ${reservation.id}: service relation not loaded`);
   if (reservation.animal) {
     const { owner, ...animal } = reservation.animal;
     view.animal = actor.isAdmin && owner !== undefined ? { ...animal, owner: projectRelatedUser(owner, actor, contactSummary) } : animal;
   }
-  return view as Omit<R, "client" | "employee" | "animal" | "creator" | "createdBy">
-    & Record<"client" | "employee" | "animal", unknown> & { createdBy: string | null; createdBySelf: boolean };
+  return view as Omit<R, "client" | "employee" | "animal" | "creator" | "createdBy" | "service">
+    & Record<"client" | "employee" | "animal" | "service", unknown> & { createdBy: string | null; createdBySelf: boolean };
 }
 
 export function serializeReservations(reservations: ReservationEntity[], actor: Actor) {

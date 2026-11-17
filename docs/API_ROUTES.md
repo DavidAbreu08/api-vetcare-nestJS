@@ -1,6 +1,6 @@
 # API routes
 
-Inventory of the current HTTP controllers (88 operations). Paths below are the real registered routes; Swagger must describe these paths rather than infer singular/plural names.
+Inventory of the current HTTP controllers (96 operations). Paths below are the real registered routes; Swagger must describe these paths rather than infer singular/plural names.
 
 All operations use the global `/api/vetcare` prefix from `src/api-routing.ts`. Controllers declare only their resource path. Swagger UI and its JSON document remain at `/docs` and `/docs-json`.
 
@@ -54,13 +54,15 @@ All operations use the global `/api/vetcare` prefix from `src/api-routing.ts`. C
 | PATCH | `/api/vetcare/clinical-visits/:id` | [src/app/clinical-visits/clinical-visit.controller.ts:36](../src/app/clinical-visits/clinical-visit.controller.ts#L36) |
 | POST | `/api/vetcare/clinical-visits/:id/complete` | [src/app/clinical-visits/clinical-visit.controller.ts:44](../src/app/clinical-visits/clinical-visit.controller.ts#L44) |
 | POST | `/api/vetcare/clinical-visits/:id/void` | [src/app/clinical-visits/clinical-visit.controller.ts:53](../src/app/clinical-visits/clinical-visit.controller.ts#L53) |
-| GET | `/api/vetcare/employees` | [src/app/employees/employees.controller.ts:19](../src/app/employees/employees.controller.ts#L19) |
-| POST | `/api/vetcare/employees` | [src/app/employees/employees.controller.ts:42](../src/app/employees/employees.controller.ts#L42) |
-| DELETE | `/api/vetcare/employees/:id` | [src/app/employees/employees.controller.ts:53](../src/app/employees/employees.controller.ts#L53) |
-| GET | `/api/vetcare/employees/:id` | [src/app/employees/employees.controller.ts:37](../src/app/employees/employees.controller.ts#L37) |
-| PATCH | `/api/vetcare/employees/:id` | [src/app/employees/employees.controller.ts:47](../src/app/employees/employees.controller.ts#L47) |
-| GET | `/api/vetcare/employees/available/:date` | [src/app/employees/employees.controller.ts:30](../src/app/employees/employees.controller.ts#L30) |
-| GET | `/api/vetcare/employees/me` | [src/app/employees/employees.controller.ts:25](../src/app/employees/employees.controller.ts#L25) |
+| GET | `/api/vetcare/employees` | [src/app/employees/employees.controller.ts:20](../src/app/employees/employees.controller.ts#L20) |
+| POST | `/api/vetcare/employees` | [src/app/employees/employees.controller.ts:56](../src/app/employees/employees.controller.ts#L56) |
+| DELETE | `/api/vetcare/employees/:id` | [src/app/employees/employees.controller.ts:67](../src/app/employees/employees.controller.ts#L67) |
+| GET | `/api/vetcare/employees/:id` | [src/app/employees/employees.controller.ts:51](../src/app/employees/employees.controller.ts#L51) |
+| PATCH | `/api/vetcare/employees/:id` | [src/app/employees/employees.controller.ts:61](../src/app/employees/employees.controller.ts#L61) |
+| GET | `/api/vetcare/employees/:id/services` | [src/app/employees/employees.controller.ts:38](../src/app/employees/employees.controller.ts#L38) |
+| PUT | `/api/vetcare/employees/:id/services` | [src/app/employees/employees.controller.ts:44](../src/app/employees/employees.controller.ts#L44) |
+| GET | `/api/vetcare/employees/available/:date` | [src/app/employees/employees.controller.ts:31](../src/app/employees/employees.controller.ts#L31) |
+| GET | `/api/vetcare/employees/me` | [src/app/employees/employees.controller.ts:26](../src/app/employees/employees.controller.ts#L26) |
 | GET | `/api/vetcare/job-titles` | [src/app/job-titles/job-titles.controller.ts:18](../src/app/job-titles/job-titles.controller.ts#L18) |
 | POST | `/api/vetcare/job-titles` | [src/app/job-titles/job-titles.controller.ts:27](../src/app/job-titles/job-titles.controller.ts#L27) |
 | DELETE | `/api/vetcare/job-titles/:id` | [src/app/job-titles/job-titles.controller.ts:38](../src/app/job-titles/job-titles.controller.ts#L38) |
@@ -85,6 +87,12 @@ All operations use the global `/api/vetcare` prefix from `src/api-routing.ts`. C
 | DELETE | `/api/vetcare/roles/:id` | [src/app/roles/roles.controller.ts:41](../src/app/roles/roles.controller.ts#L41) |
 | GET | `/api/vetcare/roles/:id` | [src/app/roles/roles.controller.ts:24](../src/app/roles/roles.controller.ts#L24) |
 | PATCH | `/api/vetcare/roles/:id` | [src/app/roles/roles.controller.ts:35](../src/app/roles/roles.controller.ts#L35) |
+| GET | `/api/vetcare/services` | [src/app/clinic-services/clinic-services.controller.ts:20](../src/app/clinic-services/clinic-services.controller.ts#L20) |
+| POST | `/api/vetcare/services` | [src/app/clinic-services/clinic-services.controller.ts:35](../src/app/clinic-services/clinic-services.controller.ts#L35) |
+| DELETE | `/api/vetcare/services/:id` | [src/app/clinic-services/clinic-services.controller.ts:46](../src/app/clinic-services/clinic-services.controller.ts#L46) |
+| GET | `/api/vetcare/services/:id` | [src/app/clinic-services/clinic-services.controller.ts:30](../src/app/clinic-services/clinic-services.controller.ts#L30) |
+| PATCH | `/api/vetcare/services/:id` | [src/app/clinic-services/clinic-services.controller.ts:40](../src/app/clinic-services/clinic-services.controller.ts#L40) |
+| GET | `/api/vetcare/services/:id/employees` | [src/app/clinic-services/clinic-services.controller.ts:24](../src/app/clinic-services/clinic-services.controller.ts#L24) |
 | GET | `/api/vetcare/species` | [src/app/species/species.controller.ts:18](../src/app/species/species.controller.ts#L18) |
 | POST | `/api/vetcare/species` | [src/app/species/species.controller.ts:27](../src/app/species/species.controller.ts#L27) |
 | DELETE | `/api/vetcare/species/:id` | [src/app/species/species.controller.ts:38](../src/app/species/species.controller.ts#L38) |
@@ -109,12 +117,13 @@ All operations use the global `/api/vetcare` prefix from `src/api-routing.ts`. C
 1. No duplicate method/path pairs were found. Static GET routes in users, employees and animals precede the generic /:id handler. Nested animal owners routes have additional segments and do not collide with AnimalController.
 2. Canonical reservation routes are /api/vetcare/reservations (plural). Swagger grouping must use reservations. GET /api/vetcare/clinic/hours is public; DELETE /api/vetcare/animal/:id is administrator-only.
 3. Animal creation uses POST /api/vetcare/animal and animal updates use PATCH /api/vetcare/animal/:id. Administrator-created client accounts use POST /api/vetcare/users/clients. Deprecated route aliases are not registered or advertised in OpenAPI.
-4. Partial updates use PATCH for animals, users, employees, roles, job titles, species, breeds, measurement types, system settings and blocked times. Duplicate PUT /:id handlers and the previous blocked-time PUT /:id handler are not registered. PUT /users/:id/roles replaces the whole assignment list; confirmation and password-reset action routes also retain PUT.
+4. Partial updates use PATCH for animals, users, employees, roles, job titles, services, species, breeds, measurement types, system settings and blocked times. Duplicate PUT /:id handlers and the previous blocked-time PUT /:id handler are not registered. PUT /users/:id/roles and PUT /employees/:id/services replace the whole assignment list; confirmation and password-reset action routes also retain PUT.
 5. Action statuses are explicit: login and password change return 200; asynchronous password recovery returns 202; primary tutor transfer returns 200. Resource creation remains 201. Reservation/clinical action controllers already use explicit 200. These explicit statuses replace the previous default 201 for these POST actions.
 6. GET /api/vetcare/users/check-email intentionally reveals email existence. CheckEmailQueryDto now validates the query: missing or invalid email returns 400 instead of the previous false result. The operation remains public; its authentication and rate-limit policy are unchanged.
 7. Employee availability means an active, bookable employee on the date; it does not promise an unoccupied timeslot (the business service has a scheduling TODO). Document the existing meaning rather than imply timeslot availability.
 8. DELETE /api/vetcare/animal/:id/owners/:userId accepts transferFutureReservations in query or JSON body; body wins. Prefer the query parameter in clients for DELETE portability while keeping body compatibility.
 9. Reservation authorship: POST /api/vetcare/reservations always records the caller as `createdBy` (a `createdBy` body field is rejected with 400 by the whitelist validation). GET /api/vetcare/reservations accepts an optional `createdBy` (UUID) query filter that only narrows the caller's existing scope; non-administrators can only filter by their own id (another id returns an empty page). Reservation responses carry `createdBy` (administrators, or the caller's own id; null otherwise) and `createdBySelf`; the schema is `ReservationResponseDto` in OpenAPI.
+10. Clinic services (Swagger tag "Services", module `src/app/clinic-services`, table `vc_services`): GET /api/vetcare/services and GET /services/:id for every authenticated user (non-administrators only see active services; inactive ones are 404 for them; administrators may filter with `?isActive=true|false`), POST/PATCH/DELETE for administrators (code immutable, 409; DELETE returns 204 and is refused with 409 when the service is referenced by any reservation or qualification: deactivate it instead). GET /services/:id/employees (ADMIN, EMPLOYEE) lists the qualified employees bookable today. The literal `:id/employees` route is declared before `:id`. GET /employees/:id/services (ADMIN or the employee itself) and PUT /employees/:id/services `{ serviceIds }` (ADMIN, full replacement) manage qualifications. Service ids in a body follow one rule (POST /reservations and PUT /employees/:id/services): missing → 404, inactive and newly referenced → 409 `SERVICE_INACTIVE` (on POST /reservations non-administrators get 404 for an inactive service, which is not revealed to them); PUT /employees/:id/services returns 409 "Qualifications changed; reload and retry" when the qualifications changed concurrently. POST /reservations requires `serviceId`; `endAt` is optional (computed from the service duration; only administrators may send a different value); POST /reservations/:id/reschedule accepts an optional `endAt` (default: the reservation's current duration). Reservation responses carry `serviceId` and `service { id, code, name, durationMinutes }` (always present; null for legacy reservations).
 
 ## Regression checks
 

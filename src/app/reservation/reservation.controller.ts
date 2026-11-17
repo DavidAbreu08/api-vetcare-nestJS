@@ -47,7 +47,7 @@ export class ReservationController {
   }
 
   @Post()
-  @ApiOperation({ summary: "Create reservation", description: "Reads are scoped to the client or assigned employee; administrators can read all reservations. Actions enforce reservation state and user permissions. The author (createdBy) is always the caller and cannot be sent in the body (400)." })
+  @ApiOperation({ summary: "Create reservation", description: "Reads are scoped to the client or assigned employee; administrators can read all reservations. Actions enforce reservation state and user permissions. The author (createdBy) is always the caller and cannot be sent in the body (400). serviceId is required (existing, active service); endAt = startAt + the service duration, which only administrators may override." })
   @ApiCreatedResponse({ description: "Reservation created (PENDING), projected for the caller.", type: ReservationResponseDto })
   @Roles(SystemRole.ADMIN, SystemRole.EMPLOYEE, SystemRole.CLIENT)
   create(@Body() dto: CreateReservationDto, @CurrentUser() actor: Actor) { return this.service.create(dto, actor); }
@@ -72,7 +72,7 @@ export class ReservationController {
   }
 
   @Post(":id/reschedule")
-  @ApiOperation({ summary: "Reschedule a reservation", description: "Reads are scoped to the client or assigned employee; administrators can read all reservations. Actions enforce reservation state and user permissions." })
+  @ApiOperation({ summary: "Reschedule a reservation", description: "Reads are scoped to the client or assigned employee; administrators can read all reservations. Actions enforce reservation state and user permissions. Without endAt the reservation keeps its current duration; an assigned employee must still be qualified for its service." })
   @ApiOkResponse({ description: "Reservation projected for the caller (createdBy/createdBySelf included).", type: ReservationResponseDto })
   @ApiParam({ name: "id", description: "UUID identifier", schema: { type: "string", format: "uuid" } })
   @HttpCode(HttpStatus.OK)

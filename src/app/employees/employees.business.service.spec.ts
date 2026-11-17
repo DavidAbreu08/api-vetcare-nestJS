@@ -13,6 +13,7 @@ import { EmployeesBusinessService } from "./employees.business.service";
 import { EmployeeEntity } from "./entities/employee.entity";
 import { EmployeeJobTitleEntity } from "./entities/employee-job-title.entity";
 import { UsersEntity } from "../users/entities/users.entity";
+import { EmployeeServiceEntity } from "../clinic-services/entities/employee-service.entity";
 
 const EMPLOYEE_ROLE = "20000000-0000-4000-8000-000000000002";
 const PAST = "2000-01-01";
@@ -143,12 +144,13 @@ describe("Employee profile rules", () => {
     expect(manager.insert).not.toHaveBeenCalled();
   });
 
-  it("removes the EMPLOYEE role together with the deleted profile", async () => {
+  it("removes the EMPLOYEE role, job titles and service qualifications together with the deleted profile", async () => {
     await business.delete("E-1");
     expect(manager.delete).toHaveBeenCalledWith(EmployeeJobTitleEntity, { employeeId: "E-1" });
+    expect(manager.delete).toHaveBeenCalledWith(EmployeeServiceEntity, { employeeId: "E-1" });
     expect(manager.delete).toHaveBeenCalledWith(EmployeeEntity, { id: "E-1" });
     expect(manager.delete).toHaveBeenCalledWith(UserRoleEntity, { userId: "U-1", roleId: EMPLOYEE_ROLE });
-    expect(manager.delete).toHaveBeenCalledTimes(3);
+    expect(manager.delete).toHaveBeenCalledTimes(4);
   });
 
   describe("open reservations assigned to the employee (A1)", () => {

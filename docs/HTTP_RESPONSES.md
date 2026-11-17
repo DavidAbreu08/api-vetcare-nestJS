@@ -29,6 +29,8 @@ throw applicationError(
 
 Messages supplied to `applicationError` and `ApplicationException` are explicitly public, including 5xx failures: use safe domain messages, never driver messages. The filter hides messages from other 5xx exceptions and unknown errors by default. The optional cause is never serialized. Global logs record the error type and stack locations without SQL messages or parameters.
 
+Ids referenced in a request body (not the path) follow one rule: a missing entry is 404 (`NOT_FOUND`) and an existing but inactive entry that the request would newly reference is 409 (`CONFLICT`), e.g. `serviceId` on POST /reservations and `serviceIds` on PUT /employees/:id/services. When inactive entries are hidden from the caller (non-administrators cannot see inactive services), they get 404 instead. Older catalog assignments (job titles, roles) still answer 400 for both cases.
+
 Existing Nest exceptions remain supported: their category is inferred from the HTTP status when not declared explicitly. Validation message arrays are joined with `; ` in `friendlyMessage`; this contract does not include a structured field-error map.
 
 `PersistenceService.translate` centralizes SQL Server translation for both `execute` and the global filter. There is no second filter sending persistence responses separately.

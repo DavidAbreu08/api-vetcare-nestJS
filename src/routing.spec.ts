@@ -11,6 +11,7 @@ import { MeasurementController } from "./app/animal-measurements/measurement.con
 import { BlockedTimeController } from "./app/blocked-times/blocked-time.controller";
 import { BreedsController } from "./app/breeds/breeds.controller";
 import { ClinicalVisitController } from "./app/clinical-visits/clinical-visit.controller";
+import { ClinicServicesController } from "./app/clinic-services/clinic-services.controller";
 import { EmployeesController } from "./app/employees/employees.controller";
 import { JobTitlesController } from "./app/job-titles/job-titles.controller";
 import { MeasurementTypeController } from "./app/measurement-types/measurement-type.controller";
@@ -26,7 +27,7 @@ import { HttpResponseModule } from "./app/core/http-response.module";
 import { setupSwagger } from "./swagger";
 import { API_PREFIX, configureApiRouting } from "./api-routing";
 
-const controllers = [AnimalController, AnimalOwnersController, MeasurementController, BlockedTimeController, BreedsController, ClinicalVisitController, EmployeesController, JobTitlesController, MeasurementTypeController, ClinicController, ReservationController, RolesController, SpeciesController, SystemSettingsController, UsersController, AuthController];
+const controllers = [AnimalController, AnimalOwnersController, MeasurementController, BlockedTimeController, BreedsController, ClinicalVisitController, ClinicServicesController, EmployeesController, JobTitlesController, MeasurementTypeController, ClinicController, ReservationController, RolesController, SpeciesController, SystemSettingsController, UsersController, AuthController];
 const uuid = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
 
 /** Exercises the real controllers/route table, with domain services isolated from SQL and email. */
@@ -92,6 +93,9 @@ describe("API routing and published OpenAPI contract", () => {
     ["/api/vetcare/animal/all", "findAll"],
     [`/api/vetcare/animal/${uuid}/owners`, "list"],
     [`/api/vetcare/reservations/${uuid}/history`, "getHistory"],
+    [`/api/vetcare/services/${uuid}/employees`, "getEmployees"],
+    [`/api/vetcare/services/${uuid}`, "getById"],
+    [`/api/vetcare/employees/${uuid}/services`, "getServices"],
   ])("dispatches %s to its intended handler", async (path, handler) => {
     const response = await request(app.getHttpServer()).get(path).expect(200);
     expect(response.body.result.handler).toBe(handler);
@@ -120,7 +124,7 @@ describe("API routing and published OpenAPI contract", () => {
     await request(app.getHttpServer()).post("/api/vetcare/animal/create").send({}).expect(404);
     await request(app.getHttpServer()).patch(`/api/vetcare/animal/update/${uuid}`).send({}).expect(404);
     await request(app.getHttpServer()).post("/api/vetcare/users/create-clients").send({}).expect(404);
-    for (const resource of ["animal", "users", "employees", "roles", "job-titles", "species", "breeds", "measurement-types", "system-settings", "blocked-times"]) {
+    for (const resource of ["animal", "users", "employees", "roles", "job-titles", "species", "breeds", "measurement-types", "system-settings", "blocked-times", "services"]) {
       await request(app.getHttpServer()).put(`/api/vetcare/${resource}/${uuid}`).send({}).expect(404);
       await request(app.getHttpServer()).patch(`/api/vetcare/${resource}/${uuid}`).send({}).expect(200);
     }
@@ -191,5 +195,41 @@ describe("API routing and published OpenAPI contract", () => {
     expect(document.paths["/api/vetcare/reservations"].get.parameters.find((parameter: { name: string }) => parameter.name === "createdBy"))
       .toMatchObject({ in: "query", required: false, schema: { type: "string", format: "uuid" } });
     expect(document.components.schemas.CreateReservationDto.properties).not.toHaveProperty("createdBy");
+  });
+
+  it("replaces employee services through PUT with a validated body and documents the services catalog", async () => {
+    const replaced = await request(app.getHttpServer()).put(`/api/vetcare/employees/${uuid}/services`).send({ serviceIds: [uuid] }).expect(200);
+    expect(replaced.body.result.handler).toBe("replaceServices");
+    await request(app.getHttpServer()).put(`/api/vetcare/employees/${uuid}/services`).send({ serviceIds: ["nope"] }).expect(400);
+    await request(app.getHttpServer()).put(`/api/vetcare/employees/${uuid}/services`).send({}).expect(400);
+    await request(app.getHttpServer()).get("/api/vetcare/services/invalid-id").expect(400);
+    await request(app.getHttpServer()).post("/api/vetcare/services").send({ code: "CONSULTATION", name: "Consultation", durationMinutes: 30 }).expect(201);
+    await request(app.getHttpServer()).post("/api/vetcare/services").send({ code: "CONSULTATION", name: "Consultation", durationMinutes: 32 }).expect(400);
+    await request(app.getHttpServer()).delete(`/api/vetcare/services/${uuid}`).expect(204);
+    // Reservations: serviceId required, endAt optional (computed by the server).
+    await request(app.getHttpServer()).post("/api/vetcare/reservations").send({ animalId: uuid, startAt: "2030-01-07T10:00:00Z" }).expect(400);
+    await request(app.getHttpServer()).post("/api/vetcare/reservations").send({ animalId: uuid, serviceId: uuid, startAt: "2030-01-07T10:00:00Z" }).expect(201);
+    await request(app.getHttpServer()).post(`/api/vetcare/reservations/${uuid}/reschedule`).send({ startAt: "2030-01-08T10:00:00Z" }).expect(200);
+
+    const document = (await request(app.getHttpServer()).get("/docs-json").expect(200)).body;
+    for (const [path, method] of [["/api/vetcare/services", "get"], ["/api/vetcare/services/{id}", "patch"], ["/api/vetcare/services/{id}/employees", "get"]]) {
+      expect(document.paths[path][method].tags).toEqual(["Services"]);
+    }
+    expect(document.paths["/api/vetcare/services/{id}"].put).toBeUndefined();
+    expect(document.paths["/api/vetcare/services/{id}"].delete.responses["204"]).toBeDefined();
+    expect(document.paths["/api/vetcare/employees/{id}/services"].put.tags).toEqual(["Employees"]);
+    expect(document.paths["/api/vetcare/employees/{id}/services"].put.requestBody.content["application/json"].schema).toEqual({ $ref: "#/components/schemas/ReplaceEmployeeServicesDto" });
+    expect(document.components.schemas.CreateClinicServiceDto.properties.durationMinutes).toMatchObject({ type: "integer", minimum: 5, maximum: 1440, multipleOf: 5 });
+    expect(document.components.schemas.CreateClinicServiceDto.properties).not.toHaveProperty("price");
+    expect(document.paths["/api/vetcare/services"].get.parameters.find((parameter: { name: string }) => parameter.name === "isActive")).toMatchObject({ in: "query", required: false, schema: { type: "boolean" } });
+    const create = document.components.schemas.CreateReservationDto;
+    expect(create.required).toEqual(expect.arrayContaining(["animalId", "serviceId", "startAt"]));
+    expect(create.required).not.toContain("endAt");
+    expect(document.components.schemas.RescheduleReservationDto.required).not.toContain("endAt");
+    const reservation = document.components.schemas.ReservationResponseDto;
+    expect(reservation.properties.serviceId).toMatchObject({ type: "string", format: "uuid", nullable: true });
+    expect(reservation.properties.service).toMatchObject({ nullable: true });
+    expect(JSON.stringify(reservation.properties.service)).toContain("ClinicServiceSummaryDto");
+    expect(document.components.schemas.ClinicServiceSummaryDto.properties.durationMinutes).toMatchObject({ type: "integer" });
   });
 });

@@ -228,3 +228,22 @@ Steps:
 6. Report: the number of reservations left with `created_by` NULL is logged as a warning through the TypeORM logger (nothing is logged when it is zero).
 
 The application writes `created_by` only on `POST /api/vetcare/reservations` (always the authenticated caller, never read from the body) and never updates it (`update: false` on the entity column). Invariant: `vc_reservations.created_by` = `changed_by` of the reservation's `CREATED` event; the history snapshot does not duplicate it. The entities declare the same names (`foreignKeyConstraintName`, `@Index`, including the filtered unique index on `ReservationHistoryEntity`); `src/app/reservation/reservation.sql.spec.ts` checks the metadata and the generated INSERT/UPDATE/SELECT SQL, and `src/database/reservation-authorship.migration.spec.ts` checks the migration's SQL batches and their order.
+
+# SQL Server schema: clinic services and employee qualifications
+
+`ClinicServices1795608000000` follows `ReservationAuthorship1795521600000`. It was not executed against any database during this work. It requires an active transaction (default `--transaction all`); `down` rejects rollback (it would discard the services catalog, the qualifications and the service of every reservation; restore a backup). No filtered index is created, so no session option check is needed. Before any SQL, `vc_employees` and `vc_reservations` must exist, and `vc_services`, `vc_employee_services` and `vc_reservations.service_id` must not.
+
+Preconditions (exclusive locks on `vc_reservations` and `vc_employees` held until commit; THROW codes 51080–51089):
+
+- 51081: `vc_services`, `vc_employee_services`, `vc_reservations.service_id`, `fk_vc_reservations_service`, `ix_vc_reservations_service_id` and no object named like `vc_services`/`vc_employee_services` exist yet.
+- 51082: `pk_vc_employees` and `fk_vc_reservations_employee` exist.
+
+Steps:
+
+1. `vc_services`: `id` uniqueidentifier (`df_vc_services_id` NEWSEQUENTIALID(), `pk_vc_services`), `code` varchar(64) NOT NULL (`uq_vc_services_code`; `ck_vc_services_code`, the catalogCode rule of `vc_roles`/`vc_job_titles`/`vc_measurement_types`: BIN2 `LIKE '[A-Z]%'` and `NOT LIKE '%[^A-Z0-9_]%'`), `name` nvarchar(100) NOT NULL, `description` nvarchar(240) NULL, `duration_minutes` int NOT NULL (`ck_vc_services_duration`: `BETWEEN 1 AND 1440 AND duration_minutes % 5 = 0`, i.e. 5..1440 in steps of 5), `is_active` bit NOT NULL (`df_vc_services_is_active` 1), `created_at`/`updated_at` (SYSDATETIME()). No price column (out of scope). `vc_employee_services`: `employee_id`, `service_id` (`pk_vc_employee_services` on both), `created_at`; `fk_vc_employee_services_employee` -> `vc_employees`, `fk_vc_employee_services_service` -> `vc_services`, both without cascade.
+2. In a later batch: `ix_vc_employee_services_service_id` (`service_id`).
+3. `ALTER TABLE vc_reservations ADD service_id uniqueidentifier NULL` (alone in its batch; the column is only referenced by later batches). NULL keeps the reservations created before this migration; there is no backfill.
+4. `fk_vc_reservations_service` (`service_id` -> `vc_services.id`, `WITH CHECK`, no cascade) and `ix_vc_reservations_service_id` (`service_id`).
+5. Final verification (51089): both trusted checks, the unique code, both trusted non-cascading qualification FKs and their index, nullable `vc_reservations.service_id`, its trusted non-cascading FK and its index.
+
+No services are seeded: the administrator creates the catalog. Deleting a referenced service is prevented by the foreign keys (the application refuses it first with 409 and suggests deactivation). The application writes `service_id` only on `POST /api/vetcare/reservations` and never updates it (`update: false`). The entities declare the same names (`ClinicServiceEntity`: `@Unique`, both `@Check`, `primaryKeyConstraintName`; `EmployeeServiceEntity`: `primaryKeyConstraintName`, `foreignKeyConstraintName`, `@Index`; `ReservationEntity`: `fk_vc_reservations_service`, `ix_vc_reservations_service_id`); `src/app/clinic-services/clinic-services.sql.spec.ts` and `src/app/reservation/reservation.sql.spec.ts` check the metadata and the generated SQL, and `src/database/clinic-services.migration.spec.ts` checks the migration's SQL batches and their order.

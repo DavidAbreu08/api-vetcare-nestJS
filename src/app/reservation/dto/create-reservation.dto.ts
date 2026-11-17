@@ -10,7 +10,8 @@ export const IsoInstant = () => (target: object, property: string) => {
 
 /**
  * Create an appointment. It always starts PENDING; confirmation is a separate staff step.
- * Staff may book for another client (ownerId) and pre-assign an employee (employeeId).
+ * Staff may book for another client (ownerId); administrators may pre-assign an employee (employeeId). The service
+ * (serviceId) is required and defines the duration.
  */
 export class CreateReservationDto {
   @ApiProperty({ description: "UUID of the animal belonging to the client.", format: "uuid" })
@@ -22,7 +23,11 @@ export class CreateReservationDto {
   @IsUUID()
   ownerId?: string;
 
-  @ApiPropertyOptional({ description: "Employee profile UUID (vc_employees.id) to pre-assign; staff only. Does not confirm.", format: "uuid" })
+  @ApiProperty({ description: "Clinic service UUID (vc_services.id); must exist and be active. Its duration defines endAt.", format: "uuid" })
+  @IsUUID()
+  serviceId: string;
+
+  @ApiPropertyOptional({ description: "Employee profile UUID (vc_employees.id) to pre-assign; administrators only. Must be qualified for the service. Does not confirm.", format: "uuid" })
   @IsOptional()
   @IsUUID()
   employeeId?: string;
@@ -31,9 +36,13 @@ export class CreateReservationDto {
   @IsoInstant()
   startAt: string;
 
-  @ApiProperty({ description: "End instant, ISO-8601 with offset or Z; after startAt, same clinic business day.", example: "2030-01-07T10:30:00Z" })
+  @ApiPropertyOptional({
+    type: String, nullable: true, example: "2030-01-07T10:30:00Z",
+    description: "Optional. The server computes endAt = startAt + service durationMinutes. Non-administrators may only send that same value (400 otherwise); administrators may send a different end (override). Same clinic business day.",
+  })
+  @IsOptional()
   @IsoInstant()
-  endAt: string;
+  endAt?: string | null;
 
   @ApiPropertyOptional({ type: String, description: "Reason for the appointment.", maxLength: 500, nullable: true })
   @IsOptional()

@@ -20,4 +20,9 @@ export const ReservationMessages = {
   ANIMAL_UNAVAILABLE: "The reservation's animal no longer exists or was deleted",
   CLIENT_INACTIVE: "The reservation's client account is inactive or deleted",
   INVALID_INSTANT: "startAt and endAt must be ISO-8601 timestamps with an explicit offset or Z",
+  SERVICE_NOT_FOUND: "Service not found",
+  SERVICE_INACTIVE: "The service is inactive and cannot be booked",
+  EMPLOYEE_NOT_QUALIFIED: "The employee is not qualified for this service",
+  endAtMismatch: (durationMinutes: number, expectedEnd: string) =>
+    `endAt must be startAt plus the service duration (${durationMinutes} minutes, ${expectedEnd}); only administrators can set a different end`,
 } as const;

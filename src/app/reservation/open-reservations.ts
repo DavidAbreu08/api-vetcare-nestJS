@@ -9,7 +9,7 @@ import { ReservationEntity } from "./entities/reservation.entity";
 /** States that still commit a client, an animal and an employee to a future appointment. */
 export const OPEN_RESERVATION_STATUSES = [ReservationStatus.PENDING, ReservationStatus.CONFIRMED];
 
-export type OpenReservation = Pick<ReservationEntity, "id" | "status" | "startAt" | "endAt" | "employeeId" | "clientId" | "animalId">;
+export type OpenReservation = Pick<ReservationEntity, "id" | "status" | "startAt" | "endAt" | "employeeId" | "clientId" | "animalId" | "serviceId">;
 
 /** Exactly one filter: the assigned employee profile, the client account or the animal. */
 export type OpenReservationFilter = { employeeId: string } | { clientId: string } | { animalId: string };
@@ -23,7 +23,7 @@ export type OpenReservationFilter = { employeeId: string } | { clientId: string 
 export async function findOpenReservations(manager: EntityManager, filter: OpenReservationFilter, now = new Date()): Promise<OpenReservation[]> {
   const [key, value] = Object.entries(filter)[0] as [keyof OpenReservationFilter & string, string];
   return manager.createQueryBuilder(ReservationEntity, "r")
-    .select(["r.id", "r.status", "r.startAt", "r.endAt", "r.employeeId", "r.clientId", "r.animalId"])
+    .select(["r.id", "r.status", "r.startAt", "r.endAt", "r.employeeId", "r.clientId", "r.animalId", "r.serviceId"])
     .where(`r.${key} = :value`, { value })
     .andWhere("r.status IN (:...openStatuses)", { openStatuses: OPEN_RESERVATION_STATUSES })
     .andWhere("r.endAt > :now", { now: toDbUtc(now) })

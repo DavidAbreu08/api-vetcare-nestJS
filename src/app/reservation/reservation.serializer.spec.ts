@@ -79,3 +79,25 @@ describe("Reservation projection", () => {
     });
   });
 });
+
+describe("Reservation service projection", () => {
+  const service = { id: "S-1", code: "CONSULTATION", name: "Consultation", description: "internal", durationMinutes: 30, isActive: false, createdAt: new Date(0), updatedAt: new Date(0) };
+
+  it("gives every caller the same { id, code, name, durationMinutes } summary, and null for legacy reservations", () => {
+    const booked = { ...(reservation() as any), serviceId: "S-1", service } as ReservationEntity;
+    for (const viewer of [actor({ isAdmin: true }), actor({ id: "client", isClient: true })]) {
+      const view: any = serializeReservation(booked, viewer);
+      expect(view.serviceId).toBe("S-1");
+      expect(view.service).toEqual({ id: "S-1", code: "CONSULTATION", name: "Consultation", durationMinutes: 30 });
+    }
+    expect(serializeReservation({ ...(reservation() as any), serviceId: null, service: null }, actor({ isAdmin: true }))).toMatchObject({ serviceId: null, service: null });
+    // Always present: null when there is no service, even if the relation was not loaded.
+    expect(serializeReservation({ ...(reservation() as any), serviceId: null }, actor({ isAdmin: true }))).toHaveProperty("service", null);
+    expect(serializeReservation(reservation(), actor({ isAdmin: true }))).toHaveProperty("service", null);
+  });
+
+  it("fails loudly instead of silently omitting the service when the relation was not loaded", () => {
+    const unloaded = { ...(reservation() as any), serviceId: "S-1" } as ReservationEntity;
+    expect(() => serializeReservation(unloaded, actor({ isAdmin: true }))).toThrow("service relation not loaded");
+  });
+});

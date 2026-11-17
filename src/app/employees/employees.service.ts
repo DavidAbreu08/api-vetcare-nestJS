@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { Actor } from "../core/authorization";
 import { CreateEmployeeDto, ListEmployeesQueryDto, UpdateEmployeeDto } from "./dto/create-employee.dto";
 import { EmployeesBusinessService } from "./employees.business.service";
+import { ReplaceEmployeeServicesDto } from "../clinic-services/dto/clinic-service.dto";
 
 /** Application entry points for the employees resource. */
 @Injectable()
@@ -14,4 +15,6 @@ export class EmployeesService {
   update(id: string, dto: UpdateEmployeeDto, actor: Actor) { return this.business.update(id, dto, actor); }
   delete(id: string) { return this.business.delete(id); }
   getAvailableByDate(date: string) { return this.business.getAvailableByDate(date); }
+  getServices(id: string, actor: Actor) { return this.business.getServices(id, actor); }
+  replaceServices(id: string, dto: ReplaceEmployeeServicesDto) { return this.business.replaceServices(id, dto); }
 }
