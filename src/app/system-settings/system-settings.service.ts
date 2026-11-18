@@ -1,10 +1,12 @@
-import { Injectable, InternalServerErrorException } from "@nestjs/common";
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
+import { Injectable } from "@nestjs/common";
 import { isUUID } from "class-validator";
 import { ListQueryDto } from "../core/dto/list-query.dto";
 import { SystemRole } from "../core/enums/system-role.enum";
 import { UpdateSystemSettingDto } from "./dto/update-system-setting.dto";
 import { ROLE_ID_SETTING_SUFFIX, SystemSettingCode } from "./enums/system-setting-code.enum";
-import { SystemSettingsBusinessService } from "./system-settings.business.service";
+import { normalizedJobTitleId, normalizedNonNegativeInteger, SystemSettingsBusinessService } from "./system-settings.business.service";
 import { SystemSettingMessage } from "./system-settings.messages";
 
 export type SystemRoleFlags = { isAdmin: boolean; isEmployee: boolean; isClient: boolean };
@@ -52,7 +54,7 @@ export class SystemSettingsService {
   /** Fails closed: a missing or malformed role setting is a server misconfiguration. */
   async resolveRoleId(role: SystemRole): Promise<string> {
     const value = (await this.getValue(role))?.trim();
-    if (!value || !isUUID(value)) throw new InternalServerErrorException(SystemSettingMessage.Misconfigured);
+    if (!value || !isUUID(value)) throw applicationError(ErrorMetadata.INTERNAL_ERROR, SystemSettingMessage.Misconfigured);
     return value.toLowerCase();
   }
 
@@ -64,6 +66,21 @@ export class SystemSettingsService {
     const owned = new Set(roleIds.map(id => id.toLowerCase()));
     const [admin, employee, client] = await this.resolveRoleIds([SystemRole.ADMIN, SystemRole.EMPLOYEE, SystemRole.CLIENT]);
     return { isAdmin: owned.has(admin), isEmployee: owned.has(employee), isClient: owned.has(client) };
+  }
+
+  /** Non-negative integer setting (tolerances in minutes); fails closed (500) when missing or invalid. */
+  async getNonNegativeInteger(code: SystemSettingCode): Promise<number> {
+    const value = normalizedNonNegativeInteger(await this.getValue(code));
+    if (value === null) throw applicationError(ErrorMetadata.INTERNAL_ERROR, SystemSettingMessage.Misconfigured);
+    return Number(value);
+  }
+
+  /**
+   * Job title referenced by a *_JOB_TITLE_ID setting (lowercase id), or null when the setting is missing, empty or
+   * malformed: an optional qualification is then simply not configured (fails closed: nobody holds it).
+   */
+  async getJobTitleId(code: SystemSettingCode): Promise<string | null> {
+    return normalizedJobTitleId(await this.getValue(code));
   }
 
   /** True when any *_ROLE_ID setting references the role. */

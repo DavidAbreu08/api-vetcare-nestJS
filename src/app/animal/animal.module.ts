@@ -9,9 +9,11 @@ import { AnimalService } from "./animal.service";
 import { AnimalBusinessService } from "./animal.business.service";
 import { AnimalController } from "./animal.controller";
 import { RolesModule } from "../roles/roles.module";
+import { EmployeeQualificationModule } from "../employees/employee-qualification.module";
+import { AnimalOwnersModule } from "../animal-owners/animal-owners.module";
 
 @Module({
-  imports: [TypeOrmModule.forFeature([AnimalEntity, UsersEntity]), SpeciesModule, BreedsModule, MeasurementModule, RolesModule],
+  imports: [TypeOrmModule.forFeature([AnimalEntity, UsersEntity]), SpeciesModule, BreedsModule, MeasurementModule, RolesModule, EmployeeQualificationModule, AnimalOwnersModule],
   controllers: [AnimalController],
   providers: [AnimalService, AnimalBusinessService],
 })

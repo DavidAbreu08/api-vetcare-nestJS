@@ -1,3 +1,4 @@
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam } from "@nestjs/swagger";
 import {
   Body,
   Controller,
@@ -25,13 +26,18 @@ import { RolesGuard } from "../core/guards/roles/roles.guard";
 import { CreateClientDto } from "./dto/create-client.dto";
 import { ListUsersQueryDto } from "./dto/list-users-query.dto";
 import { ReplaceUserRolesDto } from "./dto/replace-user-roles.dto";
+import { ResponseMessage } from "../core/decorators/response-message.decorator";
+import { UsersMessages } from "./users.messages";
 
-/** Account data only; employee profiles live in /api/employees. */
-@Controller("api/users")
+/** Account data only; employee profiles live in /api/vetcare/employees. */
+@Controller("users")
+@ApiTags("Users")
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Get()
+  @ApiOperation({ summary: "List users" })
+  @ApiBearerAuth("bearer")
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(SystemRole.ADMIN)
   async index(@Query() query: ListUsersQueryDto) {
@@ -39,31 +45,35 @@ export class UsersController {
   }
 
   @Get("clients")
+  @ApiOperation({ summary: "List client accounts" })
+  @ApiBearerAuth("bearer")
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(SystemRole.ADMIN, SystemRole.EMPLOYEE)
   async getAllClients() {
     return this.usersService.findAllClients();
   }
 
-  @Get("check-email")
-  async checkEmail(@Query("email") email: string): Promise<boolean> {
-    return this.usersService.checkEmailExists(email);
-  }
-
   @Post()
+  @ApiOperation({ summary: "Create user" })
   async store(@Body() body: CreateUserDto) {
     return await this.usersService.create(body);
   }
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(SystemRole.ADMIN)
-  @Post("create-clients")
-  async storeClients(@Body() body: CreateClientDto, @CurrentUser() actor: Actor) {
-    return await this.usersService.storeClient(body, actor);
+  @Post("clients")
+  @ApiOperation({ summary: "Create a client account", description: "Administrator-only operation. Creates the account and sends access instructions." })
+  @ApiBearerAuth("bearer")
+  @ResponseMessage(UsersMessages.CLIENT_CREATED)
+  async createClient(@Body() body: CreateClientDto, @CurrentUser() actor: Actor) {
+    return this.usersService.storeClient(body, actor);
   }
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Get(":id/roles")
+  @ApiOperation({ summary: "Get user roles" })
+  @ApiBearerAuth("bearer")
+  @ApiParam({ name: "id", description: "UUID identifier", schema: { type: "string", format: "uuid" } })
   async getRoles(@Param("id", new ParseUUIDPipe()) id: string, @CurrentUser() actor: Actor) {
     requireOwnerOrAdmin(actor, id);
     return this.usersService.getRoles(id);
@@ -73,12 +83,18 @@ export class UsersController {
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(SystemRole.ADMIN)
   @Put(":id/roles")
+  @ApiOperation({ summary: "Replace user roles" })
+  @ApiBearerAuth("bearer")
+  @ApiParam({ name: "id", description: "UUID identifier", schema: { type: "string", format: "uuid" } })
   async replaceRoles(@Param("id", new ParseUUIDPipe()) id: string, @Body() body: ReplaceUserRolesDto, @CurrentUser() actor: Actor) {
     return this.usersService.replaceRoles(id, body.roleIds, actor);
   }
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Get(":id")
+  @ApiOperation({ summary: "Get user" })
+  @ApiBearerAuth("bearer")
+  @ApiParam({ name: "id", description: "UUID identifier", schema: { type: "string", format: "uuid" } })
   async show(@Param("id", new ParseUUIDPipe()) id: string, @CurrentUser() actor: Actor) {
     requireOwnerOrAdmin(actor, id);
     return await this.usersService.getById(id);
@@ -86,6 +102,10 @@ export class UsersController {
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Patch(":id")
+  @ApiOperation({ summary: "Update user" })
+  @ApiBearerAuth("bearer")
+  @ApiParam({ name: "id", description: "UUID identifier", schema: { type: "string", format: "uuid" } })
+  @ResponseMessage(UsersMessages.OK)
   async update(
     @Param("id", new ParseUUIDPipe()) id: string,
     @Body() body: UpdateUserDto,
@@ -95,18 +115,14 @@ export class UsersController {
     return await this.usersService.update(id, body, actor);
   }
 
-  @Put(":id")
-  @UseGuards(AuthGuard("jwt"), RolesGuard)
-  async replace(@Param("id", new ParseUUIDPipe()) id: string, @Body() body: UpdateUserDto, @CurrentUser() actor: Actor) {
-    requireOwnerOrAdmin(actor, id);
-    return this.usersService.update(id, body, actor);
-  }
-
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(AuthGuard("jwt"), RolesGuard)
   @Roles(SystemRole.ADMIN)
   @Delete(":id")
-  async destroy(@Param("id", new ParseUUIDPipe()) id: string) {
-    await this.usersService.delete(id);
+  @ApiOperation({ summary: "Delete user" })
+  @ApiBearerAuth("bearer")
+  @ApiParam({ name: "id", description: "UUID identifier", schema: { type: "string", format: "uuid" } })
+  async destroy(@Param("id", new ParseUUIDPipe()) id: string, @CurrentUser() actor: Actor) {
+    await this.usersService.delete(id, actor);
   }
 }

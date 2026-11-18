@@ -1,6 +1,16 @@
 import { EmailMessages } from "./email.messages";
 import { Injectable, Logger } from "@nestjs/common";
 import * as nodemailer from "nodemailer";
+import { applicationError } from "../app/core/exceptions/application-error";
+import { ErrorMetadata } from "../app/core/enums/error-metadata.enum";
+
+const HTML_ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+
+/** Every user-provided or variable value interpolated into an HTML email goes through this (names, reasons, links). */
+export function escapeHtml(value: unknown): string {
+  return String(value ?? "").replace(/[&<>"']/g, char => HTML_ESCAPES[char]);
+}
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -22,7 +32,7 @@ export class EmailService {
         <p>
           Please click the button below to create your password. This link will expire in 1 hour.
         </p>
-        <a href="${link}" style="
+        <a href="${escapeHtml(link)}" style="
           display: inline-block;
           padding: 10px 20px;
           background-color: #4CAF50;
@@ -32,7 +42,7 @@ export class EmailService {
           margin: 10px 0;
         ">Create Password</a>
         <p>If the button doesn't work, copy and paste this link into your browser:</p>
-        <p><a href="${link}">${link}</a></p>
+        <p><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p>
         <br>
         <p>Thank you,<br>VetCare Team</p>
       </div>
@@ -47,14 +57,14 @@ export class EmailService {
   ): string {
     return `
       <div style="font-family: Arial, sans-serif; color: #333;">
-        <h2>Reserva Recebida!</h2>
-        <p>Olá ${userName},</p>
+        <h2>Reservation Received!</h2>
+        <p>Hello ${escapeHtml(userName)},</p>
         <p>
-          A sua reserva para o dia <strong>${reservationDate}</strong> das <strong>${timeStart}</strong> às <strong>${timeEnd}</strong> foi criada com sucesso e será analisada pelo veterinário.
+          Your reservation for <strong>${escapeHtml(reservationDate)}</strong> from <strong>${escapeHtml(timeStart)}</strong> to <strong>${escapeHtml(timeEnd)}</strong> has been created and will be reviewed by the veterinarian.
         </p>
-        <p>Em breve receberá uma confirmação ou pedido de alteração.</p>
+        <p>You will receive a confirmation or a request to make changes shortly.</p>
         <br>
-        <p>Obrigado,<br>VetCare Team</p>
+        <p>Thank you,<br>VetCare Team</p>
       </div>
     `;
   }
@@ -68,15 +78,15 @@ export class EmailService {
   ): string {
     return `
       <div style="font-family: Arial, sans-serif; color: #333;">
-        <h2>Reserva Confirmada!</h2>
-        <p>Olá ${userName},</p>
+        <h2>Reservation Confirmed!</h2>
+        <p>Hello ${escapeHtml(userName)},</p>
         <p>
-          A sua reserva para o dia <strong>${reservationDate}</strong> das <strong>${timeStart}</strong> às <strong>${timeEnd}</strong> foi confirmada pelo veterinário.
+          Your reservation for <strong>${escapeHtml(reservationDate)}</strong> from <strong>${escapeHtml(timeStart)}</strong> to <strong>${escapeHtml(timeEnd)}</strong> has been confirmed by the veterinarian.
         </p>
-        ${note ? `<p><strong>O veterinário deixou uma nota para si:</strong> ${note}</p>` : ""}
-        <p>Aguardamos por si na data marcada.</p>
+        ${note ? `<p><strong>Your veterinarian left a note:</strong> ${escapeHtml(note)}</p>` : ""}
+        <p>We look forward to seeing you at your appointment.</p>
         <br>
-        <p>Obrigado,<br>VetCare Team</p>
+        <p>Thank you,<br>VetCare Team</p>
       </div>
     `;
   }
@@ -93,17 +103,17 @@ export class EmailService {
   ): string {
     return `
       <div style="font-family: Arial, sans-serif; color: #333;">
-        <h2>Reserva Reagendada</h2>
-        <p>Olá ${userName},</p>
-        <p>A sua reserva foi <strong>reagendada</strong>.</p>
+        <h2>Reservation Rescheduled</h2>
+        <p>Hello ${escapeHtml(userName)},</p>
+        <p>Your reservation has been <strong>rescheduled</strong>.</p>
         <p>
-          <strong>Data e hora anterior:</strong> ${oldDate} das ${oldTimeStart} às ${oldTimeEnd}<br>
-          <strong>Nova data e hora:</strong> ${newDate} das ${newTimeStart} às ${newTimeEnd}
+          <strong>Previous date and time:</strong> ${escapeHtml(oldDate)} from ${escapeHtml(oldTimeStart)} to ${escapeHtml(oldTimeEnd)}<br>
+          <strong>New date and time:</strong> ${escapeHtml(newDate)} from ${escapeHtml(newTimeStart)} to ${escapeHtml(newTimeEnd)}
         </p>
-        ${note ? `<p><strong>Nota:</strong> ${note}</p>` : ""}
+        ${note ? `<p><strong>Note:</strong> ${escapeHtml(note)}</p>` : ""}
         <br>
-        <p>Por favor, confirme a sua disponibilidade.</p>
-        <p>Obrigado,<br>VetCare Team</p>
+        <p>The new date is awaiting clinic confirmation. You will receive an email once it is confirmed.</p>
+        <p>Thank you,<br>VetCare Team</p>
       </div>
     `;
   }
@@ -115,18 +125,18 @@ export class EmailService {
   ): string {
     return `
       <div style="font-family: Arial, sans-serif; color: #333;">
-        <h2>Reserva Cancelada</h2>
-        <p>Olá ${userName},</p>
-        <p>Lamentamos informar que a sua reserva para o dia <strong>${reservationDate}</strong> foi <strong>cancelada</strong>.</p>
-        ${note ? `<p><strong>Motivo:</strong> ${note}</p>` : ""}
+        <h2>Reservation Cancelled</h2>
+        <p>Hello ${escapeHtml(userName)},</p>
+        <p>Your reservation for <strong>${escapeHtml(reservationDate)}</strong> has been <strong>cancelled</strong>.</p>
+        ${note ? `<p><strong>Reason:</strong> ${escapeHtml(note)}</p>` : ""}
         <br>
-        <p>Se tiver dúvidas, por favor contacte-nos.</p>
-        <p>Obrigado,<br>VetCare Team</p>
+        <p>Please contact us if you have any questions.</p>
+        <p>Thank you,<br>VetCare Team</p>
       </div>
     `;
   }
 
-  // Envio dos emails:
+  // Email delivery:
   async sendReservationCreatedEmail(
     to: string,
     userName: string,
@@ -149,9 +159,9 @@ export class EmailService {
     try {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(EmailMessages.RESERVATION_CREATED_SENT);
-    } catch {
+    } catch (cause: unknown) {
       this.logger.error(EmailMessages.RESERVATION_CREATED_SEND_ERROR);
-      throw new Error(EmailMessages.RESERVATION_CREATED_FAILED);
+      throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, EmailMessages.RESERVATION_CREATED_FAILED, cause);
     }
   }
 
@@ -179,9 +189,9 @@ export class EmailService {
     try {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(EmailMessages.RESERVATION_CONFIRMED_SENT);
-    } catch {
+    } catch (cause: unknown) {
       this.logger.error(EmailMessages.RESERVATION_CONFIRMED_SEND_ERROR);
-      throw new Error(EmailMessages.RESERVATION_CONFIRMED_FAILED);
+      throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, EmailMessages.RESERVATION_CONFIRMED_FAILED, cause);
     }
   }
 
@@ -200,9 +210,9 @@ export class EmailService {
       // Send the email using the transporter
       await this.transporter.sendMail(mailOptions);
       this.logger.log(EmailMessages.PASSWORD_RESET_SENT);
-    } catch {
+    } catch (cause: unknown) {
       this.logger.error(EmailMessages.PASSWORD_RESET_SEND_ERROR);
-      throw new Error(EmailMessages.PASSWORD_RESET_FAILED);
+      throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, EmailMessages.PASSWORD_RESET_FAILED, cause);
     }
   }
 
@@ -219,9 +229,9 @@ export class EmailService {
     try {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(EmailMessages.EMPLOYEE_WELCOME_SENT);
-    } catch {
+    } catch (cause: unknown) {
       this.logger.error(EmailMessages.EMPLOYEE_WELCOME_SEND_ERROR);
-      throw new Error(EmailMessages.WELCOME_FAILED);
+      throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, EmailMessages.WELCOME_FAILED, cause);
     }
   }
 
@@ -238,9 +248,9 @@ export class EmailService {
     try {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(EmailMessages.CLIENT_WELCOME_SENT);
-    } catch {
+    } catch (cause: unknown) {
       this.logger.error(EmailMessages.CLIENT_WELCOME_SEND_ERROR);
-      throw new Error(EmailMessages.WELCOME_FAILED);
+      throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, EmailMessages.WELCOME_FAILED, cause);
     }
   }
 
@@ -273,9 +283,9 @@ export class EmailService {
     try {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(EmailMessages.RESERVATION_RESCHEDULED_SENT);
-    } catch {
+    } catch (cause: unknown) {
       this.logger.error(EmailMessages.RESERVATION_RESCHEDULED_SEND_ERROR);
-      throw new Error(EmailMessages.RESERVATION_RESCHEDULED_FAILED);
+      throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, EmailMessages.RESERVATION_RESCHEDULED_FAILED, cause);
     }
   }
 
@@ -294,9 +304,9 @@ export class EmailService {
     try {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(EmailMessages.RESERVATION_CANCELLED_SENT);
-    } catch {
+    } catch (cause: unknown) {
       this.logger.error(EmailMessages.RESERVATION_CANCELLED_SEND_ERROR);
-      throw new Error(EmailMessages.RESERVATION_CANCELLED_FAILED);
+      throw applicationError(ErrorMetadata.SERVICE_UNAVAILABLE, EmailMessages.RESERVATION_CANCELLED_FAILED, cause);
     }
   }
 }

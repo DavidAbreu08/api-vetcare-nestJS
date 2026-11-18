@@ -14,6 +14,7 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { ResetTokenEntity } from "src/auth/entities/reset-token.entity";
 import { ResetTokenEntityRepository } from "./repository/reset-token.repository";
 import { DataSource } from "typeorm";
+import { ResetTokenService } from "./reset-token.service";
 
 @Module({
   imports: [
@@ -25,12 +26,14 @@ import { DataSource } from "typeorm";
     JwtModule.registerAsync({
       useFactory: () => ({ secret: jwtSecret(), signOptions: { expiresIn: "1h" } }),
     }),
+    // ThrottlerModule.forRoot (global) is registered in AppModule; ThrottlerGuard is used only on routes.
     TypeOrmModule.forFeature([ResetTokenEntity]),
   ],
   providers: [
     AuthService,
     LocalStrategy,
     JwtStrategy,
+    ResetTokenService,
     {
       provide: ResetTokenEntityRepository,
       useFactory: (dataSource: DataSource) =>

@@ -3,6 +3,7 @@ import { FindOperator } from "typeorm";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { SystemRole } from "../core/enums/system-role.enum";
 import { RoleEntity } from "../roles/entities/role.entity";
+import { JobTitleEntity } from "../job-titles/entities/job-title.entity";
 import { UserRoleEntity } from "../roles/entities/user-role.entity";
 import { SystemSettingEntity } from "./entities/system-setting.entity";
 import { SystemSettingCode } from "./enums/system-setting-code.enum";
@@ -13,15 +14,18 @@ const ADMIN_ID = "20000000-0000-4000-8000-000000000001";
 const EMPLOYEE_ID = "20000000-0000-4000-8000-000000000002";
 const CLIENT_ID = "20000000-0000-4000-8000-000000000003";
 const SPARE_ID = "20000000-0000-4000-8000-000000000004";
+const VET_TITLE = "30000000-0000-4000-8000-000000000001";
+const RECEPTION_TITLE = "30000000-0000-4000-8000-000000000002";
 const rows = () => [
   { id: "s1", code: SystemSettingCode.ADMIN_ROLE_ID, value: ADMIN_ID.toUpperCase() },
   { id: "s2", code: SystemSettingCode.EMPLOYEE_ROLE_ID, value: EMPLOYEE_ID },
   { id: "s3", code: SystemSettingCode.CLIENT_ROLE_ID, value: CLIENT_ID },
   { id: "s4", code: "SUPPORT_EMAIL", value: "help@example.com" },
+  { id: "s5", code: SystemSettingCode.VETERINARIAN_JOB_TITLE_ID, value: VET_TITLE },
 ];
 
 describe("SystemSettingsService", () => {
-  let repo: any, manager: any, roleRows: any[], holders: number, missingEmployees: number, transactions: number;
+  let repo: any, manager: any, roleRows: any[], jobTitles: any[], holders: number, missingEmployees: number, transactions: number;
   let business: SystemSettingsBusinessService, service: SystemSettingsService;
 
   beforeEach(() => {
@@ -30,6 +34,7 @@ describe("SystemSettingsService", () => {
       findOneBy: jest.fn().mockImplementation(async ({ id }) => rows().find(row => row.id === id) ?? null),
     };
     roleRows = [ADMIN_ID, EMPLOYEE_ID, CLIENT_ID, SPARE_ID].map(id => ({ id, isActive: true }));
+    jobTitles = [{ id: VET_TITLE.toUpperCase(), isActive: true }, { id: RECEPTION_TITLE, isActive: true }];
     holders = 1;
     missingEmployees = 0;
     transactions = 0;
@@ -37,7 +42,9 @@ describe("SystemSettingsService", () => {
     for (const name of ["innerJoin", "where", "andWhere"]) query[name] = jest.fn(() => query);
     query.getCount = jest.fn(async () => missingEmployees);
     manager = {
-      findOne: jest.fn(async (_entity: unknown, options: any) => rows().find(row => row.id === options.where.id) ?? null),
+      findOne: jest.fn(async (entity: unknown, options: any) => entity === JobTitleEntity
+        ? jobTitles.find(title => title.id.toLowerCase() === options.where.id) ?? null
+        : rows().find(row => row.id === options.where.id) ?? null),
       find: jest.fn(async (entity: unknown, options: any) => {
         const values = (options.where.id ?? options.where.code) as FindOperator<string[]>;
         if (entity === SystemSettingEntity) return rows().filter(row => values.value.includes(row.code));
@@ -136,6 +143,37 @@ describe("SystemSettingsService", () => {
     missingEmployees = 2;
     await expect(service.update("s2", { value: SPARE_ID })).rejects.toBeInstanceOf(ConflictException);
     expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  describe("VETERINARIAN_JOB_TITLE_ID", () => {
+    it("requires an existing, active job title (400) and stores its lowercase id, locking the job-title row", async () => {
+      expect(await service.update("s5", { value: ` ${RECEPTION_TITLE.toUpperCase()} ` })).toMatchObject({ value: RECEPTION_TITLE });
+      expect(manager.findOne).toHaveBeenCalledWith(JobTitleEntity, { where: { id: RECEPTION_TITLE }, lock: { mode: "pessimistic_write" } });
+      for (const value of ["not-a-uuid", "30000000-0000-4000-8000-0000000000ff"]) {
+        await expect(service.update("s5", { value })).rejects.toBeInstanceOf(BadRequestException);
+      }
+      jobTitles[1].isActive = false;
+      await expect(service.update("s5", { value: RECEPTION_TITLE })).rejects.toBeInstanceOf(BadRequestException);
+      expect(manager.save).toHaveBeenCalledTimes(1);
+    });
+
+    it("can be cleared with null, \"\" or blank (stored as NULL: no veterinarian configured) without locking a job title", async () => {
+      for (const value of [null, "", "   "]) {
+        manager.findOne.mockClear();
+        await expect(service.update("s5", { value })).resolves.toMatchObject({ code: SystemSettingCode.VETERINARIAN_JOB_TITLE_ID, value: null });
+        expect(manager.findOne).not.toHaveBeenCalledWith(JobTitleEntity, expect.anything());
+      }
+    });
+
+    it("exposes the referenced job title (null when absent or malformed)", async () => {
+      await expect(service.getJobTitleId(SystemSettingCode.VETERINARIAN_JOB_TITLE_ID)).resolves.toBe(VET_TITLE);
+      repo.find.mockResolvedValue([{ code: SystemSettingCode.VETERINARIAN_JOB_TITLE_ID, value: null }]);
+      service.invalidate();
+      await expect(service.getJobTitleId(SystemSettingCode.VETERINARIAN_JOB_TITLE_ID)).resolves.toBeNull();
+      repo.find.mockResolvedValue([]);
+      service.invalidate();
+      await expect(service.getJobTitleId(SystemSettingCode.VETERINARIAN_JOB_TITLE_ID)).resolves.toBeNull();
+    });
   });
 
   it("stores non-role settings verbatim, locking only their own row", async () => {

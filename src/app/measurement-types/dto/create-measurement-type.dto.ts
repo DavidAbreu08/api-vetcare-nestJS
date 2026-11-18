@@ -7,7 +7,7 @@ export class CreateMeasurementTypeDto {
  @ApiProperty({ maxLength: 255 }) @IsString() @Matches(/\S/) @MaxLength(255) name: string;
  @ApiProperty({ example: "\u00b0C", maxLength: 32 }) @IsString() @Matches(/\S/) @MaxLength(32) unit: string;
  @ApiPropertyOptional({ default: true }) @IsOptional() @IsBoolean() isActive?: boolean;
- @ApiPropertyOptional({ nullable: true, maxLength: 240 }) @IsOptional() @IsString() @MaxLength(240) description?: string | null;
- @ApiPropertyOptional({ nullable: true, maxLength: 500 }) @IsOptional() @IsString() @MaxLength(500) notes?: string | null;
+ @ApiPropertyOptional({ type: String, nullable: true, maxLength: 240 }) @IsOptional() @IsString() @MaxLength(240) description?: string | null;
+ @ApiPropertyOptional({ type: String, nullable: true, maxLength: 500 }) @IsOptional() @IsString() @MaxLength(500) notes?: string | null;
 }
 export class UpdateMeasurementTypeDto extends PartialType(CreateMeasurementTypeDto) {}

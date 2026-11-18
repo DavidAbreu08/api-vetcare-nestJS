@@ -18,12 +18,12 @@ export class CreateAnimalDto {
   @IsUUID()
   speciesId?: string;
 
-  @ApiPropertyOptional({ description: "Breed UUID belonging to speciesId; null means no breed specified", format: "uuid", nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Breed UUID belonging to speciesId; null means no breed specified", format: "uuid", nullable: true })
   @IsOptional()
   @IsUUID()
   breedId?: string | null;
 
-  @ApiPropertyOptional({ description: "Known birth date, YYYY-MM-DD, not in the future; null means unknown", example: "2022-06-15", nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Known birth date, YYYY-MM-DD, not in the future; null means unknown", example: "2022-06-15", nullable: true })
   @IsOptional()
   @IsDateString({ strict: true })
   @Matches(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/)
@@ -34,19 +34,19 @@ export class CreateAnimalDto {
   @MaxLength(255)
   color: string;
 
-  @ApiPropertyOptional({ description: "Additional animal information", maxLength: 255, nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Additional animal information", maxLength: 255, nullable: true })
   @IsOptional()
   @IsString()
   @MaxLength(255)
   description?: string | null;
 
-  @ApiPropertyOptional({ description: "Animal notes", maxLength: 500, nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Animal notes", maxLength: 500, nullable: true })
   @IsOptional()
   @IsString()
   @MaxLength(500)
   notes?: string | null;
 
-  @ApiPropertyOptional({ description: "Image reference; legacy embedded data URLs are still supported", nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Image reference; legacy embedded data URLs are still supported", nullable: true })
   @IsOptional()
   @IsString()
   imageUrl?: string | null;
@@ -58,13 +58,13 @@ export class CreateAnimalDto {
   @MaxLength(255)
   sex?: string;
 
-  @ApiPropertyOptional({ description: "Microchip identifier; no global uniqueness policy is assumed", maxLength: 255, nullable: true })
+  @ApiPropertyOptional({ type: String, description: "Microchip identifier; no global uniqueness policy is assumed", maxLength: 255, nullable: true })
   @IsOptional()
   @IsString()
   @MaxLength(255)
   microchipNumber?: string | null;
 
-  @ApiPropertyOptional({ description: "Whether the animal is neutered; null means unknown", nullable: true })
+  @ApiPropertyOptional({ type: Boolean, description: "Whether the animal is neutered; null means unknown", nullable: true })
   @IsOptional()
   @IsBoolean()
   isNeutered?: boolean | null;

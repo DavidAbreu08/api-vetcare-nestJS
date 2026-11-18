@@ -3,13 +3,13 @@ import { IsOptional, IsString, MaxLength } from "class-validator";
 
 /** Optional business metadata; null explicitly clears a value on updates. */
 export class DescriptiveMetadataDto {
-  @ApiPropertyOptional({ maxLength: 240, nullable: true })
+  @ApiPropertyOptional({ type: String, maxLength: 240, nullable: true })
   @IsOptional()
   @IsString()
   @MaxLength(240)
   description?: string | null;
 
-  @ApiPropertyOptional({ maxLength: 500, nullable: true })
+  @ApiPropertyOptional({ type: String, maxLength: 500, nullable: true })
   @IsOptional()
   @IsString()
   @MaxLength(500)
@@ -17,7 +17,7 @@ export class DescriptiveMetadataDto {
 }
 
 export class NamedMetadataDto extends DescriptiveMetadataDto {
-  @ApiPropertyOptional({ maxLength: 255, nullable: true })
+  @ApiPropertyOptional({ type: String, maxLength: 255, nullable: true })
   @IsOptional()
   @IsString()
   @MaxLength(255)

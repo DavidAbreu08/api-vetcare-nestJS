@@ -1,23 +1,73 @@
-import { ForbiddenException } from "@nestjs/common";
+import { ConflictException, ForbiddenException } from "@nestjs/common";
+import { ClinicalVisitEntity } from "../clinical-visits/entities/clinical-visit.entity";
+import { ClinicalVisitStatus } from "../clinical-visits/enums/clinical-visit-status.enum";
+import { ReservationStatus } from "../core/enums/reservation-status.enum";
+import { AnimalEntity } from "./entities/animal.entity";
 import { Actor } from "../core/authorization";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { SystemRole } from "../core/enums/system-role.enum";
 import { AnimalBusinessService } from "./animal.business.service";
+import { instanceToPlain } from "class-transformer";
+import { AnimalMeasurementEntity } from "../animal-measurements/entities/animal-measurement.entity";
+import { sameId } from "../core/authorization";
+
+/**
+ * AnimalAccessService double over an in-memory list of active tutorships ({ animalId, userId, isPrimary }); staff
+ * flags follow the real service (canReadAnimal/canManageAnimal).
+ */
+function accessDouble(rows: { animalId: string; userId: string; isPrimary: boolean }[]) {
+  const active = (animalId: string, userId: string, primary = false) =>
+    rows.some(row => sameId(row.animalId, animalId) && sameId(row.userId, userId) && (!primary || row.isPrimary));
+  const staff = (who: Actor) => who.isAdmin || who.isEmployee;
+  return {
+    rows,
+    isActiveTutor: jest.fn(async (animalId: string, userId: string) => active(animalId, userId)),
+    isPrimaryTutor: jest.fn(async (animalId: string, userId: string) => active(animalId, userId, true)),
+    canReadAnimal: jest.fn(async (who: Actor, animalId: string) => staff(who) || active(animalId, who.id)),
+    canManageAnimal: jest.fn(async (who: Actor, animalId: string) => staff(who) || active(animalId, who.id, true)),
+    activeTutorsOf: jest.fn(async (ids: string[]) => new Map(ids.map(id => [id.toLowerCase(), rows
+      .filter(row => sameId(row.animalId, id))
+      .map(row => ({ ...row, assignedAt: new Date("2030-01-01T00:00:00Z"), user: { id: row.userId, name: row.userId, email: `${row.userId}@x.pt` } }))]))),
+  };
+}
+
+/** Fluent query builder double recording andWhere calls; getMany resolves `result()`. */
+function animalsQuery(result: () => unknown[]) {
+  const qb: any = { conditions: [] as [string, object | undefined][] };
+  for (const name of ["leftJoinAndSelect", "orderBy", "addOrderBy", "skip", "take"]) qb[name] = jest.fn(() => qb);
+  qb.andWhere = jest.fn((sql: string, params?: object) => (qb.conditions.push([sql, params]), qb));
+  qb.getMany = jest.fn(async () => result());
+  return qb;
+}
 
 const ana: Actor = { id: "ANA", roleIds: ["employee", "client"], isAdmin: false, isEmployee: true, isClient: true, employeeId: "E-ANA" };
 const clientOnly: Actor = { ...ana, isEmployee: false, employeeId: null, roleIds: ["client"] };
 
 describe("Animals of an account that is both client and employee", () => {
-  let animals: any, users: any, membership: any, business: AnimalBusinessService;
+  let animals: any, users: any, membership: any, measurements: any, business: AnimalBusinessService, isVet: boolean;
+  let access: ReturnType<typeof accessDouble>, owners: any, manager: any, queries: any[];
 
   beforeEach(() => {
-    animals = { find: jest.fn(async () => []), create: jest.fn((row: unknown) => row), save: jest.fn(async (row: any) => ({ id: "CAT", ...row })) };
-    users = { findOneBy: jest.fn(async ({ id }: any) => ({ id, name: id, email: `${id}@x.pt` })) };
+    queries = [];
+    animals = {
+      find: jest.fn(async () => []), create: jest.fn((row: unknown) => row),
+      createQueryBuilder: jest.fn(() => {
+        const qb = animalsQuery(() => animals.find());
+        queries.push(qb);
+        return qb;
+      }),
+    };
+    manager = { save: jest.fn(async (row: any) => ({ id: "CAT", ...row })) };
+    const dataSource = { transaction: jest.fn(async (work: (m: unknown) => unknown) => work(manager)) };
+    access = accessDouble([]);
+    owners = { lockTutorAccount: jest.fn(async (_m: unknown, id: string) => ({ id, isActive: true })), openInitialPrimary: jest.fn(async () => undefined) };
+    users = { findOneBy: jest.fn(async ({ id }: any) => ({ id, name: id, email: `${id}@x.pt`, isActive: true })) };
     // Ana holds CLIENT (and EMPLOYEE): the owner check only asks for CLIENT.
     membership = { hasSystemRole: jest.fn(async (_id: string, role: SystemRole) => role === SystemRole.CLIENT) };
     const species = { getById: jest.fn(async () => ({ id: "S-1", name: "Gato" })), findByName: jest.fn() };
-    const measurements = { latest: jest.fn(async () => ({})), latestMany: jest.fn(async () => new Map()) };
-    business = new AnimalBusinessService(animals, users, species as any, {} as any, new PersistenceService(), measurements as any, membership);
+    measurements = { latest: jest.fn(async () => ({ weight: null, height: null, latestMeasurements: [] })), latestMany: jest.fn(async () => new Map()) };
+    isVet = false;
+    business = new AnimalBusinessService(animals, users, species as any, {} as any, new PersistenceService(), measurements as any, membership, dataSource as any, { isVeterinarian: async () => isVet } as any, access as any, owners);
   });
 
   it("accepts her as owner and registers her own animal unverified, like any client", async () => {
@@ -26,16 +76,282 @@ describe("Animals of an account that is both client and employee", () => {
     expect(created).toMatchObject({ owner: { id: "ANA" }, isVerified: false });
   });
 
-  it("verifies animals she registers for another client through the professional path", async () => {
-    const created: any = await business.create({ name: "Rex", color: "castanho", sex: "M", speciesId: "S-1", ownerId: "BOB" } as any, ana);
-    expect(created.isVerified).toBe(true);
+  it("registers another client's animal verified only when she is a veterinarian (same rule as update/confirm)", async () => {
+    const rex = { name: "Rex", color: "castanho", sex: "M", speciesId: "S-1", ownerId: "BOB" } as any;
+    // As a receptionist (no veterinarian job title) the animal waits for approval.
+    expect(((await business.create(rex, ana)) as any).isVerified).toBe(false);
+    isVet = true;
+    expect(((await business.create(rex, ana)) as any).isVerified).toBe(true);
+    // Never for her own animal, even as a veterinarian.
+    expect(((await business.create({ ...rex, ownerId: "ANA" }, ana)) as any).isVerified).toBe(false);
+    const admin: Actor = { id: "ADM", roleIds: ["admin"], isAdmin: true, isEmployee: false, isClient: false, employeeId: null };
+    isVet = false;
+    expect(((await business.create(rex, admin)) as any).isVerified).toBe(true);
   });
 
-  it("lists every animal for her as active staff, but only their own for a client-only account", async () => {
+  it("lists every animal for her as active staff, but only those she is an active tutor of as a client-only account", async () => {
     await business.getAll({} as any, ana);
-    expect(animals.find.mock.calls[0][0].where).not.toHaveProperty("owner");
+    expect(queries[0].conditions).toEqual([]);
     await business.getAll({} as any, clientOnly);
-    expect(animals.find.mock.calls[1][0].where.owner).toEqual({ id: "ANA" });
+    expect(queries[1].conditions).toEqual([[expect.stringMatching(/^EXISTS \(SELECT 1 FROM vc_animal_owners ao_tutor WHERE ao_tutor\.animal_id = animal\.id AND ao_tutor\.user_id = :tutorId AND ao_tutor\.ended_at IS NULL\)$/), { tutorId: "ANA" }]]);
     await expect(business.getAll({ ownerId: "BOB" } as any, clientOnly)).rejects.toBeInstanceOf(ForbiddenException);
+    // Staff filtering by ownerId get the animals of which that account is an active tutor (primary or secondary).
+    await business.getAll({ ownerId: "BOB" } as any, ana);
+    expect(queries[2].conditions[0][1]).toEqual({ tutorId: "BOB" });
+  });
+
+  it("creates the animal and its primary tutorship in one transaction, locking the owner's account first", async () => {
+    await business.create({ name: "Mia", color: "preto", sex: "F", speciesId: "S-1", ownerId: "ANA" } as any, ana);
+    expect(owners.lockTutorAccount).toHaveBeenCalledWith(manager, "ANA");
+    expect(owners.openInitialPrimary).toHaveBeenCalledWith(manager, "CAT", "ANA", "ANA");
+    expect(manager.save.mock.invocationCallOrder[0]).toBeLessThan(owners.lockTutorAccount.mock.invocationCallOrder[0]);
+    expect(owners.lockTutorAccount.mock.invocationCallOrder[0]).toBeLessThan(owners.openInitialPrimary.mock.invocationCallOrder[0]);
+  });
+
+  it("refuses an inactive client as the owner of a new animal (400, B3)", async () => {
+    users.findOneBy.mockResolvedValueOnce({ id: "BOB", isActive: false });
+    await expect(business.create({ name: "Rex", color: "c", sex: "M", speciesId: "S-1", ownerId: "BOB" } as any, ana)).rejects.toMatchObject({ status: 400 });
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  describe("latestMeasurements projection", () => {
+    const admin: Actor = { id: "ADM", roleIds: ["admin"], isAdmin: true, isEmployee: false, isClient: false, employeeId: null };
+    const measurement = () => Object.assign(new AnimalMeasurementEntity(), { id: "M-1", animalId: "CAT", recordedBy: "EMP", updatedBy: "EDITOR", value: "4.000000" });
+    const pet = { id: "CAT", name: "Mia", owner: { id: "ANA", name: "Ana", email: "ana@x.pt" } };
+    let row: AnimalMeasurementEntity;
+
+    beforeEach(() => {
+      row = measurement();
+      const latest = { weight: 4, height: null, latestMeasurements: [row] };
+      measurements.latest.mockResolvedValue(latest);
+      measurements.latestMany.mockResolvedValue(new Map([["CAT", latest]]));
+      animals.find.mockResolvedValue([pet]);
+      animals.findOne = jest.fn(async () => pet);
+      access.rows.push({ animalId: "CAT", userId: "ANA", isPrimary: true });
+    });
+
+    it("hides updatedBy from a client in getById and getAll (recordedBy kept)", async () => {
+      for (const result of [await business.getById("CAT", clientOnly), (await business.getAll({} as any, clientOnly))[0]] as any[]) {
+        const plain: any = instanceToPlain(result);
+        expect(plain.latestMeasurements[0]).not.toHaveProperty("updatedBy");
+        expect(plain.latestMeasurements[0]).toMatchObject({ id: "M-1", recordedBy: "EMP" });
+      }
+      expect(row.updatedBy).toBe("EDITOR");
+    });
+
+    it("keeps updatedBy for employees and administrators", async () => {
+      for (const actor of [ana, admin]) {
+        for (const result of [await business.getById("CAT", actor), (await business.getAll({} as any, actor))[0]] as any[]) {
+          expect(instanceToPlain(result).latestMeasurements[0]).toMatchObject({ recordedBy: "EMP", updatedBy: "EDITOR" });
+        }
+      }
+    });
+  });
+});
+
+describe("Animal species/breed changes and approval (B2, decision 26)", () => {
+  const actor = (flags: Partial<Actor>): Actor => ({ id: "X", roleIds: [], isAdmin: false, isEmployee: false, isClient: false, employeeId: null, ...flags });
+  const owner = actor({ id: "OWNER", isClient: true });
+  const vet = actor({ id: "VET", isEmployee: true, employeeId: "E-VET" });
+  const receptionist = actor({ id: "REC", isEmployee: true, employeeId: "E-REC" });
+  const admin = actor({ id: "ADM", isAdmin: true });
+  let animals: any, stored: any, business: AnimalBusinessService, qualifications: any, access: ReturnType<typeof accessDouble>, owners: any;
+  /** The primary tutor is the stored owner; tutors() rebuilds the rows after a test changes stored.owner. */
+  const tutors = () => access.rows.splice(0, access.rows.length, { animalId: "CAT", userId: stored.owner.id, isPrimary: true });
+
+  beforeEach(() => {
+    stored = { id: "CAT", name: "Mia", speciesId: "S-1", breedId: null, isVerified: true, owner: { id: "OWNER" } };
+    access = accessDouble([]);
+    tutors();
+    owners = { transferLocked: jest.fn(async (_m: unknown, _id: string, options: any) => ({ id: options.newPrimaryUserId })) };
+    // The transaction manager: update and confirm lock the animal row and write through it.
+    animals = { findOne: jest.fn(async () => ({ ...stored, owner: { ...stored.owner } })), save: jest.fn(async (_entity: unknown, row: any) => row) };
+    const manager = { findOne: animals.findOne, save: jest.fn(async (row: any) => animals.save(AnimalEntity, row)) };
+    const dataSource = { transaction: jest.fn(async (work: (m: unknown) => unknown) => work(manager)) };
+    const species = { getById: jest.fn(async (id: string) => ({ id, name: id })), findByName: jest.fn() };
+    const measurements = { latest: jest.fn(async () => ({ weight: null, height: null, latestMeasurements: [] })) };
+    qualifications = { isVeterinarian: jest.fn(async (who: Actor) => who.employeeId === "E-VET") };
+    business = new AnimalBusinessService({} as any, {} as any, species as any, {} as any, new PersistenceService(), measurements as any, {} as any, dataSource as any, qualifications, access as any, owners);
+  });
+
+  const lockedFirst = () => {
+    expect(animals.findOne.mock.calls[0]).toEqual([AnimalEntity, { where: { id: "CAT" }, lock: { mode: "pessimistic_write" } }]);
+  };
+
+  const change = (who: Actor, speciesId = "S-2") => business.update("CAT", { speciesId } as any, who) as Promise<any>;
+
+  it("lets the owner change the species (no 403) and leaves the animal unverified until approved", async () => {
+    await expect(change(owner)).resolves.toMatchObject({ speciesId: "S-2", isVerified: false });
+  });
+
+  it("leaves the animal unverified after a change by a non-veterinarian employee", async () => {
+    await expect(change(receptionist)).resolves.toMatchObject({ speciesId: "S-2", isVerified: false });
+    expect(qualifications.isVeterinarian).toHaveBeenCalledWith(receptionist, expect.anything());
+    lockedFirst();
+  });
+
+  it("applies a change by a veterinarian or an administrator directly (verified)", async () => {
+    stored.isVerified = false;
+    await expect(change(vet)).resolves.toMatchObject({ speciesId: "S-2", isVerified: true });
+    await expect(change(admin)).resolves.toMatchObject({ isVerified: true });
+  });
+
+  it("treats a veterinarian changing their own animal as a client (unverified), also as a secondary tutor", async () => {
+    stored.owner = { id: "VET" };
+    tutors();
+    await expect(change(vet)).resolves.toMatchObject({ isVerified: false });
+    stored.owner = { id: "OWNER" };
+    tutors();
+    access.rows.push({ animalId: "CAT", userId: "VET", isPrimary: false });
+    await expect(change(vet)).resolves.toMatchObject({ isVerified: false });
+  });
+
+  it("keeps the verification when the species sent is the current one (case-insensitive)", async () => {
+    await expect(change(owner, "s-1")).resolves.toMatchObject({ isVerified: true });
+    expect(qualifications.isVeterinarian).not.toHaveBeenCalled();
+  });
+
+  it("lets a veterinarian or an administrator verify, and refuses receptionists and clients (403)", async () => {
+    stored.isVerified = false;
+    await expect(business.confirm("CAT", vet)).resolves.toMatchObject({ isVerified: true });
+    await expect(business.confirm("CAT", admin)).resolves.toMatchObject({ isVerified: true });
+    animals.save.mockClear();
+    await expect(business.confirm("CAT", receptionist)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(business.confirm("CAT", owner)).rejects.toBeInstanceOf(ForbiddenException);
+    stored.owner = { id: "VET" };
+    tutors();
+    await expect(business.confirm("CAT", vet)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(animals.save).not.toHaveBeenCalled();
+  });
+
+  it("locks the animal before approving it (serializes with a concurrent species/breed change)", async () => {
+    stored.isVerified = false;
+    await business.confirm("CAT", vet);
+    lockedFirst();
+    expect(animals.findOne.mock.invocationCallOrder[0]).toBeLessThan(qualifications.isVeterinarian.mock.invocationCallOrder[0]);
+    expect(animals.findOne.mock.invocationCallOrder[1]).toBeLessThan(animals.save.mock.invocationCallOrder[0]);
+  });
+
+  it("refuses (409 ANIMAL_DATA_CHANGED) when the reviewed species/breed no longer match, and approves when they do", async () => {
+    stored = { ...stored, isVerified: false, speciesId: "S-2", breedId: "B-2" };
+    await expect(business.confirm("CAT", vet, { expectedSpeciesId: "S-1" })).rejects.toMatchObject({
+      status: 409, response: { code: "ANIMAL_DATA_CHANGED", message: "The animal's species or breed changed since it was reviewed; review it again before approving" },
+    });
+    await expect(business.confirm("CAT", vet, { expectedSpeciesId: "s-2", expectedBreedId: null })).rejects.toBeInstanceOf(ConflictException);
+    expect(animals.save).not.toHaveBeenCalled();
+    await expect(business.confirm("CAT", vet, { expectedSpeciesId: "s-2", expectedBreedId: "b-2" })).resolves.toMatchObject({ isVerified: true });
+    // Without expectations (no body) the contract is unchanged.
+    await expect(business.confirm("CAT", admin)).resolves.toMatchObject({ isVerified: true });
+  });
+});
+
+describe("Animal access and edition with several tutors (decisions 9, 10, 13)", () => {
+  const actor = (flags: Partial<Actor>): Actor => ({ id: "X", roleIds: [], isAdmin: false, isEmployee: false, isClient: true, employeeId: null, ...flags });
+  const primary = actor({ id: "OWNER" });
+  const secondary = actor({ id: "SECOND" });
+  const former = actor({ id: "FORMER" });
+  const admin = actor({ id: "ADM", isAdmin: true, isClient: false });
+  const receptionist = actor({ id: "REC", isEmployee: true, employeeId: "E-REC", isClient: false });
+  let stored: any, manager: any, business: AnimalBusinessService, access: ReturnType<typeof accessDouble>, owners: any;
+
+  beforeEach(() => {
+    stored = { id: "CAT", name: "Mia", speciesId: "S-1", breedId: null, isVerified: true, owner: { id: "OWNER" } };
+    access = accessDouble([{ animalId: "CAT", userId: "OWNER", isPrimary: true }, { animalId: "CAT", userId: "SECOND", isPrimary: false }]);
+    owners = { transferLocked: jest.fn(async (_m: unknown, _id: string, options: any) => ({ id: options.newPrimaryUserId, name: "New" })) };
+    manager = { findOne: jest.fn(async () => ({ ...stored })), save: jest.fn(async (row: any) => row) };
+    const repository = { findOne: jest.fn(async () => ({ ...stored })) };
+    const dataSource = { transaction: jest.fn(async (work: (m: unknown) => unknown) => work(manager)) };
+    const measurements = { latest: jest.fn(async () => ({ weight: null, height: null, latestMeasurements: [] })) };
+    business = new AnimalBusinessService(repository as any, {} as any, {} as any, {} as any, new PersistenceService(), measurements as any, {} as any,
+      dataSource as any, { isVeterinarian: async () => false } as any, access as any, owners);
+  });
+
+  it("lets every active tutor read the animal with its tutors (primary first), and denies a former tutor (403)", async () => {
+    const view: any = await business.getById("CAT", secondary);
+    expect(view.owner).toMatchObject({ id: "OWNER" });
+    expect(view.tutors).toEqual([
+      { user: { id: "OWNER", name: "OWNER", email: "OWNER@x.pt", phone: null }, isPrimary: true, assignedAt: expect.any(Date) },
+      { user: { id: "SECOND", name: "SECOND", email: "SECOND@x.pt", phone: null }, isPrimary: false, assignedAt: expect.any(Date) },
+    ]);
+    await expect(business.getById("CAT", former)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("lets the primary tutor and staff edit, and refuses a secondary tutor (403) after locking the animal", async () => {
+    await expect(business.update("CAT", { name: "Nina" } as any, primary)).resolves.toMatchObject({ name: "Nina" });
+    await expect(business.update("CAT", { name: "Nina" } as any, receptionist)).resolves.toMatchObject({ name: "Nina" });
+    manager.save.mockClear();
+    await expect(business.update("CAT", { name: "Nina" } as any, secondary)).rejects.toMatchObject({ status: 403 });
+    await expect(business.update("CAT", { name: "Nina" } as any, former)).rejects.toMatchObject({ status: 403 });
+    expect(manager.save).not.toHaveBeenCalled();
+    expect(manager.findOne.mock.calls[0]).toEqual([AnimalEntity, { where: { id: "CAT" }, lock: { mode: "pessimistic_write" } }]);
+    expect(access.canManageAnimal).toHaveBeenLastCalledWith(former, "CAT", manager);
+  });
+
+  it("accepts the current ownerId as a no-op and refuses a different ownerId from anyone but an administrator (403)", async () => {
+    await expect(business.update("CAT", { ownerId: "owner", name: "Nina" } as any, primary)).resolves.toMatchObject({ name: "Nina" });
+    for (const who of [primary, receptionist]) {
+      await expect(business.update("CAT", { ownerId: "SECOND" } as any, who)).rejects.toMatchObject({ status: 403 });
+    }
+    expect(owners.transferLocked).not.toHaveBeenCalled();
+  });
+
+  it("turns an administrator's ownerId into a primary-tutor transfer in the same transaction (history kept, no overwrite)", async () => {
+    const saved: any = await business.update("CAT", { ownerId: "SECOND" } as any, admin);
+    expect(owners.transferLocked).toHaveBeenCalledWith(manager, "CAT", { newPrimaryUserId: "SECOND" }, admin);
+    expect(manager.findOne.mock.invocationCallOrder[0]).toBeLessThan(owners.transferLocked.mock.invocationCallOrder[0]);
+    expect(manager.save).toHaveBeenCalledWith(expect.objectContaining({ owner: { id: "SECOND", name: "New" } }));
+    expect(saved.owner).toMatchObject({ id: "SECOND" });
+  });
+});
+
+describe("Animal soft delete with open activity (B1)", () => {
+  let manager: any, open: any[], visits: any[], business: AnimalBusinessService, params: any;
+
+  beforeEach(() => {
+    open = [];
+    visits = [];
+    params = {};
+    manager = {
+      findOne: jest.fn(async () => ({ id: "CAT" })),
+      find: jest.fn(async () => visits),
+      softDelete: jest.fn(),
+      createQueryBuilder: jest.fn(() => {
+        const qb: any = {};
+        qb.select = qb.orderBy = qb.addOrderBy = () => qb;
+        qb.where = qb.andWhere = (_sql: string, values?: object) => (Object.assign(params, values), qb);
+        qb.getMany = async () => open;
+        return qb;
+      }),
+    };
+    const dataSource = { transaction: jest.fn(async (work: (m: unknown) => unknown) => work(manager)) };
+    business = new AnimalBusinessService({} as any, {} as any, {} as any, {} as any, new PersistenceService(), {} as any, {} as any, dataSource as any, {} as any, {} as any, {} as any);
+  });
+
+  it("refuses (409) with the ids of open reservations and IN_PROGRESS visits, locking the animal first", async () => {
+    open = [{ id: "R-1", status: ReservationStatus.PENDING, startAt: new Date() }, { id: "R-2", status: ReservationStatus.CONFIRMED, startAt: new Date() }];
+    visits = [{ id: "V-1" }];
+    const error = await business.delete("CAT").catch(e => e);
+    expect(error).toBeInstanceOf(ConflictException);
+    // Counts only in the readable message; no id lists or count fields in the error.
+    expect(error.getResponse()).toMatchObject({ code: "ANIMAL_HAS_OPEN_ACTIVITY", message: "The animal has 2 open reservations and 1 clinical visit in progress; cancel or finish them first" });
+    expect(error.getResponse()).not.toHaveProperty("reservationIds");
+    expect(error.getResponse()).not.toHaveProperty("clinicalVisitIds");
+    expect(manager.findOne).toHaveBeenCalledWith(AnimalEntity, { where: { id: "CAT" }, lock: { mode: "pessimistic_write" } });
+    expect(manager.find).toHaveBeenCalledWith(ClinicalVisitEntity, expect.objectContaining({ where: { animalId: "CAT", status: ClinicalVisitStatus.IN_PROGRESS } }));
+    expect(params).toMatchObject({ value: "CAT", openStatuses: [ReservationStatus.PENDING, ReservationStatus.CONFIRMED] });
+    expect(manager.softDelete).not.toHaveBeenCalled();
+    open = [];
+    // Zero counts are left out of the message.
+    await expect(business.delete("CAT")).rejects.toMatchObject({ response: { message: "The animal has 1 clinical visit in progress; cancel or finish them first" } });
+    open = [{ id: "R-1", status: ReservationStatus.PENDING, startAt: new Date() }];
+    visits = [];
+    await expect(business.delete("CAT")).rejects.toMatchObject({ response: { message: "The animal has 1 open reservation; cancel or finish them first" } });
+  });
+
+  it("soft-deletes when nothing is open, and returns 404 for a missing or already deleted animal", async () => {
+    await expect(business.delete("CAT")).resolves.toBeNull();
+    expect(manager.softDelete).toHaveBeenCalledWith(AnimalEntity, { id: "CAT" });
+    manager.findOne.mockResolvedValue(null);
+    await expect(business.delete("CAT")).rejects.toMatchObject({ status: 404 });
   });
 });

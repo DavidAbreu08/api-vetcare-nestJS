@@ -1,4 +1,6 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
+import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { catalogAttributes } from "../core/catalog";
@@ -25,23 +27,23 @@ export class RolesBusinessService {
   }
 
   async getById(id: string) {
-    if (typeof id !== "string" || !id.trim()) throw new BadRequestException(RoleMessage.Invalid);
+    if (typeof id !== "string" || !id.trim()) throw applicationError(ErrorMetadata.INVALID_VALUE, RoleMessage.Invalid);
     const row = await this.persistence.execute(() => this.repository.findOneBy({ id }));
-    if (!row) throw new NotFoundException(RoleMessage.NotFound);
+    if (!row) throw applicationError(ErrorMetadata.NOT_FOUND, RoleMessage.NotFound);
     return row;
   }
 
   create(dto: CreateRoleDto) {
-    const attributes = catalogAttributes(dto, () => new BadRequestException(RoleMessage.Invalid));
+    const attributes = catalogAttributes(dto, () => applicationError(ErrorMetadata.INVALID_VALUE, RoleMessage.Invalid));
     return this.persistence.execute(() => this.repository.save(this.repository.create({ ...attributes, isActive: dto.isActive ?? true })));
   }
 
   async update(id: string, dto: UpdateRoleDto) {
     const row = await this.getById(id);
-    const attributes = catalogAttributes(dto, () => new BadRequestException(RoleMessage.Invalid));
-    if (attributes.code !== undefined && attributes.code !== row.code) throw new ConflictException(RoleMessage.ImmutableCode);
+    const attributes = catalogAttributes(dto, () => applicationError(ErrorMetadata.INVALID_VALUE, RoleMessage.Invalid));
+    if (attributes.code !== undefined && attributes.code !== row.code) throw applicationError(ErrorMetadata.CONFLICT, RoleMessage.ImmutableCode);
     if (attributes.isActive === false && row.isActive && await this.settings.isReferencedRole(row.id)) {
-      throw new ConflictException(RoleMessage.SystemRole);
+      throw applicationError(ErrorMetadata.CONFLICT, RoleMessage.SystemRole);
     }
     Object.assign(row, attributes);
     return this.persistence.execute(() => this.repository.save(row));
@@ -49,8 +51,8 @@ export class RolesBusinessService {
 
   async delete(id: string) {
     const row = await this.getById(id);
-    if (await this.settings.isReferencedRole(row.id)) throw new ConflictException(RoleMessage.SystemRole);
-    if (await this.persistence.execute(() => this.userRoles.count({ where: { roleId: row.id } }))) throw new ConflictException(RoleMessage.InUse);
+    if (await this.settings.isReferencedRole(row.id)) throw applicationError(ErrorMetadata.CONFLICT, RoleMessage.SystemRole);
+    if (await this.persistence.execute(() => this.userRoles.count({ where: { roleId: row.id } }))) throw applicationError(ErrorMetadata.IN_USE, RoleMessage.InUse);
     // The FK still arbitrates concurrent assignments (translated to 409).
     await this.persistence.execute(() => this.repository.remove(row));
   }

@@ -14,8 +14,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
+  /** iat is forwarded so tokens issued before the last password change are rejected. */
   async validate(payload: any) {
-    const userID = payload.sub;
-    return this.authService.validateJwtUser(userID);
+    return this.authService.validateJwtUser(payload.sub, payload.iat);
   }
 }

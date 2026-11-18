@@ -17,6 +17,11 @@ import { SystemSettingEntity } from "../system-settings/entities/system-setting.
 import { RoleEntity } from "../roles/entities/role.entity";
 import { UserRoleEntity } from "../roles/entities/user-role.entity";
 import { EmployeeEntity } from "../employees/entities/employee.entity";
+import { ClinicalVisitEntity } from "../clinical-visits/entities/clinical-visit.entity";
+import { ClinicalVisitService } from "../clinical-visits/clinical-visit.service";
+import { ReservationEntity } from "../reservation/entities/reservation.entity";
+import { ReservationHistoryEntity } from "../reservation-history/entities/reservation-history.entity";
+import { AnimalOwnerEntity } from "../animal-owners/entities/animal-owner.entity";
 
 @Global()
 @Module({ providers: [{ provide: DataSource, useValue: {} }], exports: [DataSource] })
@@ -24,11 +29,12 @@ class FakeDataSourceModule {}
 
 it("resolves the integrated animal/catalog/measurement dependency graph without a database", async () => {
   const builder = Test.createTestingModule({ imports: [FakeDataSourceModule, PersistenceModule, SystemSettingsModule, AnimalModule] });
-  for (const entity of [AnimalEntity, UsersEntity, SpeciesEntity, BreedEntity, AnimalMeasurementEntity, MeasurementTypeEntity, SystemSettingEntity, RoleEntity, UserRoleEntity, EmployeeEntity]) {
+  for (const entity of [AnimalEntity, UsersEntity, SpeciesEntity, BreedEntity, AnimalMeasurementEntity, MeasurementTypeEntity, SystemSettingEntity, RoleEntity, UserRoleEntity, EmployeeEntity, ClinicalVisitEntity, ReservationEntity, ReservationHistoryEntity, AnimalOwnerEntity]) {
     builder.overrideProvider(getRepositoryToken(entity)).useValue({});
   }
   const module = await builder.compile();
   expect(module.get(AnimalService)).toBeInstanceOf(AnimalService);
   expect(module.get(MeasurementService)).toBeInstanceOf(MeasurementService);
+  expect(module.get(ClinicalVisitService)).toBeInstanceOf(ClinicalVisitService);
   await module.close();
 });

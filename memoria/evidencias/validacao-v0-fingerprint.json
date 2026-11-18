@@ -1,0 +1,90 @@
+{
+  "migrations": {
+    "n": 14,
+    "ck": 888334898
+  },
+  "vc_animal_measurements": {
+    "n": 0,
+    "ck": null
+  },
+  "vc_animal_owners": {
+    "n": 0,
+    "ck": null
+  },
+  "vc_animals": {
+    "n": 0,
+    "ck": null
+  },
+  "vc_blocked_times": {
+    "n": 0,
+    "ck": null
+  },
+  "vc_breeds": {
+    "n": 0,
+    "ck": null
+  },
+  "vc_clinical_visits": {
+    "n": 0,
+    "ck": null
+  },
+  "vc_employee_job_titles": {
+    "n": 0,
+    "ck": null
+  },
+  "vc_employee_schedules": {
+    "n": 0,
+    "ck": null
+  },
+  "vc_employee_services": {
+    "n": 0,
+    "ck": null
+  },
+  "vc_employees": {
+    "n": 1,
+    "ck": 465507422
+  },
+  "vc_job_titles": {
+    "n": 6,
+    "ck": -27453186
+  },
+  "vc_measurement_types": {
+    "n": 5,
+    "ck": 335025053
+  },
+  "vc_reservation_history": {
+    "n": 0,
+    "ck": null
+  },
+  "vc_reservations": {
+    "n": 0,
+    "ck": null
+  },
+  "vc_reset_tokens": {
+    "n": 0,
+    "ck": null
+  },
+  "vc_roles": {
+    "n": 3,
+    "ck": -1564563524
+  },
+  "vc_services": {
+    "n": 0,
+    "ck": null
+  },
+  "vc_species": {
+    "n": 0,
+    "ck": null
+  },
+  "vc_system_settings": {
+    "n": 6,
+    "ck": 851336803
+  },
+  "vc_user_roles": {
+    "n": 2,
+    "ck": 768
+  },
+  "vc_users": {
+    "n": 1,
+    "ck": -261672752
+  }
+}

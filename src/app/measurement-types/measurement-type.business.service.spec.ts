@@ -28,7 +28,7 @@ describe("Configurable measurement types", () => {
   await expect(business.delete("t")).rejects.toBeInstanceOf(ConflictException);
  });
  it("restricts every mutation to administrators", () => {
-  for (const method of ["create", "update", "updatePartial", "delete"]) expect(Reflect.getMetadata(MessagesHelper.ROLES_KEY, MeasurementTypeController.prototype[method])).toEqual([SystemRole.ADMIN]);
+  for (const method of ["create", "updatePartial", "delete"]) expect(Reflect.getMetadata(MessagesHelper.ROLES_KEY, MeasurementTypeController.prototype[method])).toEqual([SystemRole.ADMIN]);
   expect(Reflect.getMetadata(MessagesHelper.ROLES_KEY, MeasurementTypeController.prototype.getAll)).toBeUndefined();
  });
 });

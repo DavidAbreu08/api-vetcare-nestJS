@@ -17,22 +17,22 @@ export class UpdateUserDto extends DescriptiveMetadataDto {
 
   @IsOptional()
   @AccountField.nif()
-  @ApiPropertyOptional({ nullable: true, example: "123456789" })
+  @ApiPropertyOptional({ type: String, nullable: true, example: "123456789" })
   nif?: string | null;
 
   @IsOptional()
   @AccountField.phone()
-  @ApiPropertyOptional({ nullable: true })
+  @ApiPropertyOptional({ type: String, nullable: true })
   phone?: string | null;
 
   @IsOptional()
   @AccountField.birthDate()
-  @ApiPropertyOptional({ nullable: true, example: "1990-05-20" })
+  @ApiPropertyOptional({ type: String, nullable: true, example: "1990-05-20" })
   birthDate?: string | null;
 
   @IsOptional()
   @AccountField.profilePictureUrl()
-  @ApiPropertyOptional({ nullable: true, maxLength: 500 })
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 500 })
   profilePictureUrl?: string | null;
 
   @IsOptional()

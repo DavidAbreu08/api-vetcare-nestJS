@@ -1,4 +1,6 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
+import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, EntityManager, In, IsNull, MoreThan, Repository } from "typeorm";
 import { Actor, sameId } from "../core/authorization";
@@ -7,8 +9,11 @@ import { SystemRole } from "../core/enums/system-role.enum";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { EmailService } from "src/email/email.service";
 import { JobTitleEntity } from "../job-titles/entities/job-title.entity";
-import { dateKey } from "../reservation/reservation-policy";
-import { clinicToday, isEmploymentActive } from "./employee-status";
+import { ClinicalVisitEntity } from "../clinical-visits/entities/clinical-visit.entity";
+import { findOpenReservations, openReservationsConflict } from "../reservation/open-reservations";
+import { ReservationEntity } from "../reservation/entities/reservation.entity";
+import { clinicParts, dateKey } from "../reservation/reservation-policy";
+import { clinicToday, isBookableEmployee, isEmploymentActive } from "./employee-status";
 import { UserRoleEntity } from "../roles/entities/user-role.entity";
 import { SystemSettingsService } from "../system-settings/system-settings.service";
 import { UsersEntity } from "../users/entities/users.entity";
@@ -17,7 +22,17 @@ import { CreateEmployeeDto, EmployeeFieldsDto, ListEmployeesQueryDto, UpdateEmpl
 import { serializeEmployee } from "./employee.serializer";
 import { EmployeeJobTitleEntity } from "./entities/employee-job-title.entity";
 import { EmployeeEntity } from "./entities/employee.entity";
-import { EmployeeMessage } from "./employees.messages";
+import { EmployeeConflictMessages, EmployeeMessage } from "./employees.messages";
+import { ClinicServiceEntity } from "../clinic-services/entities/clinic-service.entity";
+import { EmployeeServiceEntity } from "../clinic-services/entities/employee-service.entity";
+import { serializeClinicService } from "../clinic-services/clinic-service.projection";
+import { ClinicServiceConflictMessages, ClinicServiceMessage } from "../clinic-services/clinic-services.messages";
+import { ReplaceEmployeeServicesDto } from "../clinic-services/dto/clinic-service.dto";
+import { EmployeeScheduleEntity } from "../employee-schedules/entities/employee-schedule.entity";
+import { findSchedulesValidOn, workingInstants } from "../employee-schedules/employee-schedule-policy";
+import { BlockedTimeEntity } from "../blocked-times/entities/bloked-times.entity";
+import { overlappingBlocks } from "../blocked-times/blocked-time.queries";
+import { clinicDayWindow, subtractIntervals } from "../availability/availability-policy";
 
 const RELATIONS = { user: true, jobTitleLinks: { jobTitle: true } } as const;
 
@@ -41,7 +56,7 @@ export class EmployeesBusinessService {
 
   private async load(id: string) {
     const employee = await this.persistence.execute(() => this.employees.findOne({ where: { id }, relations: RELATIONS }));
-    if (!employee) throw new NotFoundException(EmployeeMessage.NotFound);
+    if (!employee) throw applicationError(ErrorMetadata.NOT_FOUND, EmployeeMessage.NotFound);
     return employee;
   }
 
@@ -59,22 +74,22 @@ export class EmployeesBusinessService {
 
   async getById(id: string, actor: Actor) {
     const employee = await this.load(id);
-    if (!actor.isAdmin && !sameId(employee.userId, actor.id)) throw new ForbiddenException(EmployeeMessage.Forbidden);
+    if (!actor.isAdmin && !sameId(employee.userId, actor.id)) throw applicationError(ErrorMetadata.FORBIDDEN, EmployeeMessage.Forbidden);
     return serializeEmployee(employee);
   }
 
   async getMine(actor: Actor) {
     const employee = await this.persistence.execute(() => this.employees.findOne({ where: { userId: actor.id }, relations: RELATIONS }));
-    if (!employee) throw new NotFoundException(EmployeeMessage.NotFound);
+    if (!employee) throw applicationError(ErrorMetadata.NOT_FOUND, EmployeeMessage.NotFound);
     return serializeEmployee(employee);
   }
 
   private assertDates(hireDate: string | null | undefined, terminationDate: string | null | undefined) {
-    if (hireDate && terminationDate && terminationDate < hireDate) throw new BadRequestException(EmployeeMessage.InvalidDates);
+    if (hireDate && terminationDate && terminationDate < hireDate) throw applicationError(ErrorMetadata.INVALID_VALUE, EmployeeMessage.InvalidDates);
   }
 
   private fields(dto: EmployeeFieldsDto): Partial<EmployeeEntity> {
-    if (dto.isAvailableForBookings === null || (dto.jobTitleIds as unknown) === null) throw new BadRequestException(EmployeeMessage.NullField);
+    if (dto.isAvailableForBookings === null || (dto.jobTitleIds as unknown) === null) throw applicationError(ErrorMetadata.INVALID_VALUE, EmployeeMessage.NullField);
     const result: Partial<EmployeeEntity> = {};
     for (const key of ["employeeNumber", "licenseNumber", "hireDate", "terminationDate", "description", "notes"] as const) {
       if (dto[key] !== undefined) result[key] = dto[key] ?? null;
@@ -89,18 +104,42 @@ export class EmployeesBusinessService {
     const current = new Set((await manager.find(EmployeeJobTitleEntity, { where: { employeeId } })).map(row => normalizeId(row.jobTitleId)));
     const titles = ids.length ? await manager.find(JobTitleEntity, { where: { id: In(ids) } }) : [];
     if (titles.length !== ids.length || titles.some(title => !title.isActive && !current.has(normalizeId(title.id)))) {
-      throw new BadRequestException(EmployeeMessage.InvalidJobTitles);
+      throw applicationError(ErrorMetadata.INVALID_VALUE, EmployeeMessage.InvalidJobTitles);
     }
     await manager.delete(EmployeeJobTitleEntity, { employeeId });
     if (ids.length) await manager.insert(EmployeeJobTitleEntity, ids.map(jobTitleId => ({ employeeId, jobTitleId })));
   }
 
-  /** EMPLOYEE accompanies the active profile; assigned in the caller's transaction and audited with the actor. */
+  /**
+   * EMPLOYEE accompanies the active profile; assigned in the caller's transaction and audited with the actor.
+   * A role is never granted to an inactive account (409): reactivate the account first.
+   */
   private async ensureEmployeeRole(manager: EntityManager, userId: string, assignedBy: string) {
     const roleId = await this.settings.resolveRoleId(SystemRole.EMPLOYEE);
     if (!(await manager.count(UserRoleEntity, { where: { userId, roleId } }))) {
+      const account = await manager.findOne(UsersEntity, { where: { id: userId } });
+      if (!account?.isActive) throw applicationError(ErrorMetadata.CONFLICT, EmployeeMessage.InactiveAccount);
       await manager.insert(UserRoleEntity, { userId, roleId, assignedBy });
     }
+  }
+
+  /**
+   * Rejects (409, count in the message only) a profile change that makes the employee unable to attend PENDING or
+   * CONFIRMED reservations assigned to them and not yet finished: termination on or before their clinic date or
+   * isAvailableForBookings=false. Nothing is cancelled automatically. Only reservations attendable before the
+   * change count, so editing an already unavailable profile is not blocked by them. Called with the profile row
+   * locked (UPDLOCK): every flow that assigns or confirms a reservation locks the same row (lock order
+   * reservation -> employee profile), so no reservation can be assigned or confirmed between this read and commit.
+   */
+  private async assertNoStrandedReservations(manager: EntityManager, before: EmployeeEntity, after: EmployeeEntity) {
+    const user = await manager.findOne(UsersEntity, { where: { id: before.userId } });
+    if (!user) return;
+    const open = await findOpenReservations(manager, { employeeId: before.id });
+    const stranded = open.filter(reservation => {
+      const date = clinicParts(reservation.startAt).date;
+      return this.isBookable({ ...before, user }, date) && !this.isBookable({ ...after, user }, date);
+    });
+    if (stranded.length) throw openReservationsConflict("EMPLOYEE_HAS_OPEN_RESERVATIONS", EmployeeConflictMessages.openReservations, stranded);
   }
 
   /** A terminated profile loses EMPLOYEE in the caller's transaction; returns whether a row was removed. */
@@ -114,7 +153,7 @@ export class EmployeesBusinessService {
   /** A terminated employee (termination today or earlier) is never available for new bookings. */
   private applyAvailabilityRule(employee: Partial<EmployeeEntity>, requestedAvailability: boolean | undefined) {
     if (isEmploymentActive(employee.terminationDate)) return;
-    if (requestedAvailability === true) throw new BadRequestException(EmployeeMessage.TerminatedUnavailable);
+    if (requestedAvailability === true) throw applicationError(ErrorMetadata.INVALID_VALUE, EmployeeMessage.TerminatedUnavailable);
     employee.isAvailableForBookings = false;
   }
 
@@ -124,7 +163,7 @@ export class EmployeesBusinessService {
    * (a new account is then created without roles).
    */
   async create(dto: CreateEmployeeDto, actor: Actor) {
-    if (!!dto.userId === !!dto.user) throw new BadRequestException(EmployeeMessage.UserSource);
+    if (!!dto.userId === !!dto.user) throw applicationError(ErrorMetadata.INVALID_VALUE, EmployeeMessage.UserSource);
     const attributes = this.fields(dto);
     this.assertDates(attributes.hireDate, attributes.terminationDate);
     this.applyAvailabilityRule(attributes, dto.isAvailableForBookings);
@@ -135,9 +174,10 @@ export class EmployeesBusinessService {
       if (dto.user) {
         ({ user, resetToken } = await this.users.createAccount(manager, dto.user, active ? [SystemRole.EMPLOYEE] : [], actor.id));
       } else {
-        user = await manager.findOne(UsersEntity, { where: { id: dto.userId } });
-        if (!user) throw new BadRequestException(EmployeeMessage.InvalidUser);
-        if (await manager.count(EmployeeEntity, { where: { userId: user.id } })) throw new ConflictException(EmployeeMessage.AlreadyEmployee);
+        user = await manager.findOne(UsersEntity, { where: { id: dto.userId }, lock: { mode: "pessimistic_write" } });
+        if (!user) throw applicationError(ErrorMetadata.INVALID_VALUE, EmployeeMessage.InvalidUser);
+        if (!user.isActive) throw applicationError(ErrorMetadata.CONFLICT, EmployeeMessage.InactiveAccount);
+        if (await manager.count(EmployeeEntity, { where: { userId: user.id } })) throw applicationError(ErrorMetadata.ALREADY_EXISTS, EmployeeMessage.AlreadyEmployee);
         if (active) await this.ensureEmployeeRole(manager, user.id, actor.id);
       }
       const employee = await manager.save(manager.create(EmployeeEntity, { ...attributes, userId: user.id }));
@@ -151,16 +191,19 @@ export class EmployeesBusinessService {
   /**
    * EMPLOYEE follows the profile in the same transaction: an active profile (termination absent or in the
    * future) gets it (again) and a terminated one loses it. The profile row is locked (UPDLOCK) so this
-   * serializes with PUT /api/users/:id/roles without relying on blocking reads.
+   * serializes with PUT /api/vetcare/users/:id/roles and with reservation assignment/confirmation without relying on
+   * blocking reads. Termination or unavailability with open reservations assigned returns 409 (their ids).
    */
   async update(id: string, dto: UpdateEmployeeDto, actor: Actor) {
     const attributes = this.fields(dto);
     const revokedFrom = await this.transaction(async manager => {
       const employee = await manager.findOne(EmployeeEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
-      if (!employee) throw new NotFoundException(EmployeeMessage.NotFound);
+      if (!employee) throw applicationError(ErrorMetadata.NOT_FOUND, EmployeeMessage.NotFound);
+      const before = { ...employee };
       Object.assign(employee, attributes);
       this.assertDates(employee.hireDate, employee.terminationDate);
       this.applyAvailabilityRule(employee, dto.isAvailableForBookings);
+      await this.assertNoStrandedReservations(manager, before, employee);
       await manager.save(employee);
       let revoked = false;
       if (isEmploymentActive(employee.terminationDate)) await this.ensureEmployeeRole(manager, employee.userId, actor.id);
@@ -175,37 +218,120 @@ export class EmployeesBusinessService {
     return serializeEmployee(await this.load(id));
   }
 
-  /** Removes the profile, its job titles and the EMPLOYEE role together; the account and reservation history remain. */
+  /**
+   * Removes the profile, its job titles, service qualifications, weekly schedule, individual blocked times and the
+   * EMPLOYEE role together; the account remains. A profile referenced
+   * by any reservation or clinical visit (any state) is never deleted (409, counts in the message only): terminate it instead.
+   * The row is locked (UPDLOCK) first, so no assignment or visit (which lock or read it) appears meanwhile; the
+   * foreign keys remain the final arbiter.
+   */
   async delete(id: string) {
     await this.transaction(async manager => {
-      const employee = await manager.findOne(EmployeeEntity, { where: { id } });
-      if (!employee) throw new NotFoundException(EmployeeMessage.NotFound);
+      const employee = await manager.findOne(EmployeeEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
+      if (!employee) throw applicationError(ErrorMetadata.NOT_FOUND, EmployeeMessage.NotFound);
+      const reservationCount = await manager.count(ReservationEntity, { where: { employeeId: employee.id } });
+      const clinicalVisitCount = await manager.count(ClinicalVisitEntity, { where: { employeeId: employee.id } });
+      if (reservationCount || clinicalVisitCount) {
+        throw applicationError(ErrorMetadata.IN_USE, EmployeeConflictMessages.hasHistory(reservationCount, clinicalVisitCount), undefined, { code: "EMPLOYEE_HAS_HISTORY" });
+      }
       const employeeRoleId = await this.settings.resolveRoleId(SystemRole.EMPLOYEE);
       await manager.delete(EmployeeJobTitleEntity, { employeeId: employee.id });
+      await manager.delete(EmployeeServiceEntity, { employeeId: employee.id });
+      await manager.delete(EmployeeScheduleEntity, { employeeId: employee.id });
+      await manager.delete(BlockedTimeEntity, { employeeId: employee.id });
       await manager.delete(EmployeeEntity, { id: employee.id });
       await manager.delete(UserRoleEntity, { userId: employee.userId, roleId: employeeRoleId });
     });
   }
 
+  // ---------------------------------------------------------------- service qualifications
+
+  /** Services the employee is qualified for (inactive services included: qualifications are kept), by name. */
+  async getServices(id: string, actor: Actor) {
+    const employee = await this.persistence.execute(() => this.employees.findOne({ where: { id } }));
+    if (!employee) throw applicationError(ErrorMetadata.NOT_FOUND, EmployeeMessage.NotFound);
+    if (!actor.isAdmin && !sameId(employee.userId, actor.id)) throw applicationError(ErrorMetadata.FORBIDDEN, EmployeeMessage.Forbidden);
+    return this.persistence.execute(() => this.listServices(this.employees.manager, employee.id));
+  }
+
+  private async listServices(manager: EntityManager, employeeId: string) {
+    const rows = await manager.find(EmployeeServiceEntity, { where: { employeeId }, relations: { service: true } });
+    return rows.filter(row => row.service).map(row => serializeClinicService(row.service))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  }
+
+  private async currentServiceIds(manager: EntityManager, employeeId: string): Promise<Set<string>> {
+    return new Set((await manager.find(EmployeeServiceEntity, { where: { employeeId } })).map(row => normalizeId(row.serviceId)));
+  }
+
+  /**
+   * Replaces the employee's qualifications in one transaction. Lock order (same as reservation creation, which locks
+   * the service and then the profile): services to add (shared, HOLDLOCK, by id) -> employee profile (UPDLOCK) ->
+   * writes. The services to add are derived from an unlocked read of the current qualifications, read with a shared lock
+   * (a concurrent PATCH/DELETE /services/:id, which takes UPDLOCK on the service, either commits first and is seen here
+   * or waits) and validated: every id must exist (404 SERVICE_NOT_FOUND) and a new qualification requires an active
+   * service (409 SERVICE_INACTIVE; inactive services already held may be kept). The profile lock is the row every
+   * reservation flow locks before checking a qualification; the diff is recomputed under it, and if another transaction
+   * changed the qualifications meanwhile so that a service not locked above must now be added, 409
+   * QUALIFICATIONS_CHANGED (reload and retry). Removing a qualification while the employee is assigned to open
+   * reservations (PENDING/CONFIRMED, not finished) of that service is refused (409 IN_USE, count in the message): cancel
+   * or reassign them first. Kept rows are not rewritten (their created_at is preserved).
+   */
+  async replaceServices(id: string, dto: ReplaceEmployeeServicesDto) {
+    const ids = [...new Set((dto.serviceIds ?? []).map(normalizeId))];
+    return this.transaction(async manager => {
+      const profile = await manager.findOne(EmployeeEntity, { where: { id } });
+      if (!profile) throw applicationError(ErrorMetadata.NOT_FOUND, EmployeeMessage.NotFound);
+      const snapshot = await this.currentServiceIds(manager, profile.id);
+      const toAdd = ids.filter(serviceId => !snapshot.has(serviceId));
+      const kept = ids.filter(serviceId => snapshot.has(serviceId));
+      const locked = toAdd.length
+        ? await manager.find(ClinicServiceEntity, { where: { id: In(toAdd) }, order: { id: "ASC" }, lock: { mode: "pessimistic_read" } })
+        : [];
+      const keptRows = kept.length ? await manager.find(ClinicServiceEntity, { where: { id: In(kept) } }) : [];
+      if (locked.length + keptRows.length !== ids.length) {
+        throw applicationError(ErrorMetadata.NOT_FOUND, ClinicServiceMessage.NotFound, undefined, { code: "SERVICE_NOT_FOUND" });
+      }
+      if (locked.some(service => !service.isActive)) {
+        throw applicationError(ErrorMetadata.CONFLICT, ClinicServiceMessage.InactiveAssignment, undefined, { code: "SERVICE_INACTIVE" });
+      }
+      const employee = await manager.findOne(EmployeeEntity, { where: { id: profile.id }, lock: { mode: "pessimistic_write" } });
+      if (!employee) throw applicationError(ErrorMetadata.NOT_FOUND, EmployeeMessage.NotFound);
+      const current = await this.currentServiceIds(manager, employee.id);
+      const lockedIds = new Set(locked.map(service => normalizeId(service.id)));
+      const added = ids.filter(serviceId => !current.has(serviceId));
+      if (added.some(serviceId => !lockedIds.has(serviceId))) {
+        throw applicationError(ErrorMetadata.CONFLICT, ClinicServiceMessage.QualificationsChanged, undefined, { code: "QUALIFICATIONS_CHANGED" });
+      }
+      const wanted = new Set(ids);
+      const removed = [...current].filter(serviceId => !wanted.has(serviceId));
+      if (removed.length) {
+        const open = (await findOpenReservations(manager, { employeeId: employee.id }))
+          .filter(reservation => !!reservation.serviceId && removed.includes(normalizeId(reservation.serviceId)));
+        if (open.length) throw openReservationsConflict("QUALIFICATION_HAS_OPEN_RESERVATIONS", ClinicServiceConflictMessages.qualificationInUse, open);
+        await manager.delete(EmployeeServiceEntity, { employeeId: employee.id, serviceId: In(removed) });
+      }
+      if (added.length) await manager.insert(EmployeeServiceEntity, added.map(serviceId => ({ employeeId: employee.id, serviceId })));
+      return this.listServices(manager, employee.id);
+    });
+  }
+
   /** Bookable on a date: available profile, active account, not terminated on or before today/the date. */
   isBookable(employee: EmployeeEntity | null | undefined, date?: string): employee is EmployeeEntity & { user: UsersEntity } {
-    if (!employee?.user || !employee.isAvailableForBookings || !employee.user.isActive) return false;
-    return isEmploymentActive(employee.terminationDate) && (!date || !employee.terminationDate || employee.terminationDate > date);
+    return isBookableEmployee(employee, date);
   }
 
-  /** User assigned to reservations, regardless of roles; null when not bookable. */
-  async findBookableUser(userId: string, date?: Date | string): Promise<UsersEntity | null> {
-    const employee = await this.persistence.execute(() => this.employees.findOne({ where: { userId }, relations: { user: true } }));
-    return this.isBookable(employee, date === undefined ? undefined : dateKey(date)) ? employee.user : null;
-  }
-
-  async hasProfile(userId: string): Promise<boolean> {
-    return (await this.persistence.execute(() => this.employees.count({ where: { userId } }))) > 0;
-  }
-
-  /** Bookable employees for a clinic date. TODO: also consider existing reservations or shifts. */
+  /**
+   * Employees who can be booked on a clinic date: bookable profile (available, active account, not terminated by then)
+   * that works that day (a period of their schedule valid on the date, or the clinic hours when they have no schedule
+   * valid on it, always inside CLINIC_POLICY; nobody on clinic closed days) and is not blocked for the whole of it (clinic
+   * closures and their own blocks). Reservations are not considered: GET /availability lists free slots per service.
+   * Plain reads, indicative only.
+   */
   async getAvailableByDate(date: string) {
     const key = dateKey(date);
+    const window = clinicDayWindow(key);
+    if (!window) return [];
     const rows = await this.persistence.execute(() => this.employees.createQueryBuilder("employee")
       .innerJoinAndSelect("employee.user", "user")
       .leftJoinAndSelect("employee.jobTitleLinks", "link")
@@ -215,6 +341,19 @@ export class EmployeesBusinessService {
       .andWhere("(employee.terminationDate IS NULL OR employee.terminationDate > :date)", { date: key })
       .orderBy("user.name", "ASC")
       .getMany());
-    return rows.filter(row => this.isBookable(row, key)).map(serializeEmployee);
+    const bookable = rows.filter(row => this.isBookable(row, key));
+    if (!bookable.length) return [];
+    const ids = bookable.map(row => row.id);
+    const manager = this.employees.manager;
+    const [schedules, blocks] = await this.persistence.execute(async () => [
+      await findSchedulesValidOn(manager, ids, key),
+      await overlappingBlocks(manager, window.start, window.end, ids).getMany(),
+    ] as const);
+    return bookable.filter(employee => {
+      const own = (employeeId: string | null) => !!employeeId && sameId(employeeId, employee.id);
+      const periods = workingInstants(schedules.filter(row => own(row.employeeId)), key);
+      const busy = blocks.filter(block => !block.employeeId || own(block.employeeId)).map(block => ({ start: block.startAt, end: block.endAt }));
+      return subtractIntervals(periods, busy).length > 0;
+    }).map(serializeEmployee);
   }
 }

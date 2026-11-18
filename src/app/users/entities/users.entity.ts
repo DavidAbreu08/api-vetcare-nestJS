@@ -14,6 +14,7 @@ import { ResetTokenEntity } from "../../../auth/entities/reset-token.entity";
 import { AnimalEntity } from "src/app/animal/entities/animal.entity";
 import { UserRoleEntity } from "src/app/roles/entities/user-role.entity";
 import { EmployeeEntity } from "src/app/employees/entities/employee.entity";
+import { utcDateTimeTransformer } from "src/app/core/persistence/utc-datetime";
 
 /** Account data only; authorization lives in vc_user_roles and employment in vc_employees. */
 @Entity({ name: "vc_users" })
@@ -48,6 +49,14 @@ export class UsersEntity {
 
   @Column({ name: "profile_picture_url", type: "nvarchar", length: 500, nullable: true })
   profilePictureUrl: string | null;
+
+  /**
+   * UTC instant of the last password reset or change; JWTs issued in an earlier second are rejected.
+   * Null for accounts whose password never changed after this column was introduced.
+   */
+  @Exclude()
+  @Column({ name: "password_changed_at", type: "datetime2", nullable: true, transformer: utcDateTimeTransformer })
+  passwordChangedAt: Date | null;
 
   @Column({ name: "is_active", type: "bit", default: true })
   isActive: boolean;

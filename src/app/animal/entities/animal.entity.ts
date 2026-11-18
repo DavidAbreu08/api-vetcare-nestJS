@@ -1,4 +1,4 @@
-import { Column, CreateDateColumn, DeleteDateColumn, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
+import { Column, CreateDateColumn, DeleteDateColumn, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
 import { UsersEntity } from "../../users/entities/users.entity";
 import { SpeciesEntity } from "../../species/entities/species.entity";
 import { BreedEntity } from "../../breeds/entities/breed.entity";
@@ -7,8 +7,14 @@ import { BreedEntity } from "../../breeds/entities/breed.entity";
  * Animal record with structured taxonomy; measurements are stored separately.
  * TypeScript/HTTP attributes remain camelCase; physical columns use snake_case.
  * Soft deletion preserves reservation history. Legacy owner references may be null.
+ * owner (owner_id) is a synchronized copy of the active primary tutor in vc_animal_owners, written in the same
+ * transaction as every tutorship change; access decisions use vc_animal_owners (AnimalAccessService), never owner_id.
  */
 @Entity("vc_animals")
+@Index("ix_vc_animals_species", ["speciesId"])
+@Index("ix_vc_animals_breed_species", ["breedId", "speciesId"])
+/** Migration 1795435200000. */
+@Index("ix_vc_animals_owner_id", ["owner"])
 export class AnimalEntity {
   @PrimaryGeneratedColumn("uuid")
   id: string;
@@ -18,25 +24,28 @@ export class AnimalEntity {
   name: string;
 
   @ManyToOne(() => UsersEntity, user => user.animals, { nullable: true })
-  @JoinColumn({ name: "owner_id" })
+  @JoinColumn({ name: "owner_id", foreignKeyConstraintName: "fk_vc_animals_owner" })
   owner: UsersEntity | null;
 
-  // Taxonomy: the composite breed join enforces breed/species consistency in SQL.
+  // Taxonomy: breed/species consistency is enforced in SQL by the composite FK fk_vc_animals_breed_species.
   @Column({ name: "species_id", type: "uniqueidentifier" })
   speciesId: string;
 
   @ManyToOne(() => SpeciesEntity, { nullable: false })
-  @JoinColumn({ name: "species_id" })
+  @JoinColumn({ name: "species_id", foreignKeyConstraintName: "fk_vc_animals_species" })
   species: SpeciesEntity;
 
   @Column({ name: "breed_id", type: "uniqueidentifier", nullable: true })
   breedId: string | null;
 
-  @ManyToOne(() => BreedEntity, { nullable: true })
-  @JoinColumn([
-    { name: "breed_id", referencedColumnName: "id" },
-    { name: "species_id", referencedColumnName: "speciesId" },
-  ])
+  /**
+   * Mapped on breed_id only: a composite join column sharing species_id with `species` makes TypeORM 0.3 overwrite
+   * that column's metadata and generate an invalid species join (ON s.speciesId=...). The composite FK
+   * fk_vc_animals_breed_species (breed_id, species_id) -> vc_breeds (id, species_id) exists only in the database
+   * (migration 1794744000000), hence createForeignKeyConstraints: false; resolveAnimalTaxonomy checks it first.
+   */
+  @ManyToOne(() => BreedEntity, { nullable: true, createForeignKeyConstraints: false })
+  @JoinColumn({ name: "breed_id", referencedColumnName: "id" })
   breed: BreedEntity | null;
 
   // Physical details. Measurement units retain the application's existing convention.

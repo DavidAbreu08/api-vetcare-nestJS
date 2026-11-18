@@ -1,4 +1,7 @@
-import { BadRequestException, Logger } from "@nestjs/common";
+import { BadRequestException, ConflictException, Logger } from "@nestjs/common";
+import { ReservationStatus } from "../core/enums/reservation-status.enum";
+import { ReservationEntity } from "../reservation/entities/reservation.entity";
+import { ClinicalVisitEntity } from "../clinical-visits/entities/clinical-visit.entity";
 import { IsNull, MoreThan } from "typeorm";
 import { PersistenceService } from "../core/persistence/persistence.service";
 import { Actor } from "../core/authorization";
@@ -10,23 +13,41 @@ import { EmployeesBusinessService } from "./employees.business.service";
 import { EmployeeEntity } from "./entities/employee.entity";
 import { EmployeeJobTitleEntity } from "./entities/employee-job-title.entity";
 import { UsersEntity } from "../users/entities/users.entity";
+import { EmployeeServiceEntity } from "../clinic-services/entities/employee-service.entity";
+import { EmployeeScheduleEntity } from "../employee-schedules/entities/employee-schedule.entity";
+import { BlockedTimeEntity } from "../blocked-times/entities/bloked-times.entity";
 
 const EMPLOYEE_ROLE = "20000000-0000-4000-8000-000000000002";
 const PAST = "2000-01-01";
+/** Plain welcome token as returned by createAccount (only its hash is persisted there). */
+const WELCOME_TOKEN = "ab".repeat(32);
 const admin: Actor = { id: "u-admin", roleIds: [], isAdmin: true, isEmployee: false, isClient: false, employeeId: null };
 
 describe("Employee profile rules", () => {
   let manager: any, employees: any, users: any, email: any, business: EmployeesBusinessService, stored: any, hasRole: boolean;
+  let account: any, open: any[], counts: { reservations: number; visits: number }, openParams: any;
 
   afterEach(() => jest.restoreAllMocks());
 
   beforeEach(() => {
     hasRole = false;
+    open = [];
+    openParams = {};
+    counts = { reservations: 0, visits: 0 };
     stored = { id: "E-1", userId: "U-1", terminationDate: null, hireDate: null, isAvailableForBookings: true };
+    account = { id: "U-1", email: "e@x.pt", isActive: true, deletedAt: null };
     manager = {
-      findOne: jest.fn(async (entity: unknown) => entity === EmployeeEntity ? stored : entity === UsersEntity ? { id: "U-1", email: "e@x.pt" } : null),
+      findOne: jest.fn(async (entity: unknown) => entity === EmployeeEntity ? { ...stored } : entity === UsersEntity ? account : null),
       find: jest.fn(async () => []),
-      count: jest.fn(async (entity: unknown) => entity === UserRoleEntity ? Number(hasRole) : 0),
+      count: jest.fn(async (entity: unknown) => entity === UserRoleEntity ? Number(hasRole)
+        : entity === ReservationEntity ? counts.reservations : entity === ClinicalVisitEntity ? counts.visits : 0),
+      createQueryBuilder: jest.fn(() => {
+        const qb: any = {};
+        qb.select = qb.orderBy = qb.addOrderBy = () => qb;
+        qb.where = qb.andWhere = (_sql: string, params?: object) => (Object.assign(openParams, params), qb);
+        qb.getMany = async () => open;
+        return qb;
+      }),
       create: jest.fn((_entity: unknown, row: unknown) => row),
       save: jest.fn(async (row: any) => ({ id: "E-1", ...row })),
       insert: jest.fn(), delete: jest.fn(),
@@ -34,7 +55,7 @@ describe("Employee profile rules", () => {
     employees = { findOne: jest.fn(async () => ({ ...stored, jobTitleLinks: [] })) };
     const dataSource = { transaction: jest.fn(async (work: (m: unknown) => unknown) => work(manager)) };
     const settings = new SystemSettingsService({ loadAll: async () => [{ code: SystemSettingCode.EMPLOYEE_ROLE_ID, value: EMPLOYEE_ROLE }] } as any);
-    users = { createAccount: jest.fn(async (_m: unknown, data: any) => ({ user: { id: "U-NEW", email: data.email }, resetToken: "token" })) };
+    users = { createAccount: jest.fn(async (_m: unknown, data: any) => ({ user: { id: "U-NEW", email: data.email }, resetToken: WELCOME_TOKEN })) };
     email = { sendEmployeeWelcomeEmail: jest.fn(async () => undefined) };
     business = new EmployeesBusinessService(employees, dataSource as any, new PersistenceService(), users, settings, email);
   });
@@ -79,6 +100,11 @@ describe("Employee profile rules", () => {
     expect(users.createAccount).toHaveBeenLastCalledWith(manager, expect.objectContaining({ email: "rui@x.pt" }), [], "u-admin");
     expect(manager.create).toHaveBeenLastCalledWith(EmployeeEntity, expect.objectContaining({ userId: "U-NEW", isAvailableForBookings: false }));
     expect(email.sendEmployeeWelcomeEmail).toHaveBeenCalledTimes(2);
+    expect(email.sendEmployeeWelcomeEmail).toHaveBeenLastCalledWith("rui@x.pt", WELCOME_TOKEN);
+    // The plain token never reaches the employee transaction's writes.
+    for (const call of [...manager.save.mock.calls, ...manager.insert.mock.calls, ...manager.create.mock.calls]) {
+      expect(JSON.stringify(call)).not.toContain(WELCOME_TOKEN);
+    }
   });
 
   it("removes EMPLOYEE in the same transaction when an update terminates the profile, locking the row, and logs after commit", async () => {
@@ -120,12 +146,94 @@ describe("Employee profile rules", () => {
     expect(manager.insert).not.toHaveBeenCalled();
   });
 
-  it("removes the EMPLOYEE role together with the deleted profile", async () => {
+  it("removes the EMPLOYEE role, job titles, service qualifications, schedule and individual blocks together with the deleted profile", async () => {
     await business.delete("E-1");
     expect(manager.delete).toHaveBeenCalledWith(EmployeeJobTitleEntity, { employeeId: "E-1" });
+    expect(manager.delete).toHaveBeenCalledWith(EmployeeServiceEntity, { employeeId: "E-1" });
+    expect(manager.delete).toHaveBeenCalledWith(EmployeeScheduleEntity, { employeeId: "E-1" });
+    expect(manager.delete).toHaveBeenCalledWith(BlockedTimeEntity, { employeeId: "E-1" });
     expect(manager.delete).toHaveBeenCalledWith(EmployeeEntity, { id: "E-1" });
     expect(manager.delete).toHaveBeenCalledWith(UserRoleEntity, { userId: "U-1", roleId: EMPLOYEE_ROLE });
-    expect(manager.delete).toHaveBeenCalledTimes(3);
+    expect(manager.delete).toHaveBeenCalledTimes(6);
+  });
+
+  describe("open reservations assigned to the employee (A1)", () => {
+    const reservation = (id: string, startAt: string, status = ReservationStatus.CONFIRMED) => ({ id, status, startAt: new Date(startAt), endAt: new Date(startAt), employeeId: "E-1" });
+
+    it("refuses a termination that strands PENDING/CONFIRMED reservations on or after the date (409 with their ids)", async () => {
+      open = [
+        reservation("R-BEFORE", "2999-05-31T10:00:00Z"),
+        reservation("R-CONF", "2999-06-01T10:00:00Z"),
+        reservation("R-PEND", "2999-06-02T10:00:00Z", ReservationStatus.PENDING),
+      ];
+      const error = await business.update("E-1", { terminationDate: "2999-06-01" }, admin).catch(e => e);
+      expect(error).toBeInstanceOf(ConflictException);
+      expect(error.getResponse()).toMatchObject({ code: "EMPLOYEE_HAS_OPEN_RESERVATIONS", message: expect.stringContaining("would leave 2 open reservations assigned") });
+      expect(error.getResponse()).not.toHaveProperty("reservationIds");
+      expect(openParams).toMatchObject({ value: "E-1", openStatuses: [ReservationStatus.PENDING, ReservationStatus.CONFIRMED] });
+      expect(manager.save).not.toHaveBeenCalled();
+      // The profile row is locked before the reservations are read.
+      expect(manager.findOne).toHaveBeenCalledWith(EmployeeEntity, { where: { id: "E-1" }, lock: { mode: "pessimistic_write" } });
+      expect(manager.findOne.mock.invocationCallOrder[0]).toBeLessThan(manager.createQueryBuilder.mock.invocationCallOrder[0]);
+    });
+
+    it("accepts a termination after every open reservation", async () => {
+      open = [reservation("R-1", "2999-05-31T10:00:00Z")];
+      await expect(business.update("E-1", { terminationDate: "2999-06-01" }, admin)).resolves.toBeDefined();
+      expect(manager.save).toHaveBeenCalled();
+    });
+
+    it("refuses isAvailableForBookings=false with open reservations, and an immediate termination", async () => {
+      open = [reservation("R-1", "2999-01-01T10:00:00Z")];
+      for (const change of [{ isAvailableForBookings: false }, { terminationDate: PAST }]) {
+        await expect(business.update("E-1", change, admin)).rejects.toMatchObject({ response: { message: expect.stringContaining("would leave 1 open reservation assigned") } });
+      }
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it("does not block edits of a profile that was already unavailable, nor edits that keep it bookable", async () => {
+      open = [reservation("R-1", "2999-01-01T10:00:00Z")];
+      await expect(business.update("E-1", { notes: "x", isAvailableForBookings: true }, admin)).resolves.toBeDefined();
+      stored.isAvailableForBookings = false;
+      await expect(business.update("E-1", { notes: "y" }, admin)).resolves.toBeDefined();
+    });
+  });
+
+  describe("inactive accounts (A4)", () => {
+    it("refuses a profile for an inactive account (409), locking the account", async () => {
+      account.isActive = false;
+      await expect(business.create({ userId: "U-1" }, admin)).rejects.toBeInstanceOf(ConflictException);
+      expect(manager.findOne).toHaveBeenCalledWith(UsersEntity, { where: { id: "U-1" }, lock: { mode: "pessimistic_write" } });
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it("refuses to reactivate (grant EMPLOYEE to) the profile of an inactive account", async () => {
+      stored.terminationDate = PAST;
+      stored.isAvailableForBookings = false;
+      account.isActive = false;
+      await expect(business.update("E-1", { terminationDate: null }, admin)).rejects.toBeInstanceOf(ConflictException);
+      expect(manager.insert).not.toHaveBeenCalled();
+      account.isActive = true;
+      await expect(business.update("E-1", { terminationDate: null }, admin)).resolves.toBeDefined();
+    });
+  });
+
+  describe("physical deletion (A5)", () => {
+    it("refuses to delete a profile referenced by reservations or visits (409 with the counts), locking it", async () => {
+      counts.reservations = 2;
+      const error = await business.delete("E-1").catch(e => e);
+      expect(error).toBeInstanceOf(ConflictException);
+      expect(error.getResponse()).toMatchObject({ code: "EMPLOYEE_HAS_HISTORY", message: "The employee profile is referenced by 2 reservations; terminate it instead of deleting it" });
+      expect(error.getResponse()).not.toHaveProperty("reservationCount");
+      counts.reservations = 0;
+      counts.visits = 1;
+      await expect(business.delete("E-1")).rejects.toMatchObject({ response: { message: "The employee profile is referenced by 1 clinical visit; terminate it instead of deleting it" } });
+      counts.reservations = 1;
+      counts.visits = 3;
+      await expect(business.delete("E-1")).rejects.toMatchObject({ response: { message: expect.stringContaining("referenced by 1 reservation and 3 clinical visits;") } });
+      expect(manager.delete).not.toHaveBeenCalled();
+      expect(manager.findOne).toHaveBeenCalledWith(EmployeeEntity, { where: { id: "E-1" }, lock: { mode: "pessimistic_write" } });
+    });
   });
 
   it("never treats a terminated profile as bookable", () => {

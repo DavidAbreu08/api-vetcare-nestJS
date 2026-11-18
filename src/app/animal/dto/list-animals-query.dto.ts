@@ -2,9 +2,9 @@ import { IsOptional, IsUUID } from "class-validator";
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { ListQueryDto } from "../../core/dto/list-query.dto";
 
-/** Optional collection filters; access control still restricts clients to their own animals. */
+/** Optional collection filters; access control still restricts non-staff callers to the animals they are an active tutor of. */
 export class ListAnimalsQueryDto extends ListQueryDto {
-  @ApiPropertyOptional({ format: "uuid", description: "Restrict results to an owner" })
+  @ApiPropertyOptional({ format: "uuid", description: "Restrict results to animals of which this account is an active tutor (primary or secondary)" })
   @IsOptional()
   @IsUUID()
   ownerId?: string;

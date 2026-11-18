@@ -10,7 +10,7 @@ export class EmployeeEntity {
   @PrimaryGeneratedColumn("uuid") id: string;
   @Column({ name: "user_id", type: "uniqueidentifier" }) userId: string;
   @OneToOne(() => UsersEntity, user => user.employee, { nullable: false })
-  @JoinColumn({ name: "user_id" }) user: UsersEntity;
+  @JoinColumn({ name: "user_id", foreignKeyConstraintName: "fk_vc_employees_user" }) user: UsersEntity;
   @Column({ name: "employee_number", type: "nvarchar", length: 30, nullable: true }) employeeNumber: string | null;
   @Column({ name: "license_number", type: "nvarchar", length: 50, nullable: true }) licenseNumber: string | null;
   /** YYYY-MM-DD. */

@@ -1,13 +1,15 @@
 import { ReservationPolicyMessages } from "./reservation-policy.messages";
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { applicationError } from "../core/exceptions/application-error";
+import { ErrorMetadata } from "../core/enums/error-metadata.enum";
 import { ReservationStatus as Status } from '../core/enums/reservation-status.enum';
 
+/** Clinic calendar. The buffer between reservations and the no-show tolerance live in vc_system_settings. */
 export const CLINIC_POLICY = Object.freeze({
   start: '07:00', end: '20:00', days: [1, 2, 3, 4, 5],
-  slotDurationMinutes: 30, bufferMinutes: 15, timeZone: 'Europe/Lisbon',
+  slotDurationMinutes: 30, timeZone: 'Europe/Lisbon',
 });
 export function policyError(code: string, message: string): never {
-  throw new BadRequestException({ statusCode: 400, code, message });
+  throw applicationError(ErrorMetadata.INVALID_VALUE, message, undefined, { code });
 }
 export function dateKey(value: Date | string): string {
   if (value instanceof Date && Number.isNaN(value.getTime())) policyError('INVALID_DATE', ReservationPolicyMessages.INVALID_DATE);
@@ -53,25 +55,44 @@ export function clinicDateTime(date: Date | string, time: string): Date {
   }
   policyError('INVALID_TIME', ReservationPolicyMessages.NONEXISTENT_TIME);
 }
-export function validateInterval(date: Date | string, start: string, end: string, allowPast = false): void {
-  const key = dateKey(date);
-  if (minutes(end) <= minutes(start)) policyError('INVALID_INTERVAL', ReservationPolicyMessages.INVALID_INTERVAL);
-  const day = new Date(key + 'T00:00:00Z').getUTCDay();
-  if (!CLINIC_POLICY.days.includes(day) || minutes(start) < minutes(CLINIC_POLICY.start) || minutes(end) > minutes(CLINIC_POLICY.end)) {
+
+const clinicFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: CLINIC_POLICY.timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', hourCycle: 'h23', weekday: 'short',
+});
+const WEEKDAYS: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+/** Clinic calendar date (YYYY-MM-DD), local time (HH:mm) and weekday of a UTC instant. */
+export function clinicParts(instant: Date): { date: string; time: string; weekday: number } {
+  const parts = Object.fromEntries(clinicFormatter.formatToParts(instant).map(p => [p.type, p.value]));
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}`, weekday: WEEKDAYS[parts.weekday] };
+}
+
+/**
+ * A reservation interval (UTC instants): end after start, start in the future (unless allowPast), within one
+ * clinic business day and business hours of the clinic timezone.
+ */
+export function validateReservationWindow(startAt: Date, endAt: Date, now = new Date(), allowPast = false): void {
+  if (!Number.isFinite(startAt?.getTime()) || !Number.isFinite(endAt?.getTime())) policyError('INVALID_DATE', ReservationPolicyMessages.INVALID_INSTANT);
+  if (endAt.getTime() <= startAt.getTime()) policyError('INVALID_INTERVAL', ReservationPolicyMessages.INVALID_INTERVAL);
+  if (!allowPast && startAt.getTime() <= now.getTime()) policyError('PAST_RESERVATION', ReservationPolicyMessages.PAST_RESERVATION);
+  const start = clinicParts(startAt);
+  const end = clinicParts(endAt);
+  if (start.date !== end.date || !CLINIC_POLICY.days.includes(start.weekday) ||
+      minutes(start.time) < minutes(CLINIC_POLICY.start) || minutes(end.time) > minutes(CLINIC_POLICY.end)) {
     policyError('OUTSIDE_BUSINESS_HOURS', ReservationPolicyMessages.OUTSIDE_BUSINESS_HOURS);
   }
-  if (!allowPast && clinicDateTime(date, start).getTime() < Date.now()) {
-    policyError('PAST_RESERVATION', ReservationPolicyMessages.PAST_RESERVATION);
-  }
 }
+
+const TRANSITIONS: Record<Status, Status[]> = {
+  [Status.PENDING]: [Status.CONFIRMED, Status.CANCELLED],
+  [Status.CONFIRMED]: [Status.COMPLETED, Status.CANCELLED, Status.NO_SHOW],
+  [Status.COMPLETED]: [], [Status.CANCELLED]: [], [Status.NO_SHOW]: [],
+};
+
+/** State machine of reservations; an invalid change is a 409 conflict with the current state. */
 export function assertTransition(from: Status, to: Status): void {
-  const allowed: Record<Status, Status[]> = {
-    pending: [Status.CONFIRMED, Status.RESCHEDULED, Status.CANCELLED],
-    confirmed: [Status.RESCHEDULED, Status.CANCELLED, Status.COMPLETED],
-    rescheduled: [Status.CONFIRMED, Status.RESCHEDULED, Status.CANCELLED],
-    cancelled: [], completed: [],
-  };
-  if (!allowed[from]?.includes(to)) {
-    throw new ConflictException({ statusCode: 409, code: 'INVALID_TRANSITION', message: ReservationPolicyMessages.invalidTransition(from, to) });
+  if (!TRANSITIONS[from]?.includes(to)) {
+    throw applicationError(ErrorMetadata.CONFLICT, ReservationPolicyMessages.invalidTransition(from, to), undefined, { code: 'INVALID_TRANSITION' });
   }
 }

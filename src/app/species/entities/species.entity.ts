@@ -1,6 +1,7 @@
-﻿import { Column, Entity, PrimaryGeneratedColumn } from "typeorm";
+import { Column, Entity, PrimaryGeneratedColumn, Unique } from "typeorm";
 /** Species catalog shared by animal records and breeds. */
 @Entity("vc_species")
+@Unique("uq_vc_species_name", ["name"])
 export class SpeciesEntity {
   @Column({ type: "nvarchar", length: 240, nullable: true })
   description: string | null;
@@ -9,5 +10,5 @@ export class SpeciesEntity {
   notes: string | null;
 
   @PrimaryGeneratedColumn("uuid") id: string;
-  @Column({ type: "nvarchar", length: 255, unique: true }) name: string;
+  @Column({ type: "nvarchar", length: 255 }) name: string;
 }

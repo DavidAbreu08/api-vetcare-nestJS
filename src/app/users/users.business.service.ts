@@ -1,20 +1,13 @@
-import { UsersMessages } from "./users.messages";
+import { applicationError } from "src/app/core/exceptions/application-error";
+import { ErrorMetadata } from "src/app/core/enums/error-metadata.enum";
+import { UsersConflictMessages, UsersMessages } from "./users.messages";
 import { PersistenceService } from "../core/persistence/persistence.service";
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  HttpStatus,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from "@nestjs/common";
-import { DataSource, EntityManager, FindOptionsWhere, In, Not, Repository } from "typeorm";
+import { Injectable, Logger } from "@nestjs/common";
+import { DataSource, EntityManager, FindOptionsWhere, In, MssqlParameter, Not, Repository } from "typeorm";
 import { UsersEntity } from "./entities/users.entity";
 import { InjectRepository } from "@nestjs/typeorm";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { CreateUserDto } from "./dto/create-user.dto";
-import { HttpResponse } from "../core/interface/http-response.interface";
 import { generateRandomPassword } from "../core/generated/genarate-random.password";
 import * as bcrypt from "bcrypt";
 import { EmailService } from "src/email/email.service";
@@ -33,6 +26,19 @@ import { catalogSummary, normalizeEmail, normalizeId, todayKey } from "../core/c
 import { serializeAccount, serializeEmployee } from "../employees/employee.serializer";
 import { CLINIC_POLICY } from "../reservation/reservation-policy";
 import { isEmploymentActive } from "../employees/employee-status";
+import { utcInstantParam, uuidParam } from "../core/persistence/sql-params";
+import { findOpenReservations, openReservationsConflict } from "../reservation/open-reservations";
+import { AnimalAccessService } from "../animal-owners/animal-access.service";
+import { AnimalOwnerEndReason } from "../animal-owners/enums/animal-owner-end-reason.enum";
+
+/**
+ * JWT iat is in whole seconds: a token is valid when issued in the same second as the password change or later,
+ * so the login right after a change is never rejected. Without password_changed_at every token is accepted.
+ */
+export function isIssuedAfterPasswordChange(issuedAt: number | undefined, passwordChangedAt: Date | null | undefined): boolean {
+  if (!passwordChangedAt) return true;
+  return typeof issuedAt === "number" && issuedAt >= Math.floor(passwordChangedAt.getTime() / 1000);
+}
 
 /** Roles assignable while creating an account; the administrator role is only granted through PUT roles or the seed. */
 export type AccountSystemRole = typeof SystemRole.EMPLOYEE | typeof SystemRole.CLIENT;
@@ -57,6 +63,7 @@ export class UsersBusinessService {
     private readonly emailService: EmailService,
     private readonly settings: SystemSettingsService,
     private readonly membership: RoleMembershipService,
+    private readonly animalAccess: AnimalAccessService,
   ) {}
 
   private transaction<T>(work: (manager: EntityManager) => Promise<T>): Promise<T> {
@@ -82,12 +89,6 @@ export class UsersBusinessService {
     }));
   }
 
-  async checkEmailExists(email: string): Promise<boolean> {
-    const normalized = normalizeEmail(email);
-    if (typeof normalized !== "string" || !normalized) return false;
-    return !!(await this.persistence.execute(() => this.usersRepository.findOne({ where: { email: normalized } })));
-  }
-
   async findForAuthentication(where: FindOptionsWhere<UsersEntity>) {
     return this.persistence.execute(() => this.usersRepository.findOne({
       where,
@@ -97,7 +98,7 @@ export class UsersBusinessService {
 
   async findOneOrFail(where: FindOptionsWhere<UsersEntity> | FindOptionsWhere<UsersEntity>[]) {
     const user = await this.persistence.execute(() => this.usersRepository.findOne({ where }));
-    if (!user) throw new NotFoundException(UsersMessages.USER_NOT_FOUND);
+    if (!user) throw applicationError(ErrorMetadata.NOT_FOUND, UsersMessages.USER_NOT_FOUND);
     return user;
   }
 
@@ -107,9 +108,10 @@ export class UsersBusinessService {
    * termination date that passes without any save takes effect immediately; in that case the EMPLOYEE
    * role id is also left out of roleIds so @Roles(EMPLOYEE) denies access.
    */
-  async loadActor(id: string): Promise<(Actor & { email: string; name: string }) | null> {
+  async loadActor(id: string, issuedAt?: number): Promise<(Actor & { email: string; name: string }) | null> {
     const user = await this.persistence.execute(() => this.usersRepository.findOne({ where: { id } }));
     if (!user || !user.isActive) return null;
+    if (!isIssuedAfterPasswordChange(issuedAt, user.passwordChangedAt)) return null;
     const heldRoleIds = (await this.membership.activeRolesOf(user.id)).map(role => normalizeId(role.id));
     const flags = await this.settings.systemRoleFlags(heldRoleIds);
     const employee = await this.persistence.execute(() => this.employeesRepository.findOne({
@@ -124,7 +126,7 @@ export class UsersBusinessService {
     return { id: user.id, email: user.email, name: user.name, roleIds, ...flags, isEmployee, employeeId: employee?.id ?? null };
   }
 
-  /** Contract of GET /api/auth/me: account, active roles and employee profile (or null). */
+  /** Contract of GET /api/vetcare/auth/me: account, active roles and employee profile (or null). */
   async getAccountProfile(id: string) {
     const user = await this.findOneOrFail({ id });
     const roles = await this.membership.activeRolesOf(user.id);
@@ -140,12 +142,12 @@ export class UsersBusinessService {
     if (email) where.push(excludeId ? { email, id: Not(excludeId) } : { email });
     if (nif) where.push(excludeId ? { nif, id: Not(excludeId) } : { nif });
     if (where.length && await manager.findOne(UsersEntity, { where })) {
-      throw new ConflictException(UsersMessages.EMAIL_OR_NIF_ALREADY_EXISTS);
+      throw applicationError(ErrorMetadata.ALREADY_EXISTS, UsersMessages.EMAIL_OR_NIF_ALREADY_EXISTS);
     }
   }
 
   private assertBirthDate(birthDate: string | null | undefined) {
-    if (birthDate && birthDate > todayKey(CLINIC_POLICY.timeZone)) throw new BadRequestException(UsersMessages.FUTURE_BIRTH_DATE);
+    if (birthDate && birthDate > todayKey(CLINIC_POLICY.timeZone)) throw applicationError(ErrorMetadata.INVALID_VALUE, UsersMessages.FUTURE_BIRTH_DATE);
   }
 
   /**
@@ -166,9 +168,11 @@ export class UsersBusinessService {
     if (roleIds.length) await manager.insert(UserRoleEntity, roleIds.map(roleId => ({ userId: user.id, roleId, assignedBy })));
     let resetToken: string | null = null;
     if (data.password === undefined) {
-      const generated = generateResetToken();
+      // Only the hash is stored; the plain token is returned for the welcome email.
+      const now = new Date();
+      const generated = generateResetToken(now);
       resetToken = generated.token;
-      await manager.save(manager.create(ResetTokenEntity, { resetToken: generated.token, user, expiresAt: generated.expiresAt }));
+      await manager.insert(ResetTokenEntity, { userId: user.id, tokenHash: generated.tokenHash, expiresAt: generated.expiresAt, createdAt: now, usedAt: null });
     }
     return { user, resetToken };
   }
@@ -182,21 +186,25 @@ export class UsersBusinessService {
   async createClient(data: CreateClientDto, actor: Actor | null) {
     const { user, resetToken } = await this.transaction(manager => this.createAccount(manager, data, [SystemRole.CLIENT], actor?.id ?? null));
     await this.emailService.sendClientWelcomeEmail(user.email, resetToken!);
-    return { message: UsersMessages.CLIENT_CREATED, statusCode: HttpStatus.CREATED };
+    return null;
   }
 
-  async update(id: string, data: UpdateUserDto, actor: Actor): Promise<HttpResponse> {
+  async update(id: string, data: UpdateUserDto, actor: Actor) {
     if (!actor.isAdmin && (data.email !== undefined || data.isActive !== undefined)) {
-      throw new ForbiddenException(UsersMessages.ADMIN_ONLY_FIELDS);
+      throw applicationError(ErrorMetadata.FORBIDDEN, UsersMessages.ADMIN_ONLY_FIELDS);
     }
-    if (data.name === null || data.email === null || data.isActive === null) throw new BadRequestException(UsersMessages.NULL_REQUIRED_FIELD);
+    if (data.name === null || data.email === null || data.isActive === null) throw applicationError(ErrorMetadata.INVALID_VALUE, UsersMessages.NULL_REQUIRED_FIELD);
     this.assertBirthDate(data.birthDate);
     await this.transaction(async manager => {
-      const user = await manager.findOne(UsersEntity, { where: { id } });
-      if (!user) throw new NotFoundException(UsersMessages.USER_NOT_FOUND);
+      // Account row locked first (UPDLOCK): lock order account -> employee profile, as in delete.
+      const user = await manager.findOne(UsersEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
+      if (!user) throw applicationError(ErrorMetadata.NOT_FOUND, UsersMessages.USER_NOT_FOUND);
       const email = data.email !== undefined ? normalizeEmail(data.email) as string : undefined;
       await this.assertUniqueIdentity(manager, email !== user.email ? email : undefined, data.nif !== user.nif ? data.nif : undefined, user.id);
-      if (data.isActive === false && user.isActive) await this.assertAnotherAdminRemains(manager, user.id);
+      if (data.isActive === false && user.isActive) {
+        await this.assertNoOpenReservations(manager, user.id);
+        await this.assertAnotherAdminRemains(manager, user.id);
+      }
       if (data.name !== undefined) user.name = data.name.trim();
       if (email !== undefined) user.email = email;
       for (const key of ["nif", "phone", "birthDate", "profilePictureUrl", "description", "notes"] as const) {
@@ -205,27 +213,94 @@ export class UsersBusinessService {
       if (data.isActive !== undefined) user.isActive = data.isActive;
       await manager.save(user);
     });
-    return { statusCode: HttpStatus.OK, message: UsersMessages.OK };
+    return null;
   }
 
-  async updatePasswordHash(id: string, passwordHash: string) {
-    await this.persistence.execute(() => this.usersRepository.update({ id }, { passwordHash }));
+  /**
+   * Locks the account row (UPDLOCK, ROWLOCK) until the caller's transaction ends. Lock order for every flow that
+   * writes vc_reset_tokens: vc_users row first, then vc_reset_tokens (see AuthService).
+   */
+  async lockForUpdate(manager: EntityManager, id: string): Promise<boolean> {
+    const rows: unknown[] = await manager.query(
+      "SELECT 1 AS [locked] FROM [dbo].[vc_users] WITH (UPDLOCK, ROWLOCK) WHERE [id] = @0",
+      [uuidParam(id)],
+    );
+    return rows?.length === 1;
+  }
+
+  /**
+   * Sets the password hash and password_changed_at (which revokes JWTs issued before it) inside the caller's
+   * transaction, only for an active, non-deleted account. Returns false when no row was updated.
+   */
+  async setPasswordHash(manager: EntityManager, id: string, passwordHash: string, now: Date): Promise<boolean> {
+    const rows: unknown[] = await manager.query(
+      "UPDATE [dbo].[vc_users] SET [password_hash] = @0, [password_changed_at] = @1, [updated_at] = @1 OUTPUT inserted.[id] " +
+      "WHERE [id] = @2 AND [deleted_at] IS NULL AND [is_active] = 1",
+      [new MssqlParameter(passwordHash, "nvarchar", 255), utcInstantParam(now), uuidParam(id)],
+    );
+    return rows?.length === 1;
   }
 
   /**
    * Soft-deletes the account and removes its reset tokens explicitly (no cascading FK). An active
-   * employee profile (locked for the check) must be terminated or deleted first.
+   * employee profile (locked for the check) must be terminated or deleted first. While the account is the active
+   * primary tutor of non-deleted animals the deletion is refused (409 with the number of animals in the message: transfer
+   * them first); its active secondary tutorships are closed in the same transaction (end_reason ACCOUNT_DELETED).
    */
-  async delete(id: string) {
+  async delete(id: string, actor?: Actor) {
     await this.transaction(async manager => {
-      const user = await manager.findOne(UsersEntity, { where: { id } });
-      if (!user) throw new NotFoundException(UsersMessages.USER_NOT_FOUND);
+      // Account row locked first (UPDLOCK): same users -> reset tokens order as the password flows.
+      const user = await manager.findOne(UsersEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
+      if (!user) throw applicationError(ErrorMetadata.NOT_FOUND, UsersMessages.USER_NOT_FOUND);
       const profile = await manager.findOne(EmployeeEntity, { where: { userId: user.id }, lock: { mode: "pessimistic_write" } });
-      if (profile && isEmploymentActive(profile.terminationDate)) throw new ConflictException(UsersMessages.ACTIVE_EMPLOYEE_PROFILE);
+      if (profile && isEmploymentActive(profile.terminationDate)) throw applicationError(ErrorMetadata.CONFLICT, UsersMessages.ACTIVE_EMPLOYEE_PROFILE);
+      await this.assertNoOpenReservations(manager, user.id, profile);
       await this.assertAnotherAdminRemains(manager, user.id);
+      await this.releaseTutorships(manager, user.id, AnimalOwnerEndReason.ACCOUNT_DELETED, actor?.id ?? null);
       await manager.delete(ResetTokenEntity, { user: { id: user.id } });
       await manager.softDelete(UsersEntity, { id: user.id });
     });
+  }
+
+  /**
+   * 409 (count in the message only) while the account is the client of, or (through its employee profile) assigned to,
+   * PENDING/CONFIRMED reservations not yet finished; nothing is cancelled automatically. Requires the account row
+   * locked by the caller; the employee profile is locked here (account -> employee profile). Reservation creation
+   * locks the client account and assignment/confirmation lock the profile, so no open reservation can appear
+   * between this check and the commit of the deactivation or deletion.
+   */
+  private async assertNoOpenReservations(manager: EntityManager, userId: string, lockedProfile?: EmployeeEntity | null) {
+    const asClient = await findOpenReservations(manager, { clientId: userId });
+    if (asClient.length) throw openReservationsConflict("CLIENT_HAS_OPEN_RESERVATIONS", UsersConflictMessages.clientOpenReservations, asClient);
+    const profile = lockedProfile !== undefined
+      ? lockedProfile
+      : await manager.findOne(EmployeeEntity, { where: { userId }, lock: { mode: "pessimistic_write" } });
+    if (!profile) return;
+    const assigned = await findOpenReservations(manager, { employeeId: profile.id });
+    if (assigned.length) throw openReservationsConflict("EMPLOYEE_HAS_OPEN_RESERVATIONS", UsersConflictMessages.employeeOpenReservations, assigned);
+  }
+
+  /**
+   * The account stops being able to be a tutor (deletion, loss of CLIENT): 409 (number of animals in the message)
+   * while it is the active primary tutor of non-deleted animals, or (409 TUTOR_HAS_OPEN_RESERVATIONS) while it is the
+   * client of open reservations of animals it co-tutors; otherwise its active secondary tutorships are closed.
+   * Requires the account row locked by the caller: every flow that opens a tutorship for an account locks that account
+   * first (animal -> account -> vc_animal_owners), so none can be opened between this check and the commit.
+   */
+  private async releaseTutorships(manager: EntityManager, userId: string, reason: AnimalOwnerEndReason, actorId: string | null) {
+    const animalIds = await this.animalAccess.primaryAnimalIdsOf(manager, userId);
+    if (animalIds.length) {
+      throw applicationError(ErrorMetadata.IN_USE, UsersConflictMessages.primaryTutorOfAnimals(animalIds.length), undefined, { code: "PRIMARY_TUTOR_OF_ANIMALS" });
+    }
+    // Open reservations booked by the account for animals it co-tutors would be left with a client who is no longer
+    // a tutor: refused (409); end the tutorship with transferFutureReservations or cancel them first.
+    const secondaryOf = new Set((await this.animalAccess.secondaryAnimalIdsOf(manager, userId)).map(id => id.toLowerCase()));
+    if (secondaryOf.size) {
+      const blocking = (await findOpenReservations(manager, { clientId: userId }))
+        .filter(reservation => secondaryOf.has(reservation.animalId.toLowerCase()));
+      if (blocking.length) throw openReservationsConflict("TUTOR_HAS_OPEN_RESERVATIONS", UsersConflictMessages.secondaryTutorOpenReservations, blocking);
+    }
+    await this.animalAccess.closeSecondaryTutorships(manager, userId, reason, actorId);
   }
 
   async getRoles(id: string) {
@@ -241,20 +316,24 @@ export class UsersBusinessService {
   async replaceRoles(id: string, roleIds: string[], actor: Actor) {
     const ids = [...new Set(roleIds.map(normalizeId))];
     const result = await this.transaction(async manager => {
-      const user = await manager.findOne(UsersEntity, { where: { id } });
-      if (!user) throw new NotFoundException(UsersMessages.USER_NOT_FOUND);
+      // Account row locked (UPDLOCK) so a concurrent deactivation cannot slip between the check and the insert.
+      const user = await manager.findOne(UsersEntity, { where: { id }, lock: { mode: "pessimistic_write" } });
+      if (!user) throw applicationError(ErrorMetadata.NOT_FOUND, UsersMessages.USER_NOT_FOUND);
       const currentRows = await manager.find(UserRoleEntity, { where: { userId: user.id } });
       const current = new Set(currentRows.map(row => normalizeId(row.roleId)));
       const roles = ids.length ? await manager.find(RoleEntity, { where: { id: In(ids) } }) : [];
       // Existing assignments of since-deactivated roles may be kept; new ones need active roles.
       if (roles.length !== ids.length || roles.some(role => !role.isActive && !current.has(normalizeId(role.id)))) {
-        throw new BadRequestException(UsersMessages.INVALID_ROLES);
+        throw applicationError(ErrorMetadata.INVALID_VALUE, UsersMessages.INVALID_ROLES);
       }
-      const [adminRoleId, employeeRoleId] = await this.settings.resolveRoleIds([SystemRole.ADMIN, SystemRole.EMPLOYEE]);
+      const [adminRoleId, employeeRoleId, clientRoleId] = await this.settings.resolveRoleIds([SystemRole.ADMIN, SystemRole.EMPLOYEE, SystemRole.CLIENT]);
       if (current.has(adminRoleId) && !ids.includes(adminRoleId)) await this.assertAnotherAdminRemains(manager, user.id);
+      // Tutors must hold CLIENT: losing it is refused for a primary tutor and closes secondary tutorships (ROLE_CHANGED).
+      if (current.has(clientRoleId) && !ids.includes(clientRoleId)) await this.releaseTutorships(manager, user.id, AnimalOwnerEndReason.ROLE_CHANGED, actor.id);
       await this.assertEmployeeRoleMatchesProfile(manager, user.id, current.has(employeeRoleId), ids.includes(employeeRoleId));
       const removed = currentRows.filter(row => !ids.includes(normalizeId(row.roleId))).map(row => row.roleId);
       const added = ids.filter(roleId => !current.has(roleId));
+      if (added.length && !user.isActive) throw applicationError(ErrorMetadata.CONFLICT, UsersMessages.INACTIVE_ACCOUNT_ROLES);
       if (removed.length) await manager.delete(UserRoleEntity, { userId: user.id, roleId: In(removed) });
       if (added.length) await manager.insert(UserRoleEntity, added.map(roleId => ({ userId: user.id, roleId, assignedBy: actor.id })));
       return {
@@ -273,15 +352,15 @@ export class UsersBusinessService {
 
   /**
    * EMPLOYEE follows the employee profile: required while it is active, never granted without one.
-   * The profile row is locked (UPDLOCK) so the check serializes with PUT /api/employees/:id even when
+   * The profile row is locked (UPDLOCK) so the check serializes with PUT /api/vetcare/employees/:id even when
    * reads do not block (READ_COMMITTED_SNAPSHOT).
    */
   private async assertEmployeeRoleMatchesProfile(manager: EntityManager, userId: string, hadRole: boolean, keepsRole: boolean) {
     if (hadRole === keepsRole) return;
     const profile = await manager.findOne(EmployeeEntity, { where: { userId }, lock: { mode: "pessimistic_write" } });
     const active = !!profile && isEmploymentActive(profile.terminationDate);
-    if (hadRole && active) throw new ConflictException(UsersMessages.EMPLOYEE_ROLE_REQUIRED);
-    if (keepsRole && !active) throw new ConflictException(UsersMessages.EMPLOYEE_ROLE_WITHOUT_PROFILE);
+    if (hadRole && active) throw applicationError(ErrorMetadata.CONFLICT, UsersMessages.EMPLOYEE_ROLE_REQUIRED);
+    if (keepsRole && !active) throw applicationError(ErrorMetadata.CONFLICT, UsersMessages.EMPLOYEE_ROLE_WITHOUT_PROFILE);
   }
 
   /**
@@ -294,8 +373,7 @@ export class UsersBusinessService {
     if (!isEffectiveAdmin) return;
     await manager.findOne(RoleEntity, { where: { id: adminRoleId }, lock: { mode: "pessimistic_write" } });
     const others = await manager.count(UserRoleEntity, {
-      where: { roleId: adminRoleId, userId: Not(userId), user: { isActive: true }, role: { isActive: true } },
-    });
-    if (!others) throw new ConflictException(UsersMessages.LAST_ADMIN);
+      where: { roleId: adminRoleId, userId: Not(userId), user: { isActive: true }, role: { isActive: true } } });
+    if (!others) throw applicationError(ErrorMetadata.CONFLICT, UsersMessages.LAST_ADMIN);
   }
 }
