@@ -16,7 +16,9 @@ export const SWAGGER_TAGS: TagObject[] = [
   { name: "Reservations", description: "Bookings, statuses, history and rescheduling." },
   { name: "Clinical Visits", description: "Clinical visit records, completion and voiding." },
   { name: "Blocked Times", description: "Time periods unavailable for booking." },
+  { name: "Availability", description: "Indicative free appointment slots per qualified employee." },
   { name: "Clinic", description: "Public opening hours and operating policy." },
+  { name: "Services", description: "Clinic services catalog and qualified employees." },
   { name: "System Settings", description: "System configuration and roles." },
 ];
 

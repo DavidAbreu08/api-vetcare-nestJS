@@ -421,13 +421,16 @@ describe("Primary tutor transfer (decisions 10, 12)", () => {
     expect(t.animals.CAT.owner).toEqual({ id: "BOB" });
   });
 
-  it("refuses (409 with the list) while the previous primary is the client of open reservations; with the flag they move to the new primary", async () => {
+  it("refuses (409, message only, no id list) while the previous primary is the client of open reservations; with the flag they move to the new primary", async () => {
     const t = setup();
     t.addReservation("R-1", "ANA");
     t.addReservation("R-2", "ANA", { status: ReservationStatus.CONFIRMED });
-    await expect(t.business.transfer("CAT", { newPrimaryUserId: "BOB" }, admin)).rejects.toMatchObject({
+    const error = await t.business.transfer("CAT", { newPrimaryUserId: "BOB" }, admin).catch(e => e);
+    expect(error).toMatchObject({
       status: 409, response: { code: "TUTOR_HAS_OPEN_RESERVATIONS", message: expect.stringContaining("client of 2 open reservations") },
     });
+    expect(error.getResponse()).not.toHaveProperty("reservationIds");
+    expect(error.getResponse()).not.toHaveProperty("reservations");
     expect(t.active()).toEqual(["ANA:P"]);
     t.log.length = 0;
     await t.business.transfer("CAT", { newPrimaryUserId: "BOB", transferFutureReservations: true, reason: "Mudou de tutor" }, admin);

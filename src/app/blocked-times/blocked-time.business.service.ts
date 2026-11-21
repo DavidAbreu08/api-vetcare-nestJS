@@ -42,7 +42,7 @@ export function serializeBlockedTime(row: BlockedTimeEntity): BlockedTimeView {
  * in the message); nothing is cancelled automatically. PENDING reservations are not checked here: they are checked again
  * when confirmed.
  *
- * Locks (see docs/API_ORGANIZATION.md "Lock order"): a closure takes the clinic closures applock Exclusive; an
+ * Locks: a closure takes the clinic closures applock Exclusive; an
  * individual block locks the employee profile (UPDLOCK) and then takes the employee schedule applock (it skips the
  * closures applock); this keeps the reservation-flow order (profile -> closures Shared -> employee applock), only
  * without the middle step. The confirmed-reservation check and the write run under those applocks, so they serialize

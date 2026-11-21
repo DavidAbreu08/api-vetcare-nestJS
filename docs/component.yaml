@@ -1,0 +1,27 @@
+schema_version: 1
+skill_version: 0.2.0
+componente:
+  nome: api-vetcare-angular
+  aplicacao: vetcare
+  tipo: backend
+  stack: [typescript, nestjs, typeorm, mssql, jest]
+  comandos:                       # confirmed in package.json scripts
+    build: npm run build
+    testes: npm test
+    testes_e2e: npm run test:e2e
+    cobertura: npm run test:cov
+    lint: npm run lint            # runs eslint with --fix (modifies files)
+    formatar: npm run format
+    arrancar_dev: npm run start:dev
+    migrar_bd: npm run db:migrate
+    migracoes_estado: npm run db:migrations:show
+    seed_admin: npm run db:seed:admin
+    openapi: npm run docs:openapi   # writes docs/public/openapi.json without a database; also served at /docs-json
+contratos:
+  fornece:
+    - id: api
+      tipo: openapi
+      caminho: docs/public/openapi.json   # JSON: js-yaml is not a declared dependency
+      runtime: /docs-json
+      versao: 0.0.1
+  consome: []

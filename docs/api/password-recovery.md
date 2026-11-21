@@ -1,0 +1,22 @@
+---
+titulo: Password recovery
+descricao: Forgot/reset password flow, reset tokens and email delivery.
+cobre: [src/auth/**, src/email/**]
+visibilidade: interna
+estado: verificado
+verificado_em: 71269f9
+---
+
+# Password recovery
+
+## Password recovery
+
+Responses use the global envelope (`status`, `friendlyMessage`, `success`, `result`, see [http-responses.md](http-responses.md)); statuses are those of [routes.md](routes.md).
+
+- `POST /api/vetcare/auth/forgot-password` always answers 202 with `friendlyMessage` "If this user exists, they will receive an email!" and `result: null`: unknown, inactive or soft-deleted accounts, the per-account limit and database or SMTP failures are indistinguishable. The response is returned immediately and the whole issuance (account lookup, limit, invalidation, insert, email) runs in the background, so the response time does not depend on the account either. For an active account it locks the account row (`UPDLOCK, ROWLOCK`, which also serializes concurrent requests for the per-account limit), invalidates the pending tokens (`used_at`) and stores a new one in one transaction; failures are logged as a constant (never the address or the token). At most 3 tokens are created per account per hour (`created_at`, welcome tokens included); beyond that nothing is issued or sent.
+- Tokens are 32 random bytes as 64 lowercase hexadecimal characters, valid for one hour and single-use. Only their SHA-256 (`vc_reset_tokens.token_hash`) is stored; the plain token travels only in the email link (`/auth/reset-password?token=...`). Welcome emails of accounts created without a password (`POST /api/vetcare/users/clients`, `POST /api/vetcare/employees` with `user`) use the same tokens.
+- `PUT /api/vetcare/auth/reset-password` validates `resetToken` with `^[0-9a-f]{64}$` (400 otherwise) and the password confirmation before touching the token (400 on mismatch). In one transaction it reads the token's account without locks, locks the account row, marks the token used (`used_at`) only if it is still pending, unexpired and of that account, sets the password and `password_changed_at` only for an active, non-deleted account, and invalidates the account's other pending tokens. Unknown, expired and used tokens, and inactive or deleted accounts, all return 400 (`errorMetadata` INVALID_VALUE, `friendlyMessage` "Invalid, expired or already used reset token") and change nothing. Success answers 200 with `friendlyMessage` "Password reset successfully!" and `result: null`.
+- `POST /api/vetcare/auth/change-password` sets `password_changed_at` and invalidates pending tokens in the same transaction as the new password. After the commit it answers 200 with `friendlyMessage` "Password changed successfully!" and `result: { token }`, where `token` is a new JWT with the same payload (`sub`, `email`, `name`) and expiry (1h) as `POST /api/vetcare/auth/login` (200, `result: { token }`), signed by the same method; `result` is null if signing fails after the change was committed. Its `iat` is `max(now, password_changed_at)` in whole seconds (`password_changed_at` is stored with full precision in `datetime2(7)`), so it is accepted even in the same second as the change or if the server clock steps back; the token used for the request keeps being rejected. The frontend should replace the stored token with `result.token`, or may ignore it and force a new login.
+- Lock order: every transaction that writes `vc_reset_tokens` (forgot, reset and change password, account deletion) locks the `vc_users` row first and only then touches `vc_reset_tokens`, so these flows cannot deadlock each other. This is part of the global lock order in "Lock order".
+- Rate limiting (`@nestjs/throttler`, in-memory, per IP) applies only to these public routes through `ThrottlerGuard` on the route: forgot-password 5 requests and reset-password 10 requests per 15 minutes (429 beyond). The client IP is Express `req.ip`; `trust proxy` is off by default (socket address). Behind a reverse proxy set `TRUST_PROXY`: a number of hops (e.g. `1`), `true` (trusts every hop; only when the proxy always overwrites `X-Forwarded-For`) or a comma-separated list of proxy IPs/subnets or Express names (`loopback`, `10.0.0.0/8`); `false` or empty keeps it off. `ThrottlerModule.forRoot` is registered in `AppModule` without `APP_GUARD`.
+- `ResetTokenService` (registered in `AuthModule`) runs hourly and deletes expired tokens and tokens used more than 24 hours ago, logging through the Nest Logger.

@@ -1,10 +1,38 @@
+<!-- project-docs:inicio -->
+<!-- gerido por project-docs 0.2.0 · esquema 1 -->
+# api-vetcare-angular
+
+VetCare backend: REST API for veterinary clinic management (NestJS 11, TypeScript, TypeORM, SQL Server). It provides the API consumed by the `vetcare-angular` frontend; the contract is `docs/public/openapi.json` (regenerate with `npm run docs:openapi`, no database needed; also served at `/docs-json`).
+
+## Commands
+- Build: `npm run build`
+- Tests: `npm test` (unit/integration, `src/**/*.spec.ts`); e2e smoke: `npm run test:e2e`; coverage: `npm run test:cov`
+- Lint: `npm run lint` (runs with `--fix` and modifies files)
+- OpenAPI contract: `npm run docs:openapi` (writes `docs/public/openapi.json`)
+- Database: `npm run db:migrate`, `npm run db:migrations:show`, `npm run db:seed:admin` (require SQL Server and `.env.mssql.local`)
+
+## Documentation
+- To find where to look, use `node docs/tools/docs-find.mjs` first:
+  `search <terms>` (topic), `files <path>` (which docs cover a file), `route <path> [method]` (contract).
+- If you need to browse, start with `docs/index.md` and open only the documents the task needs.
+- Document only facts proven in the code; mark the rest with `[não verificado]`.
+- Do not fix documentation silently: propose the change with evidence and ask for approval.
+- `docs/public/` is the consumer contract; everything else in `docs/` is internal.
+
+## Tasks
+- Each task's state is in `.agents/tasks/<branch>.md` (outside Git).
+- Do not list tasks on start. Open only the state of the task the user names.
+- When resuming, confirm the real state with `git status` and `git log` before trusting the summary.
+- At the end of the work, the user runs `/finish` (Claude Code) or `$finish` (Codex).
+<!-- project-docs:fim -->
+
 # Project conventions
 
 - Write API messages, Swagger descriptions, documentation, and email templates in English. Swagger groups use the English resource/table names (for example Animals, Breeds, Species, Animal Owners, and Clinical Visits). Do not translate user-provided data or change persisted enum values as part of wording changes.
 
 ## HTTP responses and errors
 
-Apply these conventions to every new or modified API endpoint and service. See `docs/HTTP_RESPONSES.md` for the contract and examples.
+Apply these conventions to every new or modified API endpoint and service. See `docs/api/http-responses.md` (implementation) and `docs/public/index.md` (consumer contract) for the contract and examples.
 
 - `HttpResponseModule` owns the global response envelope: `status`, `friendlyMessage`, `success`, `result`, and optional enum-valued `errorMetadata`. Do not add request, timestamp, headers, or arbitrary error objects to the body.
 - Use Nest `HttpStatus` for HTTP status values and the shared `ErrorMetadata` enum for error categories. Do not introduce domain-specific error enums or public string codes.
@@ -25,4 +53,4 @@ Apply these conventions to every new or modified API endpoint and service. See `
 - Use resource routes and PATCH for partial updates. The frontend is being rebuilt: do not retain legacy aliases or duplicate PUT/PATCH operations for compatibility. PUT is reserved for operations with replacement semantics. Do not reintroduce removed routes.
 - Keep literal collection routes before generic `:id` routes and validate route/query inputs using pipes or DTOs. Document optional DELETE bodies as optional and describe query alternatives.
 - Set action status codes explicitly: 200 for completed actions, 202 for background work, 201 for resource creation, 204 only when there is no response body.
-- Keep `docs/API_ROUTES.md` current when adding or changing routes. Run routing/OpenAPI integration tests to catch collisions and differences between documented and actual security/status codes.
+- Keep `docs/api/routes.md` current when adding or changing routes. Run routing/OpenAPI integration tests to catch collisions and differences between documented and actual security/status codes.

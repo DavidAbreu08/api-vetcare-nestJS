@@ -1,5 +1,6 @@
 ﻿import { INestApplication, Logger } from "@nestjs/common";
 import type * as Swagger from "@nestjs/swagger";
+import type { OpenAPIObject } from "@nestjs/swagger/dist/interfaces/open-api-spec.interface";
 import { prepareSwaggerDocument, SWAGGER_TAGS } from "./swagger-document";
 
 /** Optional local documentation; does not modify guards or application routes. */
@@ -17,6 +18,17 @@ export function setupSwagger(app: INestApplication): void {
     return;
   }
 
+  const document = createSwaggerDocument(app, swagger);
+  swagger.SwaggerModule.setup("docs", app, document, {
+    useGlobalPrefix: false,
+    jsonDocumentUrl: "/docs-json",
+    swaggerOptions: { persistAuthorization: false, operationsSorter: "alpha", docExpansion: "list", displayRequestDuration: true },
+  });
+  Logger.log("Documentation: http://localhost:3000/docs", "Swagger");
+}
+
+/** Builds the OpenAPI document served at /docs-json; also used by src/scripts/export-openapi.ts. */
+export function createSwaggerDocument(app: INestApplication, swagger: typeof Swagger): OpenAPIObject {
   const builder = new swagger.DocumentBuilder()
     .setTitle("VetCare API")
     .setDescription("Veterinary clinic management. Operations are grouped by domain. Sign in at POST /api/vetcare/auth/login and use the token in Authorize for protected operations. JSON responses follow the global success or error contract; HEAD, 204, 304 and file responses do not use this envelope.")
@@ -24,11 +36,5 @@ export function setupSwagger(app: INestApplication): void {
     .addBearerAuth({ type: "http", scheme: "bearer", bearerFormat: "JWT" }, "bearer");
   for (const tag of SWAGGER_TAGS) builder.addTag(tag.name, tag.description);
 
-  const document = prepareSwaggerDocument(swagger.SwaggerModule.createDocument(app, builder.build()));
-  swagger.SwaggerModule.setup("docs", app, document, {
-    useGlobalPrefix: false,
-    jsonDocumentUrl: "/docs-json",
-    swaggerOptions: { persistAuthorization: false, operationsSorter: "alpha", docExpansion: "list", displayRequestDuration: true },
-  });
-  Logger.log("Documentation: http://localhost:3000/docs", "Swagger");
+  return prepareSwaggerDocument(swagger.SwaggerModule.createDocument(app, builder.build()));
 }

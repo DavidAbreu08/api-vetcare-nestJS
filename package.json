@@ -10,6 +10,7 @@
     "db:migrate": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:run -d src/database/data-source.ts",
     "db:migrations:show": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:show -d src/database/data-source.ts",
     "db:seed:admin": "ts-node -r tsconfig-paths/register src/database/seed-admin.ts",
+    "docs:openapi": "ts-node -r tsconfig-paths/register src/scripts/export-openapi.ts",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",

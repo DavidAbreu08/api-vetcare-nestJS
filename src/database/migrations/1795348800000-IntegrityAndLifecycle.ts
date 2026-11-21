@@ -37,7 +37,7 @@ export class IntegrityAndLifecycle1795348800000 implements MigrationInterface {
     }
 
     // 1. Filtered indexes need ANSI_NULLS and QUOTED_IDENTIFIER ON in the creating session (the mssql driver sets
-    //    both; set again for tools that do not) — see docs/SCHEMA_MIGRATION.md.
+    //    both; set again for tools that do not).
     await queryRunner.query(`SET ANSI_NULLS ON; SET QUOTED_IDENTIFIER ON;`);
     await queryRunner.query(`
       IF SESSIONPROPERTY('ANSI_NULLS') <> 1 OR SESSIONPROPERTY('QUOTED_IDENTIFIER') <> 1

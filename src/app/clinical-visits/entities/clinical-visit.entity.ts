@@ -66,7 +66,7 @@ export class ClinicalVisitEntity {
 
   /**
    * vc_users.id of who completed the visit (set by POST /complete). NULL for IN_PROGRESS/VOIDED visits and for
-   * visits completed before migration 1795348800000 (no CHECK enforces it in SQL, see docs/SCHEMA_MIGRATION.md).
+   * visits completed before migration 1795348800000 (no CHECK enforces it in SQL).
    */
   @Column({ name: "completed_by", type: "uniqueidentifier", nullable: true }) completedBy: string | null;
   @ManyToOne(() => UsersEntity, { nullable: true })

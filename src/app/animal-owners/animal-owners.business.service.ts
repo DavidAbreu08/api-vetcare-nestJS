@@ -50,7 +50,7 @@ export function serializeTutor(row: AnimalOwnerEntity, actor: Actor, period = fa
 }
 
 /**
- * Tutorship management (vc_animal_owners). Lock order, an extension of the global one (docs/API_ORGANIZATION.md):
+ * Tutorship management (vc_animal_owners). Lock order, an extension of the global one:
  *   vc_reservations (by id, only when reservations are moved) -> vc_animals -> vc_users (accounts, by id)
  *   -> writes to vc_animal_owners / vc_reservations.
  * The animal row is locked (UPDLOCK) before vc_animal_owners is read for a decision or written, so every tutorship

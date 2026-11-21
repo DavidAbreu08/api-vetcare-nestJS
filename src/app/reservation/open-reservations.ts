@@ -18,8 +18,8 @@ export type OpenReservationFilter = { employeeId: string } | { clientId: string 
 /**
  * PENDING/CONFIRMED reservations not yet finished (end_at after `now`, UTC), oldest first. Plain read without
  * lock hints: callers serialize through a row they have already locked (employee profile, account or animal)
- * that every flow creating or confirming such a reservation also locks (see the lock order in
- * docs/API_ORGANIZATION.md), so no reservation lock is taken here and the documented order is never inverted.
+ * that every flow creating or confirming such a reservation also locks (see the global lock
+ * order), so no reservation lock is taken here and the documented order is never inverted.
  */
 export async function findOpenReservations(manager: EntityManager, filter: OpenReservationFilter, now = new Date()): Promise<OpenReservation[]> {
   const [key, value] = Object.entries(filter)[0] as [keyof OpenReservationFilter & string, string];
